@@ -1,0 +1,27 @@
+node_modules/
+.next/
+.env.local
+
+# Build cache
+tsconfig.tsbuildinfo
+
+# Logs
+hts-log.txt
+*.log
+
+# Cache directories
+hts-cache/
+
+# Third-party
+cdn.livechatinc.com/
+
+# External / legacy files
+tredakit.pro/
+index.html
+
+# Binary assets (too large for git)
+backblue.gif
+fade.gif
+
+# Internal Freebuff config
+.freebuff/
