@@ -5,7 +5,7 @@ import {
   IconSettings, IconMenu2, IconX, IconRefresh, IconChevronDown,
   IconArrowUp, IconArrowDown, IconArrowRight, IconChartLine,
   IconRobot, IconChartBar, IconLogout, IconLogin, IconInfoCircle,
-  IconSwitch2, IconAlertTriangle, IconCurrencyDollar, IconUser,
+  IconSwitch2, IconAlertTriangle, IconCurrencyDollar, IconUser, IconBrain,
 } from "@tabler/icons-react";
 import {
   useDerivTrading,
@@ -16,6 +16,7 @@ import { useAuth } from "./use-auth";
 import TradingHistory from "./trading-history";
 import SwipeCarousel from "./swipe-carousel";
 import BotBuilder from "./bot-builder";
+import MarketAnalyzerPanel from "./market-analyzer";
 import { useBot } from "./use-bot";
 
 /* ------------------------------------------------------------------ */
@@ -112,7 +113,7 @@ function fmt(n: number | string) {
   return Number(n).toFixed(2);
 }
 
-type ActiveTab = "workspace" | "history" | "bots" | "settings";
+type ActiveTab = "workspace" | "history" | "bots" | "settings" | "analyzer";
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
@@ -514,6 +515,7 @@ export default function TradingTerminal() {
               {tradeHistory.length > 0 && <span className="nav-badge">{tradeHistory.length}</span>}
             </button>
             <button className={`nav-link ${activeTab === "bots" ? "active" : ""}`} onClick={() => setActiveTab("bots")}>Bots</button>
+            <button className={`nav-link ${activeTab === "analyzer" ? "active" : ""}`} onClick={() => setActiveTab("analyzer")}>Analyzer</button>
             <button className={`nav-link ${activeTab === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}>Settings</button>
           </nav>
         </div>
@@ -602,6 +604,7 @@ export default function TradingTerminal() {
               <button className={activeTab === "workspace" ? "active" : ""} onClick={() => { setActiveTab("workspace"); setShowMobileMenu(false); }}><IconChartLine size={16} /> Workspace</button>
               <button className={activeTab === "history" ? "active" : ""} onClick={() => { setActiveTab("history"); setShowMobileMenu(false); }}><IconChartBar size={16} /> History</button>
               <button className={activeTab === "bots" ? "active" : ""} onClick={() => { setActiveTab("bots"); setShowMobileMenu(false); }}><IconRobot size={16} /> Bots</button>
+              <button className={activeTab === "analyzer" ? "active" : ""} onClick={() => { setActiveTab("analyzer"); setShowMobileMenu(false); }}><IconBrain size={16} /> Analyzer</button>
               <button className={activeTab === "settings" ? "active" : ""} onClick={() => { setActiveTab("settings"); setShowMobileMenu(false); }}><IconSettings size={16} /> Settings</button>
             </div>
             <div className="mobile-menu-footer">
@@ -1002,6 +1005,13 @@ export default function TradingTerminal() {
         </section>
       )}
 
+      {/* ===== ANALYZER TAB ===== */}
+      {activeTab === "analyzer" && (
+        <section className="workspace">
+          <MarketAnalyzerPanel />
+        </section>
+      )}
+
       {/* ===== SETTINGS TAB ===== */}
       {activeTab === "settings" && (
         <section className="workspace">
@@ -1045,6 +1055,10 @@ export default function TradingTerminal() {
         <button className={`bottom-nav-item ${activeTab === "bots" ? "active" : ""}`} onClick={() => setActiveTab("bots")}>
           <span className="bottom-nav-icon"><IconRobot size={20} /></span>
           <span>Bots</span>
+        </button>
+        <button className={`bottom-nav-item ${activeTab === "analyzer" ? "active" : ""}`} onClick={() => setActiveTab("analyzer")}>
+          <span className="bottom-nav-icon"><IconBrain size={20} /></span>
+          <span>Analyzer</span>
         </button>
         <button className={`bottom-nav-item ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}>
           <span className="bottom-nav-icon"><IconChartBar size={20} /></span>
