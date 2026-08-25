@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { IconRefresh, IconChartBar } from "@tabler/icons-react";
 import type { TradeRecord } from "./use-deriv-ws";
 
 type DerivTrade = {
@@ -187,7 +188,7 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
           </button>
         ))}
         <button className="filter-btn refresh-btn" onClick={() => void fetchTrades()} disabled={loading}>
-          {loading ? "Loading…" : "↻ Refresh"}
+          {loading ? "Loading…" : <><IconRefresh size={14} /> Refresh</>}
         </button>
       </div>
 
@@ -199,7 +200,7 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
         </div>
       ) : filtered.length === 0 ? (
         <div className="history-empty">
-          <div className="history-empty-icon">📊</div>
+          <div className="history-empty-icon"><IconChartBar size={32} /></div>
           <p>No trades yet</p>
           <p className="muted">
             {fetchError

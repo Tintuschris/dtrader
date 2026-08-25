@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useRef } from "react";
+import { IconX, IconSearch, IconPlayerStop, IconPlayerPlay, IconTrash, IconFileCode, IconDownload } from "@tabler/icons-react";
 import { type BotConfig, type BotState, type BotTemplate, type BotWSDeps, BOT_TEMPLATES } from "./use-bot";
 import { parseDerivBotXml, type ParsedBot } from "../lib/deriv-bot-xml-parser";
 import { downloadBotXml, exportToDerivBotXml } from "../lib/deriv-bot-xml-exporter";
@@ -208,8 +209,8 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
         <div className="xml-import-modal-overlay" onClick={() => setXmlImport(null)}>
           <div className="xml-import-modal" onClick={(e) => e.stopPropagation()}>
             <div className="xml-import-header">
-              <h2>📄 Imported Bot Strategy</h2>
-              <button className="xml-import-close" onClick={() => setXmlImport(null)}>✕</button>
+              <h2><IconFileCode size={20} /> Imported Bot Strategy</h2>
+              <button className="xml-import-close" onClick={() => setXmlImport(null)}><IconX size={16} /></button>
             </div>
             <div className="xml-import-body">
               <div className="xml-import-name">{xmlImport.xmlName}</div>
@@ -263,7 +264,7 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
       {/* ===== XML ERROR ===== */}
       {xmlError && (
         <div className="xml-import-error" onClick={() => setXmlError(null)}>
-          <span>✕ {xmlError}</span>
+          <span><IconX size={14} /> {xmlError}</span>
         </div>
       )}
       {/* ===== TEMPLATE LIBRARY ===== */}
@@ -301,7 +302,7 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
               onChange={(e) => setLibrarySearch(e.target.value)}
             />
             {librarySearch && (
-              <button className="library-search-clear" onClick={() => setLibrarySearch("")}>✕</button>
+              <button className="library-search-clear" onClick={() => setLibrarySearch("")}><IconX size={14} /></button>
             )}
             <span className="library-count">{filteredLibrary.length} template{filteredLibrary.length !== 1 ? "s" : ""}</span>
           </div>
@@ -353,7 +354,7 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
           <div className="xml-import-modal" onClick={(e) => e.stopPropagation()}>
             <div className="xml-import-header">
               <h2>{previewTemplate.icon} {previewTemplate.name}</h2>
-              <button className="xml-import-close" onClick={() => setPreviewTemplate(null)}>✕</button>
+              <button className="xml-import-close" onClick={() => setPreviewTemplate(null)}><IconX size={16} /></button>
             </div>
             <div className="xml-import-body">
               <p style={{ color: "var(--muted)", fontSize: 12, marginBottom: 14 }}>{previewTemplate.description}</p>
@@ -427,7 +428,7 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
               className="bot-template-card import-xml-card"
               onClick={() => fileInputRef.current?.click()}
             >
-              <span className="bot-template-icon">📄</span>
+              <span className="bot-template-icon"><IconFileCode size={20} /></span>
               <h3>Import XML</h3>
               <p>Import a Deriv Bot (.xml) strategy file and run it here.</p>
               <span className="bot-template-strategy">dbot.deriv.com</span>
@@ -661,9 +662,9 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
                     martingale_multiplier: config.martingale_multiplier, dryRun: config.dryRun ?? false,
                   };
                   downloadBotXml(fullConfig);
-                }}>📄 Export XML</button>
+                }}><IconDownload size={14} /> Export XML</button>
                 <button className="start-bot-btn" onClick={handleStart}>
-                  ▶ {config.dryRun ? 'Start Dry Run' : 'Start Bot'}
+                  <IconPlayerPlay size={16} /> {config.dryRun ? 'Start Dry Run' : 'Start Bot'}
                 </button>
               </div>
             </div>
@@ -746,12 +747,12 @@ function BotCard({
         <div><span>W/L</span><strong>{bot.wins}/{bot.losses}</strong></div>
       </div>
       <div className="bot-card-actions" onClick={(e) => e.stopPropagation()}>
-        <button className="bot-action-btn export" title="Export as Deriv Bot XML" onClick={() => downloadBotXml(bot.config)}>📄</button>
+        <button className="bot-action-btn export" title="Export as Deriv Bot XML" onClick={() => downloadBotXml(bot.config)}><IconDownload size={14} /></button>
         {(bot.status === "idle" || bot.status === "stopped") && <button className="bot-action-btn start" onClick={onStart}>▶ Start</button>}
         {bot.status === "running" && <button className="bot-action-btn pause" onClick={onPause}>⏸ Pause</button>}
         {bot.status === "paused" && <button className="bot-action-btn start" onClick={onResume}>▶ Resume</button>}
         {(bot.status === "running" || bot.status === "paused") && <button className="bot-action-btn stop" onClick={onStop}>⏹ Stop</button>}
-        {bot.status === "stopped" && <button className="bot-action-btn delete" onClick={onDelete}>✕ Delete</button>}
+        {bot.status === "stopped" && <button className="bot-action-btn delete" onClick={onDelete}><IconTrash size={14} /> Delete</button>}
       </div>
     </div>
   );

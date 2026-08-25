@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  IconSettings, IconMenu2, IconX, IconRefresh, IconChevronDown,
+  IconArrowUp, IconArrowDown, IconArrowRight, IconChartLine,
+  IconRobot, IconChartBar, IconLogout, IconLogin, IconInfoCircle,
+  IconSwitch2, IconAlertTriangle, IconCurrencyDollar, IconUser,
+} from "@tabler/icons-react";
+import {
   useDerivTrading,
   type Proposal,
   type DerivAccount,
@@ -486,6 +492,7 @@ export default function TradingTerminal() {
               {tradeHistory.length > 0 && <span className="nav-badge">{tradeHistory.length}</span>}
             </button>
             <button className={`nav-link ${activeTab === "bots" ? "active" : ""}`} onClick={() => setActiveTab("bots")}>Bots</button>
+            <button className={`nav-link ${activeTab === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}>Settings</button>
           </nav>
         </div>
         <div className="topbar-right">
@@ -522,23 +529,23 @@ export default function TradingTerminal() {
           {authenticated ? (
             <div className="user-menu-wrap">
               <button className="avatar-btn" onClick={() => setShowUserMenu((v) => !v)}>
-                {activeAccount?.type === "real" ? "R" : "D"}
+                <IconUser size={16} />
               </button>
               {showUserMenu && (
                 <div className="user-menu" onClick={() => setShowUserMenu(false)}>
                   <div className="user-menu-header">
                     {activeAccount?.type === "real" ? "Real" : "Demo"} Account
                   </div>
-                  <button className="user-menu-item" onClick={() => void logout()}>Logout</button>
+                  <button className="user-menu-item" onClick={() => void logout()}><IconLogout size={14} /> Logout</button>
                 </div>
               )}
             </div>
           ) : (
             <button className="login-btn" onClick={() => void login()} disabled={authLoading}>
-              {authLoading ? "…" : "Login"}
+              {authLoading ? "…" : <><IconLogin size={14} /> Login</>}
             </button>
           )}
-          <button className="mobile-menu-btn" onClick={() => setShowMobileMenu((v) => !v)} aria-label="Menu">☰</button>
+          <button className="mobile-menu-btn" onClick={() => setShowMobileMenu((v) => !v)} aria-label="Menu"><IconMenu2 size={20} /></button>
         </div>
       </header>
 
@@ -549,7 +556,7 @@ export default function TradingTerminal() {
             <div className="mobile-menu-header">
               <span className="brand-mark">D</span>
               <span>DTrader</span>
-              <button className="mobile-menu-close" onClick={() => setShowMobileMenu(false)}>✕</button>
+              <button className="mobile-menu-close" onClick={() => setShowMobileMenu(false)}><IconX size={18} /></button>
             </div>
             {balance !== null && (
               <div className="mobile-menu-balance">${fmt(balance)} {balanceCurrency}</div>
@@ -570,15 +577,16 @@ export default function TradingTerminal() {
               </select>
             )}
             <div className="mobile-menu-links">
-              <button className={activeTab === "workspace" ? "active" : ""} onClick={() => { setActiveTab("workspace"); setShowMobileMenu(false); }}>Workspace</button>
-              <button className={activeTab === "history" ? "active" : ""} onClick={() => { setActiveTab("history"); setShowMobileMenu(false); }}>History</button>
-              <button className={activeTab === "settings" ? "active" : ""} onClick={() => { setActiveTab("settings"); setShowMobileMenu(false); }}>Settings</button>
+              <button className={activeTab === "workspace" ? "active" : ""} onClick={() => { setActiveTab("workspace"); setShowMobileMenu(false); }}><IconChartLine size={16} /> Workspace</button>
+              <button className={activeTab === "history" ? "active" : ""} onClick={() => { setActiveTab("history"); setShowMobileMenu(false); }}><IconChartBar size={16} /> History</button>
+              <button className={activeTab === "bots" ? "active" : ""} onClick={() => { setActiveTab("bots"); setShowMobileMenu(false); }}><IconRobot size={16} /> Bots</button>
+              <button className={activeTab === "settings" ? "active" : ""} onClick={() => { setActiveTab("settings"); setShowMobileMenu(false); }}><IconSettings size={16} /> Settings</button>
             </div>
             <div className="mobile-menu-footer">
               {authenticated ? (
-                <button className="mobile-logout-btn" onClick={() => { void logout(); setShowMobileMenu(false); }}>Logout</button>
+                <button className="mobile-logout-btn" onClick={() => { void logout(); setShowMobileMenu(false); }}><IconLogout size={14} /> Logout</button>
               ) : (
-                <button className="mobile-login-btn" onClick={() => { void login(); setShowMobileMenu(false); }}>Login with Deriv</button>
+                <button className="mobile-login-btn" onClick={() => { void login(); setShowMobileMenu(false); }}><IconLogin size={14} /> Login with Deriv</button>
               )}
             </div>
           </div>
@@ -614,15 +622,15 @@ export default function TradingTerminal() {
                       <span className="market-name">{symbolLabel}</span>
                       <span className="market-sub">{markets.find((m) => m.symbol === symbol)?.market_display_name ?? "Derived"}</span>
                     </div>
-                    <span className={`market-chevron ${showMarketPicker ? "open" : ""}`}>⌄</span>
+                    <span className={`market-chevron ${showMarketPicker ? "open" : ""}`}><IconChevronDown size={16} /></span>
                   </button>
                   {showMarketPicker && (
                     <div className="market-dropdown">
                       <div className="market-dropdown-header">
                         <span>Select market <span className="market-count">{markets.length}</span></span>
                         <div className="market-dropdown-actions">
-                          <button className="market-refresh-btn" onClick={async () => { const res = await fetch("/api/deriv/markets?refresh=1"); const data = await res.json(); if (data.markets?.length) setMarkets(data.markets); }} title="Refresh markets">↻</button>
-                          <button className="market-dropdown-close" onClick={() => setShowMarketPicker(false)}>✕</button>
+                          <button className="market-refresh-btn" onClick={async () => { const res = await fetch("/api/deriv/markets?refresh=1"); const data = await res.json(); if (data.markets?.length) setMarkets(data.markets); }} title="Refresh markets"><IconRefresh size={16} /></button>
+                          <button className="market-dropdown-close" onClick={() => setShowMarketPicker(false)}><IconX size={14} /></button>
                         </div>
                       </div>
                       {Object.entries(
@@ -650,7 +658,7 @@ export default function TradingTerminal() {
                     </div>
                   )}
                 </div>
-                <button className="icon-button mobile-hide" aria-label="Chart settings">⚙</button>
+                <button className="icon-button mobile-hide" aria-label="Chart settings"><IconSettings size={18} /></button>
               </div>
               <div className="price-row">
                 <div>
@@ -812,7 +820,7 @@ export default function TradingTerminal() {
                       <span className="prediction-label">Last digit</span>
                       <strong>{selectedDigit}</strong>
                     </div>
-                    <span className="prediction-arrow">→</span>
+                    <span className="prediction-arrow"><IconArrowRight size={20} /></span>
                   </div>
                 </div>
               )}
@@ -824,7 +832,7 @@ export default function TradingTerminal() {
                   <div className="duration-picker-wrap">
                     <button className="input-button" onClick={() => setShowDurationPicker((v) => !v)}>
                       {durationOptions.find((d) => d.value === duration)?.label ?? `${duration} ticks`}
-                      <span>⌄</span>
+                      <span><IconChevronDown size={14} /></span>
                     </button>
                     {showDurationPicker && (
                       <div className="duration-dropdown">
@@ -873,7 +881,7 @@ export default function TradingTerminal() {
               {(tradeError || lastError) && (
                 <div className="trade-error" onClick={() => { setTradeError(null); clearError(); }}>
                   {tradeError ?? lastError}
-                  <span className="trade-error-dismiss">✕</span>
+                  <span className="trade-error-dismiss"><IconX size={14} /></span>
                 </div>
               )}
 
@@ -887,7 +895,7 @@ export default function TradingTerminal() {
                       disabled={isBuying || !currentProposal}
                     >
                       {isBuying ? "Placing…" : "Buy"}
-                      <span>↑</span>
+                      <span><IconArrowUp size={16} /></span>
                     </button>
                     <button className="sell-button-lg" disabled>SELL</button>
                   </div>
@@ -899,7 +907,7 @@ export default function TradingTerminal() {
                       onClick={() => sell(activeContract.contract_id)}
                     >
                       Sell
-                      <span>↓</span>
+                      <span><IconArrowDown size={16} /></span>
                     </button>
                   </div>
                 )}
@@ -912,7 +920,7 @@ export default function TradingTerminal() {
                 <div className="trade-history">
                   <div className="trade-history-header">
                     <span>Recent trades</span>
-                    <button className="view-all-btn" onClick={() => setActiveTab("history")}>View all →</button>
+                    <button className="view-all-btn" onClick={() => setActiveTab("history")}>View all <IconArrowRight size={12} /></button>
                   </div>
                   <div className="trade-history-list">
                     {tradeHistory.slice(0, 5).map((t) => (
@@ -970,6 +978,7 @@ export default function TradingTerminal() {
               <p className="eyebrow">SETTINGS</p>
               <h1>Settings</h1>
             </div>
+            <button className="stream-button" onClick={() => setActiveTab("workspace")}>← Back to Workspace</button>
           </div>
           <div className="settings-panel panel">
             <div className="settings-section">
@@ -982,12 +991,12 @@ export default function TradingTerminal() {
               {authenticated ? (
                 <div>
                   <p className="muted">Logged in via Deriv OAuth</p>
-                  <button className="settings-btn danger" onClick={() => void logout()}>Logout</button>
+                  <button className="settings-btn danger" onClick={() => void logout()}><IconLogout size={14} /> Logout</button>
                 </div>
               ) : (
                 <div>
                   <p className="muted">Login with your Deriv account via OAuth</p>
-                  <button className="settings-btn" onClick={() => void login()}>Login with Deriv</button>
+                  <button className="settings-btn" onClick={() => void login()}><IconLogin size={14} /> Login with Deriv</button>
                 </div>
               )}
             </div>
@@ -998,20 +1007,20 @@ export default function TradingTerminal() {
       {/* ===== MOBILE BOTTOM NAV ===== */}
       <nav className="mobile-bottom-nav">
         <button className={`bottom-nav-item ${activeTab === "workspace" ? "active" : ""}`} onClick={() => setActiveTab("workspace")}>
-          <span className="bottom-nav-icon">📈</span>
+          <span className="bottom-nav-icon"><IconChartLine size={20} /></span>
           <span>Trade</span>
         </button>
         <button className={`bottom-nav-item ${activeTab === "bots" ? "active" : ""}`} onClick={() => setActiveTab("bots")}>
-          <span className="bottom-nav-icon">🤖</span>
+          <span className="bottom-nav-icon"><IconRobot size={20} /></span>
           <span>Bots</span>
         </button>
         <button className={`bottom-nav-item ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}>
-          <span className="bottom-nav-icon">📊</span>
+          <span className="bottom-nav-icon"><IconChartBar size={20} /></span>
           <span>History</span>
           {tradeHistory.length > 0 && <span className="bottom-nav-badge">{tradeHistory.length}</span>}
         </button>
         <button className={`bottom-nav-item ${activeTab === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}>
-          <span className="bottom-nav-icon">⚙</span>
+          <span className="bottom-nav-icon"><IconSettings size={20} /></span>
           <span>Settings</span>
         </button>
       </nav>
