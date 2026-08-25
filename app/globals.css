@@ -35,7 +35,7 @@
 .terminal-loading{display:grid;place-items:center;color:#aebccb;font-size:14px;letter-spacing:.04em}
 
 /* Chart loading skeleton */
-.chart-skeleton{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;justify-content:center;gap:18px;padding:40px 60px;background:rgba(11,20,32,.85);backdrop-filter:blur(4px)}.chart-skeleton-line{height:3px;border-radius:2px;background:rgba(70,211,189,.12)}.chart-skeleton-line.short{width:55%}.chart-skeleton-line.medium{width:75%}.chart-skeleton-shimmer{position:absolute;inset:0;background:linear-gradient(90deg,transparent 0%,rgba(70,211,189,.06) 40%,rgba(70,211,189,.1) 50%,rgba(70,211,189,.06) 60%,transparent 100%);animation:shimmer 1.8s ease-in-out infinite}@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+.chart-skeleton{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;justify-content:center;gap:18px;padding:40px 60px;background:rgba(11,20,32,.85);backdrop-filter:blur(4px);transition:opacity .4s ease-out,backdrop-filter .4s ease-out;opacity:1}.chart-skeleton-hidden{opacity:0;pointer-events:none;backdrop-filter:none}.chart-skeleton-line{height:3px;border-radius:2px;background:rgba(70,211,189,.12)}.chart-skeleton-line.short{width:55%}.chart-skeleton-line.medium{width:75%}.chart-skeleton-shimmer{position:absolute;inset:0;background:linear-gradient(90deg,transparent 0%,rgba(70,211,189,.06) 40%,rgba(70,211,189,.1) 50%,rgba(70,211,189,.06) 60%,transparent 100%);animation:shimmer 1.8s ease-in-out infinite}@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
 
 /* Digit percentage pulse animation */
 .digit-ring.digit-pulse{animation:digit-pulse-anim .4s ease-out}

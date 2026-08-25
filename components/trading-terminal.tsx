@@ -124,6 +124,7 @@ export default function TradingTerminal() {
   const [selectedDigit, setSelectedDigit] = useState(4);
   const [streamMode, setStreamMode] = useState<"live" | "simulated">("simulated");
   const [chartLoading, setChartLoading] = useState(true);
+  const [chartSkeletonMounted, setChartSkeletonMounted] = useState(true);
   const [accounts, setAccounts] = useState<DerivAccount[]>([]);
   const [activeAccountId, setActiveAccountId] = useState("");
   const [accountStatus, setAccountStatus] = useState("Connecting to Deriv…");
@@ -306,6 +307,8 @@ export default function TradingTerminal() {
           setTicks(prices.slice(-100).map((price) => ({ value: Number(price), digit: digitFromQuote(price, pipSize) })));
           setStreamMode("live");
           setChartLoading(false);
+          // Keep skeleton in DOM for the fade-out transition, then unmount
+          setTimeout(() => setChartSkeletonMounted(false), 500);
         }
         if (message.tick?.quote !== undefined) {
           const tickPipSize = message.tick.pip_size ?? pipSize;
@@ -662,8 +665,8 @@ export default function TradingTerminal() {
               {/* Desktop: show both, Mobile: carousel */}
               <div className="chart-section-desktop">
                 <div className="chart-wrap">
-                  {chartLoading && (
-                    <div className="chart-skeleton">
+                  {chartSkeletonMounted && (
+                    <div className={`chart-skeleton ${chartLoading ? "" : "chart-skeleton-hidden"}`}>
                       <div className="chart-skeleton-line" />
                       <div className="chart-skeleton-line short" />
                       <div className="chart-skeleton-line medium" />
@@ -716,8 +719,8 @@ export default function TradingTerminal() {
                 <SwipeCarousel labels={["Chart", "Digits"]}>
                   {/* Slide 1: Chart */}
                   <div className="chart-wrap">
-                    {chartLoading && (
-                      <div className="chart-skeleton">
+                    {chartSkeletonMounted && (
+                      <div className={`chart-skeleton ${chartLoading ? "" : "chart-skeleton-hidden"}`}>
                         <div className="chart-skeleton-line" />
                         <div className="chart-skeleton-line short" />
                         <div className="chart-skeleton-line medium" />
