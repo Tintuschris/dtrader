@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   IconPlayerPlay, IconPlayerStop, IconPlayerPause,
   IconClipboard, IconCheck, IconDeviceFloppy, IconFolderOpen,
-  IconTrash, IconDownload, IconUpload, IconPlus, IconX,
+  IconTrash, IconDownload, IconUpload, IconPlus, IconX, IconChartLine,
 } from "@tabler/icons-react";
 import dynamic from "next/dynamic";
-import { BotSandbox, type BotStatus, type BotLogEntry, type ProposalData, type ContractData } from "../lib/bot-sandbox";
+import { BotSandbox, type BotStatus, type BotLogEntry, type ProposalData, type ContractData, type BotTradingAdapter } from "../lib/bot-sandbox";
+const BacktestRunner = dynamic(() => import("./backtest-runner"), { ssr: false });
 import {
   getStrategies, saveStrategy, updateStrategy, deleteStrategy,
   duplicateStrategy, exportStrategyXml, importStrategyXml,
@@ -26,6 +27,7 @@ type Props = {
   visualCode: string;
   setVisualCode: (code: string) => void;
   onBack: () => void;
+  tradingAdapter: BotTradingAdapter;
 };
 
 /* ------------------------------------------------------------------ */
@@ -36,6 +38,7 @@ export default function VisualBlocklyEditor({
   visualCode,
   setVisualCode,
   onBack,
+  tradingAdapter,
 }: Props) {
   const sandboxRef = useRef<BotSandbox | null>(null);
   const workspaceRef = useRef<WorkspaceRef | null>(null);
@@ -48,6 +51,7 @@ export default function VisualBlocklyEditor({
   const [contract, setContract] = useState<ContractData | null>(null);
   const [copied, setCopied] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [showBacktest, setShowBacktest] = useState(false);
 
   // Strategy persistence
   const [strategies, setStrategies] = useState<SavedStrategy[]>([]);
@@ -174,7 +178,7 @@ export default function VisualBlocklyEditor({
   /* ---- Start bot ---- */
   const handleStart = useCallback(async () => {
     if (!visualCode.trim()) return;
-    const sandbox = new BotSandbox({
+    const sandbox = new BotSandbox(tradingAdapter, {
       onStatusChange: (status) => setBotStatus(status),
       onLog: (entry) => setLogs((prev) => [...prev.slice(-200), entry]),
       onBalanceUpdate: (bal) => setBalance(bal),
@@ -190,7 +194,7 @@ export default function VisualBlocklyEditor({
     } catch (err) {
       console.error("Bot execution error:", err);
     }
-  }, [visualCode]);
+  }, [visualCode, tradingAdapter]);
 
   /* ---- Stop / Pause / Resume ---- */
   const handleStop = useCallback(() => {
@@ -217,6 +221,10 @@ export default function VisualBlocklyEditor({
 
   return (
     <div className="bot-visual-editor">
+      {showBacktest ? (
+        <BacktestRunner visualCode={visualCode} onBack={() => setShowBacktest(false)} />
+      ) : (
+      <>
       {/* Header */}
       <div className="bot-header">
         <div>
@@ -262,12 +270,24 @@ export default function VisualBlocklyEditor({
       </div>
 
       {/* Execution Controls */}
+      {/* Connection warning */}
+      {!tradingAdapter.isConnected() && (
+        <div className="blockly-connection-warning">
+          ⚠ Connect to an account first to run bots with real trades.
+        </div>
+      )}
+
       <div className="blockly-controls">
         <div className="blockly-controls-left">
           {!isRunning ? (
-            <button className="blockly-run-btn" onClick={handleStart} disabled={!visualCode.trim()}>
-              <IconPlayerPlay size={16} /> Run Bot
-            </button>
+            <>
+              <button className="blockly-run-btn" onClick={handleStart} disabled={!visualCode.trim() || !tradingAdapter.isConnected()}>
+                <IconPlayerPlay size={16} /> Run Bot
+              </button>
+              <button className="blockly-backtest-btn" onClick={() => setShowBacktest(true)} disabled={!visualCode.trim()}>
+                <IconChartLine size={16} /> Backtest
+              </button>
+            </>
           ) : (
             <>
               <button className="blockly-pause-btn" onClick={handlePauseResume}>
@@ -418,8 +438,26 @@ export default function VisualBlocklyEditor({
           </div>
         </div>
       )}
+      </>
+      )}
 
       <style jsx>{`
+        .blockly-backtest-btn {
+          display: flex; align-items: center; gap: 6px;
+          padding: 8px 16px; background: rgba(154, 142, 210, 0.1);
+          color: #9a8ed2; border: 1px solid rgba(154, 142, 210, 0.3); border-radius: 8px;
+          font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s;
+        }
+        .blockly-backtest-btn:hover:not(:disabled) {
+          transform: translateY(-1px); box-shadow: 0 4px 16px rgba(154, 142, 210, 0.2);
+          border-color: #9a8ed2; color: #b8a8f0;
+        }
+        .blockly-backtest-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .blockly-connection-warning {
+          padding: 10px 14px; margin-bottom: 8px;
+          background: rgba(240, 192, 64, 0.08); border: 1px solid rgba(240, 192, 64, 0.3);
+          border-radius: 8px; color: #f0c040; font-size: 12px;
+        }
         .strategy-toolbar {
           display: flex;
           justify-content: space-between;

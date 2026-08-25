@@ -988,6 +988,16 @@ export default function TradingTerminal() {
             balance={balance}
             balanceCurrency={balanceCurrency}
             botApi={botApi}
+            tradingAdapter={{
+              propose,
+              buy,
+              buyBot,
+              sell,
+              subscribeToContract,
+              unsubscribeFromContract,
+              getBalance: () => balance,
+              isConnected: () => connectionStatus === "connected",
+            }}
           />
         </section>
       )}

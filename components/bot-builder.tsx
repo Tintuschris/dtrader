@@ -28,16 +28,19 @@ type BotApi = {
   deleteBot: (id: string) => void;
 };
 
+import { type BotTradingAdapter } from "../lib/bot-sandbox";
+
 type Props = {
   markets: Market[];
   balance: number | null;
   balanceCurrency: string;
   botApi: BotApi;
+  tradingAdapter: BotTradingAdapter;
 };
 
 type View = "templates" | "configure" | "runner" | "visual";
 
-export default function BotBuilder({ markets, balance, balanceCurrency, botApi }: Props) {
+export default function BotBuilder({ markets, balance, balanceCurrency, botApi, tradingAdapter }: Props) {
   const { bots, createBot, startBot, stopBot, pauseBot, resumeBot, deleteBot } = botApi;
   const [view, setView] = useState<View>("templates");
   const [selectedTemplate, setSelectedTemplate] = useState<BotTemplate | null>(null);
@@ -727,6 +730,7 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
           visualCode={visualCode}
           setVisualCode={setVisualCode}
           onBack={() => setView("templates")}
+          tradingAdapter={tradingAdapter}
         />
       )}
     </div>
