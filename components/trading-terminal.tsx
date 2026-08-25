@@ -283,6 +283,17 @@ export default function TradingTerminal() {
   /* ---- tick stream (public WebSocket) ---- */
   useEffect(() => {
     let ws: WebSocket | undefined;
+    let historyReceived = false;
+
+    // Safety timeout — if no history arrives in 4s, dismiss skeleton anyway
+    // so the user sees the chart (simulated ticks will fill in)
+    const skeletonTimeout = setTimeout(() => {
+      if (!historyReceived) {
+        setChartLoading(false);
+        setTimeout(() => setChartSkeletonMounted(false), 500);
+      }
+    }, 4000);
+
     try {
       ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
       tickStreamWs.current = ws;
@@ -300,33 +311,60 @@ export default function TradingTerminal() {
         ws?.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: "live_sub" }));
       };
       ws.onmessage = (event) => {
-        const message = JSON.parse(event.data) as Record<string, unknown> & {
-          tick?: { quote?: number | string; pip_size?: number };
-        };
-        // Deriv ticks_history response comes as tick_history.prices
-        const tickHistory = message.tick_history as { prices?: Array<number | string>; pip_size?: number } | undefined;
-        // Also handle legacy history field
-        const history = message.history as { prices?: Array<number | string>; pip_size?: number } | undefined;
-        const prices = tickHistory?.prices ?? history?.prices;
-        const pipSize = tickHistory?.pip_size ?? history?.pip_size ?? 2;
-        if (prices?.length) {
-          setTicks(prices.slice(-100).map((price) => ({ value: Number(price), digit: digitFromQuote(price, pipSize) })));
-          setStreamMode("live");
-          setChartLoading(false);
-          // Keep skeleton in DOM for the fade-out transition, then unmount
-          setTimeout(() => setChartSkeletonMounted(false), 500);
+        const message = JSON.parse(event.data) as Record<string, unknown>;
+        const msgType = message.msg_type as string | undefined;
+
+        // Deriv ticks_history response: msg_type === "tick_history"
+        if (msgType === "tick_history") {
+          const tickHist = message.tick_history as { prices?: Array<number | string>; pip_size?: number } | undefined;
+          const prices = tickHist?.prices;
+          const pipSize = tickHist?.pip_size ?? 2;
+          if (prices?.length) {
+            historyReceived = true;
+            clearTimeout(skeletonTimeout);
+            setTicks(prices.slice(-100).map((price) => ({ value: Number(price), digit: digitFromQuote(price, pipSize) })));
+            setStreamMode("live");
+            setChartLoading(false);
+            setTimeout(() => setChartSkeletonMounted(false), 500);
+          }
         }
-        if (message.tick?.quote !== undefined) {
-          const tickPipSize = message.tick.pip_size ?? pipSize;
-          setTicks((prev) => [...prev.slice(-99), { value: Number(message.tick?.quote), digit: digitFromQuote(message.tick?.quote ?? 0, tickPipSize) }]);
-          setStreamMode("live");
+
+        // Live tick updates
+        if (msgType === "tick") {
+          const tick = message.tick as { quote?: number | string; pip_size?: number } | undefined;
+          if (tick?.quote !== undefined) {
+            if (!historyReceived) {
+              historyReceived = true;
+              clearTimeout(skeletonTimeout);
+              setChartLoading(false);
+              setTimeout(() => setChartSkeletonMounted(false), 500);
+            }
+            const tickPipSize = tick.pip_size ?? 2;
+            setTicks((prev) => [...prev.slice(-99), { value: Number(tick.quote), digit: digitFromQuote(tick.quote ?? 0, tickPipSize) }]);
+            setStreamMode("live");
+          }
         }
       };
-      ws.onerror = () => setStreamMode("simulated");
+      ws.onerror = () => {
+        setStreamMode("simulated");
+        if (!historyReceived) {
+          historyReceived = true;
+          clearTimeout(skeletonTimeout);
+          setChartLoading(false);
+          setTimeout(() => setChartSkeletonMounted(false), 500);
+        }
+      };
     } catch {
       setStreamMode("simulated");
+      clearTimeout(skeletonTimeout);
+      setChartLoading(false);
+      setTimeout(() => setChartSkeletonMounted(false), 500);
     }
-    return () => { ws?.close(); tickStreamWs.current = null; };
+    return () => {
+      clearTimeout(skeletonTimeout);
+      ws?.close();
+      tickStreamWs.current = null;
+    };
   }, [symbol]);
 
   /* ---- simulated ticks ---- */
@@ -411,22 +449,6 @@ export default function TradingTerminal() {
     const total = counts.reduce((sum, c) => sum + c, 0);
     return counts.map((c) => Number(((c / total) * 100).toFixed(1)));
   }, [ticks]);
-
-  /* ---- animate digit rings when percentages change ---- */
-  const prevPctRef = useRef(percentages);
-  const [animatingDigits, setAnimatingDigits] = useState<Set<number>>(new Set());
-  useEffect(() => {
-    const prev = prevPctRef.current;
-    const changed = new Set<number>();
-    percentages.forEach((p, i) => { if (p !== prev[i]) changed.add(i); });
-    if (changed.size > 0) {
-      setAnimatingDigits(changed);
-      const timer = setTimeout(() => setAnimatingDigits(new Set()), 400);
-      prevPctRef.current = percentages;
-      return () => clearTimeout(timer);
-    }
-    prevPctRef.current = percentages;
-  }, [percentages]);
 
   /* ---- chart auto-scaling ---- */
   const chartRange = useMemo(() => {
@@ -716,7 +738,7 @@ export default function TradingTerminal() {
                 </div>
                 <div className="digit-strip">
                   {percentages.map((pct, digit) => (
-                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${animatingDigits.has(digit) ? "digit-pulse" : ""}`} onClick={() => setSelectedDigit(digit)}>
+                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""}`} onClick={() => setSelectedDigit(digit)}>
                       <strong>{digit}</strong>
                       <span>{pct}%</span>
                     </button>
@@ -758,7 +780,7 @@ export default function TradingTerminal() {
                     </div>
                     <div className="digit-strip">
                       {percentages.map((pct, digit) => (
-                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${animatingDigits.has(digit) ? "digit-pulse" : ""}`} onClick={() => setSelectedDigit(digit)}>
+                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""}`} onClick={() => setSelectedDigit(digit)}>
                           <strong>{digit}</strong>
                           <span>{pct}%</span>
                         </button>
