@@ -52,7 +52,7 @@
 /* ================================================================= */
 /*  WebSocket status dot                                              */
 /* ================================================================= */
-.ws-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:middle}.ws-dot.connected{background:var(--teal);box-shadow:0 0 8px var(--teal)}.ws-dot.connecting,.ws-dot.authenticating{background:#f0c040;animation:ws-blink 1s ease-in-out infinite}.ws-dot.disconnected{background:#718197}.ws-dot.error{background:#e05555;box-shadow:0 0 8px #e05555}
+.ws-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:middle}.ws-dot.connected{background:var(--teal);box-shadow:0 0 8px var(--teal)}.ws-dot.connecting,.ws-dot.authenticating{background:#f0c040;animation:ws-blink 1s ease-in-out infinite}.ws-dot.reconnecting{background:#e8a838;animation:ws-blink .6s ease-in-out infinite}.ws-dot.disconnected{background:#718197}.ws-dot.error{background:#e05555;box-shadow:0 0 8px #e05555}
 @keyframes ws-blink{0%,100%{opacity:1}50%{opacity:.3}}
 
 /* ================================================================= */
@@ -126,11 +126,11 @@
 .account-type-dot.real{background:#f08080;box-shadow:0 0 6px #f08080}
 .account-select{appearance:none;background:#111925;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 24px 5px 10px;font-size:12px;cursor:pointer}
 .ws-status{display:flex;align-items:center}
-.ws-dot{width:6px;height:6px;border-radius:50%;display:inline-block}
-.ws-dot.connected{background:var(--teal);box-shadow:0 0 6px var(--teal)}
-.ws-dot.connecting,.ws-dot.authenticating{background:#f0c040;animation:ws-blink 1s ease-in-out infinite}
-.ws-dot.disconnected{background:#718197}
-.ws-dot.error{background:#e05555}
+.ws-dot{width:6px;height:6px;border-radius:50%;display:inline-block}.ws-dot.connected{background:var(--teal);box-shadow:0 0 6px var(--teal)}
+  .ws-dot.connecting,.ws-dot.authenticating{background:#f0c040;animation:ws-blink 1s ease-in-out infinite}
+  .ws-dot.reconnecting{background:#e8a838;animation:ws-blink .6s ease-in-out infinite}
+  .ws-dot.disconnected{background:#718197}
+  .ws-dot.error{background:#e05555}
 @keyframes ws-blink{0%,100%{opacity:1}50%{opacity:.3}}
 .avatar-btn{width:30px;height:30px;border-radius:50%;background:#25364d;border:0;color:#dce6f0;font-size:11px;font-weight:700;cursor:pointer}
 .login-btn{background:linear-gradient(135deg,#536dfe,#7c4dff);color:#fff;border:0;border-radius:7px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}

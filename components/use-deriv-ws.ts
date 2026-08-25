@@ -56,6 +56,7 @@ export type ConnectionStatus =
   | "connecting"
   | "authenticating"
   | "connected"
+  | "reconnecting"
   | "error";
 
 export type ProposalRequest = {
@@ -81,6 +82,16 @@ export type TradeResult = {
 
 let nextReqId = 1;
 
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_DELAY = 1000;
+const MAX_DELAY = 30000;
+
+function jitteredDelay(attempt: number): number {
+  const base = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY);
+  // Add ±20% jitter to prevent thundering herd
+  return Math.round(base * (0.8 + Math.random() * 0.4));
+}
+
 /* ------------------------------------------------------------------ */
 /*  Hook                                                               */
 /* ------------------------------------------------------------------ */
@@ -89,6 +100,7 @@ export function useDerivTrading() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttempts = useRef(0);
+  const accountIdRef = useRef<string | undefined>(undefined);
   const pendingProposals = useRef<Map<string, (p: Proposal | null) => void>>(new Map());
   const pendingBuys = useRef<Map<string, (c: OpenContract | null) => void>>(new Map());
   const contractSubscribers = useRef<Map<string, (c: OpenContract) => void>>(new Map());
@@ -123,6 +135,9 @@ export function useDerivTrading() {
 
   const connect = useCallback(
     async (accountId?: string) => {
+      if (accountId !== undefined) accountIdRef.current = accountId;
+      const activeAccountId = accountId ?? accountIdRef.current;
+
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -139,7 +154,7 @@ export function useDerivTrading() {
         const res = await fetch("/api/deriv/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accountId }),
+          body: JSON.stringify({ accountId: activeAccountId }),
         });
         if (!res.ok) {
           const errData = await res.json().catch(() => ({ error: "OTP request failed" }));
@@ -415,26 +430,23 @@ export function useDerivTrading() {
         ws.onclose = (event) => {
           const code = event.code;
           const reason = event.reason;
-          console.log(`WebSocket closed: code=${code} reason=${reason}`);
+          const attempt = reconnectAttempts.current;
+          console.log(`WebSocket closed: code=${code} reason=${reason} attempt=${attempt}`);
           // Only set disconnected if we weren't already in an error state
           setConnectionStatus((prev) => prev === "error" ? prev : "disconnected");
           // Don't overwrite specific errors with generic reconnection message
           if (code !== 1000 && code !== 1001) {
-            // abnormal closure — attempt reconnect
-            if (reconnectAttempts.current < 5) {
-              const delay = Math.min(
-                1000 * Math.pow(2, reconnectAttempts.current),
-                30000,
-              );
-              reconnectAttempts.current += 1;
-              setLastError((prev) =>
-                prev?.startsWith("Reconnecting") ? prev : `Reconnecting... (attempt ${reconnectAttempts.current})`
-              );
+            // abnormal closure — attempt reconnect with exponential backoff + jitter
+            if (attempt < MAX_RECONNECT_ATTEMPTS) {
+              reconnectAttempts.current = attempt + 1;
+              const delay = jitteredDelay(attempt);
+              setConnectionStatus("reconnecting");
+              setLastError(`Reconnecting in ${Math.round(delay / 1000)}s… (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`);
               reconnectTimer.current = setTimeout(() => {
-                void connect(accountId);
+                void connect(activeAccountId);
               }, delay);
             } else {
-              setLastError(`Connection lost after ${reconnectAttempts.current} attempts. Try switching accounts.`);
+              setLastError(`Connection lost after ${MAX_RECONNECT_ATTEMPTS} attempts. Try switching accounts or refreshing the page.`);
             }
           }
         };
