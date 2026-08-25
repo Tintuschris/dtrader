@@ -89,8 +89,10 @@ export function useDerivTrading() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttempts = useRef(0);
-  const pendingProposals = useRef<Map<string, (p: Proposal) => void>>(new Map());
-  const pendingBuys = useRef<Map<string, (c: OpenContract) => void>>(new Map());
+  const pendingProposals = useRef<Map<string, (p: Proposal | null) => void>>(new Map());
+  const pendingBuys = useRef<Map<string, (c: OpenContract | null) => void>>(new Map());
+  const contractSubscribers = useRef<Map<string, (c: OpenContract) => void>>(new Map());
+  const skipAutoSubscribe = useRef(false);
 
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -103,6 +105,7 @@ export function useDerivTrading() {
   const [tradeHistory, setTradeHistory] = useState<TradeRecord[]>([]);
   const [currentProposal, setCurrentProposal] = useState<Proposal | null>(null);
   const [proposalLoading, setProposalLoading] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   /* ---- helpers ---- */
 
@@ -130,6 +133,7 @@ export function useDerivTrading() {
       }
 
       setConnectionStatus("authenticating");
+      setLastError(null);
 
       try {
         const res = await fetch("/api/deriv/session", {
@@ -137,10 +141,19 @@ export function useDerivTrading() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ accountId }),
         });
-        if (!res.ok) throw new Error("OTP request failed");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({ error: "OTP request failed" }));
+          throw new Error(errData.error ?? "OTP request failed");
+        }
         const data = await res.json();
         const wsUrl: string | undefined = data.url;
         if (!wsUrl) throw new Error("No WebSocket URL returned");
+
+        // Log endpoint without OTP token for debugging
+        try {
+          const debugUrl = new URL(wsUrl);
+          console.log(`Connecting to Deriv WS: ${debugUrl.origin}${debugUrl.pathname}`);
+        } catch { /* ignore */ }
 
         setConnectionStatus("connecting");
         const ws = new WebSocket(wsUrl);
@@ -148,6 +161,7 @@ export function useDerivTrading() {
 
         ws.onopen = () => {
           setConnectionStatus("connected");
+          setLastError(null);
           reconnectAttempts.current = 0;
           // subscribe to balance
           ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: String(nextReqId++) }));
@@ -160,7 +174,7 @@ export function useDerivTrading() {
           if (msg.msg_type === "balance") {
             const b = msg.balance as { balance?: number; currency?: string } | undefined;
             if (b) {
-              setBalance(b.balance ?? null);
+              setBalance(typeof b.balance === "number" ? b.balance : Number(b.balance) || null);
               setBalanceCurrency(b.currency ?? "USD");
             }
             return;
@@ -168,6 +182,8 @@ export function useDerivTrading() {
 
           // proposal
           if (msg.msg_type === "proposal") {
+            console.log("Proposal msg:", JSON.stringify(msg));
+            const reqId = msg.req_id as string | undefined;
             const p = msg.proposal as
               | {
                   id?: string;
@@ -178,57 +194,96 @@ export function useDerivTrading() {
                   display_name?: string;
                 }
               | undefined;
-            const reqId = msg.req_id as string | undefined;
+
             if (p?.id) {
+              console.log("Proposal received:", { id: p.id, ask_price: p.ask_price, payout: p.payout, profit: p.profit });
               const proposal: Proposal = {
                 id: p.id,
-                ask_price: p.ask_price ?? 0,
-                payout: p.payout ?? 0,
-                profit: p.profit ?? 0,
-                spot: p.spot ?? 0,
+                ask_price: Number(p.ask_price) || 0,
+                payout: Number(p.payout) || 0,
+                profit: Number(p.profit) || 0,
+                spot: Number(p.spot) || 0,
                 display_name: p.display_name,
               };
               setCurrentProposal(proposal);
               setProposalLoading(false);
+              setLastError(null);
               const resolve = reqId ? pendingProposals.current.get(reqId) : undefined;
               if (resolve) {
                 pendingProposals.current.delete(reqId!);
                 resolve(proposal);
               }
             } else {
+              // Proposal failed — Deriv returned an error with the proposal response
+              const err = msg.error as Record<string, unknown> | undefined;
+              const code = err && typeof err.code === "string" ? err.code : undefined;
+              const message = err && typeof err.message === "string" ? err.message : undefined;
+              const errorMsg = message
+                ?? (code ? `Proposal error: ${code}` : undefined)
+                ?? "Proposal failed — check contract parameters";
+              console.error("Proposal error:", code, message, "full:", JSON.stringify(msg));
               setProposalLoading(false);
+              setCurrentProposal(null);
+              const resolve = reqId ? pendingProposals.current.get(reqId) : undefined;
+              if (resolve) {
+                pendingProposals.current.delete(reqId!);
+                resolve(null);
+              }
             }
             return;
           }
 
           // buy
           if (msg.msg_type === "buy") {
+            const reqId = msg.req_id as string | undefined;
             const b = msg.buy as
               | {
                   contract_id?: string;
                   purchase_time?: number;
                 }
               | undefined;
-            const reqId = msg.req_id as string | undefined;
+
             if (b?.contract_id) {
               const contract: OpenContract = {
                 contract_id: b.contract_id,
                 status: "open",
               };
               setActiveContract(contract);
-              // subscribe to open contract
-              ws.send(
-                JSON.stringify({
-                  proposal_open_contract: 1,
-                  contract_id: b.contract_id,
-                  subscribe: 1,
-                  req_id: String(nextReqId++),
-                }),
-              );
+              setLastError(null);
+              // subscribe to open contract (skip if bot buy — less WS traffic)
+              if (!skipAutoSubscribe.current) {
+                ws.send(
+                  JSON.stringify({
+                    proposal_open_contract: 1,
+                    contract_id: b.contract_id,
+                    subscribe: 1,
+                    req_id: String(nextReqId++),
+                  }),
+                );
+              }
+              // Resolve pending buy — try by reqId first, then resolve all (only one should be pending)
               const resolve = reqId ? pendingBuys.current.get(reqId) : undefined;
               if (resolve) {
                 pendingBuys.current.delete(reqId!);
                 resolve(contract);
+              } else if (pendingBuys.current.size > 0) {
+                // Deriv may not echo reqId — resolve the most recent pending buy
+                const entries = Array.from(pendingBuys.current.entries());
+                const [lastId, lastResolve] = entries[entries.length - 1];
+                pendingBuys.current.delete(lastId);
+                lastResolve(contract);
+              }
+            } else {
+              const err = msg.error as Record<string, unknown> | undefined;
+              const code = err && typeof err.code === "string" ? err.code : undefined;
+              const message = err && typeof err.message === "string" ? err.message : undefined;
+              const errorMsg = message ?? (code ? `Buy error: ${code}` : "Buy failed");
+              console.error("Buy error:", code, message, "full:", JSON.stringify(msg));
+              setLastError(errorMsg);
+              const resolve = reqId ? pendingBuys.current.get(reqId) : undefined;
+              if (resolve) {
+                pendingBuys.current.delete(reqId!);
+                resolve(null);
               }
             }
             return;
@@ -257,12 +312,12 @@ export function useDerivTrading() {
               const oc: OpenContract = {
                 contract_id: c.contract_id ?? "",
                 status: (c.status as OpenContract["status"]) ?? "open",
-                profit: c.profit,
-                buy_price: c.buy_price,
-                payout: c.payout,
-                entry_tick: c.entry_tick,
-                current_tick: c.current_tick,
-                exit_tick: c.exit_tick,
+                profit: typeof c.profit === "number" ? c.profit : Number(c.profit) || 0,
+                buy_price: typeof c.buy_price === "number" ? c.buy_price : Number(c.buy_price) || 0,
+                payout: typeof c.payout === "number" ? c.payout : Number(c.payout) || 0,
+                entry_tick: typeof c.entry_tick === "number" ? c.entry_tick : Number(c.entry_tick) || undefined,
+                current_tick: typeof c.current_tick === "number" ? c.current_tick : Number(c.current_tick) || undefined,
+                exit_tick: typeof c.exit_tick === "number" ? c.exit_tick : Number(c.exit_tick) || undefined,
                 is_sold: c.is_sold,
                 contract_type: c.contract_type,
                 underlying: c.underlying,
@@ -270,7 +325,11 @@ export function useDerivTrading() {
                 barrier: c.barrier,
               };
               setActiveContract(oc);
+              // Notify subscribers (used by bot)
+              const subscriber = contractSubscribers.current.get(oc.contract_id);
+              if (subscriber) subscriber(oc);
               if (oc.is_sold || oc.status === "won" || oc.status === "lost" || oc.status === "expired" || oc.status === "sold") {
+                contractSubscribers.current.delete(oc.contract_id);
                 const finalStatus =
                   oc.status === "won"
                     ? ("won" as const)
@@ -287,7 +346,6 @@ export function useDerivTrading() {
                   buy_price: oc.buy_price ?? 0,
                 };
                 setLastResult(result);
-                // add to history
                 setTradeHistory((prev) => {
                   const record: TradeRecord = {
                     id: oc.contract_id,
@@ -303,61 +361,90 @@ export function useDerivTrading() {
                   };
                   return [record, ...prev].slice(0, 20);
                 });
-                // clear active after a delay
                 setTimeout(() => setActiveContract(null), 3000);
               }
             }
             return;
           }
 
-          // error
+          // error (catch-all)
           if (msg.error) {
-            const err = msg.error as { code?: string; message?: string };
-            console.error("Deriv WS error:", err.code, err.message);
+            const err = msg.error as Record<string, unknown>;
+            // Deriv errors can be: { code, message }, { code, message, details }, or just a string
+            const code = typeof err.code === "string" ? err.code : undefined;
+            const message = typeof err.message === "string"
+              ? err.message
+              : typeof err === "string"
+                ? err
+                : undefined;
+            // Try to extract from nested structures
+            const details = typeof err.details === "object" && err.details !== null
+              ? JSON.stringify(err.details)
+              : undefined;
+            const errorMsg = message ?? details ?? (code ? `Deriv error: ${code}` : `Deriv error: ${JSON.stringify(err)}`);
+            console.error("Deriv WS error:", code, message, err);
+            setLastError(errorMsg);
           }
         };
 
-        ws.onerror = () => {
-          console.error("Deriv trading WebSocket error");
+        ws.onerror = (event) => {
+          console.error("Deriv trading WebSocket error:", event);
+          // Don't overwrite if we already have a more specific error
+          setLastError((prev) => prev ?? "WebSocket connection error — check that your account has trading access");
         };
 
-        ws.onclose = () => {
-          setConnectionStatus("disconnected");
-          // auto-reconnect with backoff
-          if (reconnectAttempts.current < 5) {
-            const delay = Math.min(
-              1000 * Math.pow(2, reconnectAttempts.current),
-              30000,
-            );
-            reconnectAttempts.current += 1;
-            reconnectTimer.current = setTimeout(() => {
-              void connect(accountId);
-            }, delay);
+        ws.onclose = (event) => {
+          const code = event.code;
+          const reason = event.reason;
+          console.log(`WebSocket closed: code=${code} reason=${reason}`);
+          // Only set disconnected if we weren't already in an error state
+          setConnectionStatus((prev) => prev === "error" ? prev : "disconnected");
+          // Don't overwrite specific errors with generic reconnection message
+          if (code !== 1000 && code !== 1001) {
+            // abnormal closure — attempt reconnect
+            if (reconnectAttempts.current < 5) {
+              const delay = Math.min(
+                1000 * Math.pow(2, reconnectAttempts.current),
+                30000,
+              );
+              reconnectAttempts.current += 1;
+              setLastError((prev) =>
+                prev?.startsWith("Reconnecting") ? prev : `Reconnecting... (attempt ${reconnectAttempts.current})`
+              );
+              reconnectTimer.current = setTimeout(() => {
+                void connect(accountId);
+              }, delay);
+            } else {
+              setLastError(`Connection lost after ${reconnectAttempts.current} attempts. Try switching accounts.`);
+            }
           }
         };
       } catch (err) {
         console.error("Failed to connect trading WebSocket:", err);
         setConnectionStatus("error");
+        setLastError(err instanceof Error ? err.message : "Connection failed");
       }
     },
     [],
   );
 
   /* ---- propose ---- */
+  const proposalSeqRef = useRef(0);
 
   const propose = useCallback(
     (req: ProposalRequest): Promise<Proposal | null> => {
       return new Promise((resolve) => {
+        const seq = ++proposalSeqRef.current;
         setProposalLoading(true);
-        setCurrentProposal(null);
+        setLastError(null);
         const msg: Record<string, unknown> = {
           proposal: 1,
           amount: req.amount,
           basis: "stake",
           contract_type: req.contract_type,
           currency: req.currency,
+          duration: req.duration_ticks,
           duration_unit: "t",
-          tick_count: req.duration_ticks,
           underlying_symbol: req.symbol,
         };
         if (req.barrier !== undefined) {
@@ -366,18 +453,22 @@ export function useDerivTrading() {
         const id = send(msg);
         if (!id) {
           setProposalLoading(false);
+          setLastError("WebSocket not connected — cannot request proposal");
           resolve(null);
           return;
         }
         pendingProposals.current.set(id, resolve);
-        // timeout after 5s
+        // timeout after 8s — only set error if this is still the latest proposal
         setTimeout(() => {
           if (pendingProposals.current.has(id)) {
             pendingProposals.current.delete(id);
-            setProposalLoading(false);
+            if (seq === proposalSeqRef.current) {
+              setProposalLoading(false);
+              setLastError("Proposal request timed out");
+            }
             resolve(null);
           }
-        }, 5000);
+        }, 8000);
       });
     },
     [send],
@@ -388,12 +479,14 @@ export function useDerivTrading() {
   const buy = useCallback(
     (proposalId: string, price: number): Promise<OpenContract | null> => {
       return new Promise((resolve) => {
+        setLastError(null);
         const msg: Record<string, unknown> = {
           buy: proposalId,
           price,
         };
         const id = send(msg);
         if (!id) {
+          setLastError("WebSocket not connected — cannot buy");
           resolve(null);
           return;
         }
@@ -401,9 +494,31 @@ export function useDerivTrading() {
         setTimeout(() => {
           if (pendingBuys.current.has(id)) {
             pendingBuys.current.delete(id);
+            setLastError("Buy request timed out");
             resolve(null);
           }
-        }, 5000);
+        }, 8000);
+      });
+    },
+    [send],
+  );
+
+  /* ---- buy (bot — no auto-subscribe, reduces WS traffic) ---- */
+  const buyBot = useCallback(
+    (proposalId: string, price: number): Promise<OpenContract | null> => {
+      return new Promise((resolve) => {
+        skipAutoSubscribe.current = true;
+        const msg: Record<string, unknown> = { buy: proposalId, price };
+        const id = send(msg);
+        skipAutoSubscribe.current = false;
+        if (!id) { resolve(null); return; }
+        pendingBuys.current.set(id, resolve);
+        setTimeout(() => {
+          if (pendingBuys.current.has(id)) {
+            pendingBuys.current.delete(id);
+            resolve(null);
+          }
+        }, 8000);
       });
     },
     [send],
@@ -430,9 +545,33 @@ export function useDerivTrading() {
     };
   }, []);
 
-  /* ---- clear last result ---- */
+  /* ---- contract subscription (for bot) ---- */
+
+  const subscribeToContract = useCallback(
+    (contractId: string, cb: (c: OpenContract) => void) => {
+      contractSubscribers.current.set(contractId, cb);
+      // Also subscribe via WS so Deriv pushes updates
+      send({ proposal_open_contract: 1, contract_id: contractId });
+    },
+    [send],
+  );
+
+  const unsubscribeFromContract = useCallback((contractId: string) => {
+    contractSubscribers.current.delete(contractId);
+  }, []);
+
+  /* ---- clear last result / error ---- */
+
+  /* ---- manual balance refresh ---- */
+  const refreshBalance = useCallback(() => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: String(nextReqId++) }));
+    }
+  }, []);
 
   const clearLastResult = useCallback(() => setLastResult(null), []);
+  const clearError = useCallback(() => setLastError(null), []);
 
   return {
     connectionStatus,
@@ -442,11 +581,17 @@ export function useDerivTrading() {
     currentProposal,
     proposalLoading,
     lastResult,
+    lastError,
     tradeHistory,
     connect,
     propose,
     buy,
+    buyBot,
     sell,
+    subscribeToContract,
+    unsubscribeFromContract,
+    refreshBalance,
     clearLastResult,
+    clearError,
   };
 }
