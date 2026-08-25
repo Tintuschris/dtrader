@@ -123,6 +123,7 @@ export default function TradingTerminal() {
   const [running, setRunning] = useState(true);
   const [selectedDigit, setSelectedDigit] = useState(4);
   const [streamMode, setStreamMode] = useState<"live" | "simulated">("simulated");
+  const [chartLoading, setChartLoading] = useState(true);
   const [accounts, setAccounts] = useState<DerivAccount[]>([]);
   const [activeAccountId, setActiveAccountId] = useState("");
   const [accountStatus, setAccountStatus] = useState("Connecting to Deriv…");
@@ -278,20 +279,37 @@ export default function TradingTerminal() {
     try {
       ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
       tickStreamWs.current = ws;
-      ws.onopen = () => ws?.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
+      ws.onopen = () => {
+        // First fetch historical ticks so the graph starts with real data
+        ws?.send(JSON.stringify({
+          ticks_history: symbol,
+          adjust_start_time: 1,
+          count: 100,
+          end: "latest",
+          style: "ticks",
+          req_id: "history_init",
+        }));
+        // Then subscribe to live ticks
+        ws?.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: "live_sub" }));
+      };
       ws.onmessage = (event) => {
-        const message = JSON.parse(event.data) as {
-          history?: { prices?: Array<number | string>; pip_size?: number };
+        const message = JSON.parse(event.data) as Record<string, unknown> & {
           tick?: { quote?: number | string; pip_size?: number };
         };
-        if (message.history?.prices?.length) {
-          const pipSize = message.history.pip_size ?? 2;
-          setTicks(message.history.prices.slice(-100).map((price) => ({ value: Number(price), digit: digitFromQuote(price, pipSize) })));
+        // Deriv ticks_history response comes as tick_history.prices
+        const tickHistory = message.tick_history as { prices?: Array<number | string>; pip_size?: number } | undefined;
+        // Also handle legacy history field
+        const history = message.history as { prices?: Array<number | string>; pip_size?: number } | undefined;
+        const prices = tickHistory?.prices ?? history?.prices;
+        const pipSize = tickHistory?.pip_size ?? history?.pip_size ?? 2;
+        if (prices?.length) {
+          setTicks(prices.slice(-100).map((price) => ({ value: Number(price), digit: digitFromQuote(price, pipSize) })));
           setStreamMode("live");
+          setChartLoading(false);
         }
         if (message.tick?.quote !== undefined) {
-          const pipSize = message.tick.pip_size ?? 2;
-          setTicks((prev) => [...prev.slice(-99), { value: Number(message.tick?.quote), digit: digitFromQuote(message.tick?.quote ?? 0, pipSize) }]);
+          const tickPipSize = message.tick.pip_size ?? pipSize;
+          setTicks((prev) => [...prev.slice(-99), { value: Number(message.tick?.quote), digit: digitFromQuote(message.tick?.quote ?? 0, tickPipSize) }]);
           setStreamMode("live");
         }
       };
@@ -384,6 +402,22 @@ export default function TradingTerminal() {
     const total = counts.reduce((sum, c) => sum + c, 0);
     return counts.map((c) => Number(((c / total) * 100).toFixed(1)));
   }, [ticks]);
+
+  /* ---- animate digit rings when percentages change ---- */
+  const prevPctRef = useRef(percentages);
+  const [animatingDigits, setAnimatingDigits] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    const prev = prevPctRef.current;
+    const changed = new Set<number>();
+    percentages.forEach((p, i) => { if (p !== prev[i]) changed.add(i); });
+    if (changed.size > 0) {
+      setAnimatingDigits(changed);
+      const timer = setTimeout(() => setAnimatingDigits(new Set()), 400);
+      prevPctRef.current = percentages;
+      return () => clearTimeout(timer);
+    }
+    prevPctRef.current = percentages;
+  }, [percentages]);
 
   /* ---- chart auto-scaling ---- */
   const chartRange = useMemo(() => {
@@ -628,6 +662,14 @@ export default function TradingTerminal() {
               {/* Desktop: show both, Mobile: carousel */}
               <div className="chart-section-desktop">
                 <div className="chart-wrap">
+                  {chartLoading && (
+                    <div className="chart-skeleton">
+                      <div className="chart-skeleton-line" />
+                      <div className="chart-skeleton-line short" />
+                      <div className="chart-skeleton-line medium" />
+                      <div className="chart-skeleton-shimmer" />
+                    </div>
+                  )}
                   <div className="chart-gridlines" />
                   <svg className="chart" viewBox="0 0 900 360" preserveAspectRatio="none" aria-label="Live price chart" role="img">
                     <defs>
@@ -663,7 +705,7 @@ export default function TradingTerminal() {
                 </div>
                 <div className="digit-strip">
                   {percentages.map((pct, digit) => (
-                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""}`} onClick={() => setSelectedDigit(digit)}>
+                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${animatingDigits.has(digit) ? "digit-pulse" : ""}`} onClick={() => setSelectedDigit(digit)}>
                       <strong>{digit}</strong>
                       <span>{pct}%</span>
                     </button>
@@ -674,6 +716,14 @@ export default function TradingTerminal() {
                 <SwipeCarousel labels={["Chart", "Digits"]}>
                   {/* Slide 1: Chart */}
                   <div className="chart-wrap">
+                    {chartLoading && (
+                      <div className="chart-skeleton">
+                        <div className="chart-skeleton-line" />
+                        <div className="chart-skeleton-line short" />
+                        <div className="chart-skeleton-line medium" />
+                        <div className="chart-skeleton-shimmer" />
+                      </div>
+                    )}
                     <div className="chart-gridlines" />
                     <svg className="chart" viewBox="0 0 900 360" preserveAspectRatio="none" aria-label="Live price chart" role="img">
                       <defs>
@@ -697,7 +747,7 @@ export default function TradingTerminal() {
                     </div>
                     <div className="digit-strip">
                       {percentages.map((pct, digit) => (
-                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""}`} onClick={() => setSelectedDigit(digit)}>
+                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${animatingDigits.has(digit) ? "digit-pulse" : ""}`} onClick={() => setSelectedDigit(digit)}>
                           <strong>{digit}</strong>
                           <span>{pct}%</span>
                         </button>
