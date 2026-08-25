@@ -320,6 +320,13 @@ export default function TradingTerminal() {
     setTicks((prev) => [...prev.slice(-99), { value: tick, digit: digitFromQuote(tick, 2) }]);
   }, [activeContract?.current_tick]);
 
+  /* ---- auto-dismiss errors after a few seconds ---- */
+  useEffect(() => {
+    if (!lastError) return;
+    const timer = setTimeout(() => clearError(), 4000);
+    return () => clearTimeout(timer);
+  }, [lastError, clearError]);
+
   /* ---- auto-refresh proposal (paused when not on workspace tab) ---- */
   useEffect(() => {
     if (proposeTimer.current) clearTimeout(proposeTimer.current);
@@ -338,7 +345,7 @@ export default function TradingTerminal() {
         duration_ticks: duration,
         barrier: subNeedsBarrier(subContract) ? String(selectedDigit) : undefined,
       });
-    }, 300);
+    }, 150);
     return () => { if (proposeTimer.current) clearTimeout(proposeTimer.current); };
   }, [subContract, symbol, stake, duration, selectedDigit, connectionStatus, balanceCurrency, propose, clearError, activeTab]);
 
@@ -785,7 +792,7 @@ export default function TradingTerminal() {
               </div>
 
               {/* Payout card */}
-              <div className={`payout-card ${lastError && !proposalLoading ? "payout-error" : ""}`}>
+              <div className={`payout-card ${lastError && !proposalLoading && !currentProposal ? "payout-error" : ""}`}>
                 <div>
                   <span>Potential payout</span>
                   <strong>

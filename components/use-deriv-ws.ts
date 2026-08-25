@@ -182,7 +182,6 @@ export function useDerivTrading() {
 
           // proposal
           if (msg.msg_type === "proposal") {
-            console.log("Proposal msg:", JSON.stringify(msg));
             const reqId = msg.req_id as string | undefined;
             const p = msg.proposal as
               | {
@@ -196,7 +195,6 @@ export function useDerivTrading() {
               | undefined;
 
             if (p?.id) {
-              console.log("Proposal received:", { id: p.id, ask_price: p.ask_price, payout: p.payout, profit: p.profit });
               const proposal: Proposal = {
                 id: p.id,
                 ask_price: Number(p.ask_price) || 0,
@@ -208,10 +206,22 @@ export function useDerivTrading() {
               setCurrentProposal(proposal);
               setProposalLoading(false);
               setLastError(null);
+              // Resolve by reqId first, then fall back to the most recent pending proposal
               const resolve = reqId ? pendingProposals.current.get(reqId) : undefined;
               if (resolve) {
                 pendingProposals.current.delete(reqId!);
                 resolve(proposal);
+              } else if (pendingProposals.current.size > 0) {
+                // Deriv may not echo reqId — resolve the most recent pending proposal
+                // and reject all older ones so their timeouts don't set stale errors
+                const entries = Array.from(pendingProposals.current.entries());
+                for (let i = 0; i < entries.length - 1; i++) {
+                  entries[i][1](null);
+                  pendingProposals.current.delete(entries[i][0]);
+                }
+                const [lastId, lastResolve] = entries[entries.length - 1];
+                pendingProposals.current.delete(lastId);
+                lastResolve(proposal);
               }
             } else {
               // Proposal failed — Deriv returned an error with the proposal response
@@ -228,6 +238,15 @@ export function useDerivTrading() {
               if (resolve) {
                 pendingProposals.current.delete(reqId!);
                 resolve(null);
+              } else if (pendingProposals.current.size > 0) {
+                const entries = Array.from(pendingProposals.current.entries());
+                for (let i = 0; i < entries.length - 1; i++) {
+                  entries[i][1](null);
+                  pendingProposals.current.delete(entries[i][0]);
+                }
+                const [lastId, lastResolve] = entries[entries.length - 1];
+                pendingProposals.current.delete(lastId);
+                lastResolve(null);
               }
             }
             return;
@@ -430,6 +449,7 @@ export function useDerivTrading() {
 
   /* ---- propose ---- */
   const proposalSeqRef = useRef(0);
+  const proposeRef = useRef<(req: ProposalRequest) => Promise<Proposal | null>>(undefined);
 
   const propose = useCallback(
     (req: ProposalRequest): Promise<Proposal | null> => {
@@ -458,21 +478,27 @@ export function useDerivTrading() {
           return;
         }
         pendingProposals.current.set(id, resolve);
-        // timeout after 8s — only set error if this is still the latest proposal
+        // timeout after 6s — only set error if no newer proposal is in-flight
         setTimeout(() => {
           if (pendingProposals.current.has(id)) {
             pendingProposals.current.delete(id);
+            // Only show error if this is still the latest proposal request
             if (seq === proposalSeqRef.current) {
               setProposalLoading(false);
-              setLastError("Proposal request timed out");
+              setLastError("Proposal request timed out — retrying");
+              // Auto-retry once via ref to avoid stale closure
+              proposeRef.current?.(req);
             }
             resolve(null);
           }
-        }, 8000);
+        }, 6000);
       });
     },
     [send],
   );
+
+  // Keep ref current for retry without stale closure
+  proposeRef.current = propose;
 
   /* ---- buy ---- */
 
