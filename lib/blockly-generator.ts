@@ -1,19 +1,23 @@
 /**
  * JavaScript code generator for DTrader custom blocks.
  * Translates Blockly workspace into executable trading bot code.
+ *
+ * Each block registers a generator function that returns either:
+ * - A string (for statement blocks)
+ * - A [string, number] tuple (for value/expression blocks)
  */
 import * as Blockly from "blockly/core";
 
-/** Custom code generators for each block type. */
 type BlockGenerator = (
   block: Blockly.Block,
   generator: Blockly.Generator,
 ) => string | [string, number];
+
 const generators: Record<string, BlockGenerator> = {};
 
-/* ------------------------------------------------------------------ */
-/*  Trade Definition                                                   */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  Trade Definition                                                    */
+/* ================================================================== */
 
 generators["trade_definition"] = (block, generator) => {
   const tradeOptions = generator.statementToCode(block, "TRADE_OPTIONS");
@@ -31,25 +35,72 @@ generators["trade_definition_market"] = (block) => {
   return `Bot.setSymbol('${symbol}');\n`;
 };
 
+generators["trade_definition_tradetype"] = (block) => {
+  const tradeType = block.getFieldValue("TRADETYPE");
+  return `Bot.setTradeType('${tradeType}');\n`;
+};
+
 generators["trade_definition_contracttype"] = (block) => {
   const contractType = block.getFieldValue("CONTRACT_TYPE");
   return `Bot.setContractType('${contractType}');\n`;
 };
 
+generators["trade_definition_restartonerror"] = (block) => {
+  const restart = block.getFieldValue("RESTART") === "TRUE";
+  return `Bot.setRestartOnError(${restart});\n`;
+};
+
+generators["trade_definition_restartbuysell"] = (block) => {
+  const enabled = block.getFieldValue("ENABLED") === "TRUE";
+  return `Bot.setTimeMachineEnabled(${enabled});\n`;
+};
+
+generators["trade_definition_candleinterval"] = (block) => {
+  const interval = block.getFieldValue("INTERVAL");
+  return `Bot.setCandleInterval(${interval});\n`;
+};
+
 generators["trade_definition_tradeoptions"] = (block, generator) => {
   const stake = generator.valueToCode(block, "STAKE", 0) || "1";
   const duration = generator.valueToCode(block, "DURATION", 0) || "5";
-  const barrier = block.getFieldValue("BARRIER");
-  return `
-    Bot.setStake(${stake});
+  const basis = block.getFieldValue("BASIS") || "stake";
+  const durationUnit = block.getFieldValue("DURATION_UNIT") || "t";
+  const prediction = block.getFieldValue("PREDICTION");
+  const minStake = generator.valueToCode(block, "MIN_STAKE", 0);
+  const maxStake = generator.valueToCode(block, "MAX_STAKE", 0);
+  const takeProfit = generator.valueToCode(block, "TAKE_PROFIT", 0);
+  const stopLoss = generator.valueToCode(block, "STOP_LOSS", 0);
+
+  let code = `
+    Bot.setAmount(${stake});
+    Bot.setBasis('${basis}');
     Bot.setDuration(${duration});
-    Bot.setBarrier(${barrier});
+    Bot.setDurationUnit('${durationUnit}');
   `;
+
+  if (prediction && prediction !== "-1") {
+    code += `Bot.setPrediction(${prediction});\n`;
+  }
+  if (minStake) {
+    code += `Bot.setMinStake(${minStake});\n`;
+  }
+  if (maxStake) {
+    code += `Bot.setMaxStake(${maxStake});\n`;
+  }
+  if (takeProfit) {
+    code += `Bot.setTakeProfit(${takeProfit});\n`;
+  }
+  if (stopLoss) {
+    code += `Bot.setStopLoss(${stopLoss});\n`;
+  }
+
+  code += `BinaryBotPrivateHasCalledTradeOptions = true;\n`;
+  return code;
 };
 
-/* ------------------------------------------------------------------ */
-/*  Before Purchase                                                    */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  Before Purchase                                                     */
+/* ================================================================== */
 
 generators["before_purchase"] = (block, generator) => {
   const stack = generator.statementToCode(block, "STACK");
@@ -60,17 +111,50 @@ generators["before_purchase"] = (block, generator) => {
   `;
 };
 
-generators["purchase"] = (block) => {
+/* ================================================================== */
+/*  Purchase                                                            */
+/* ================================================================== */
+
+generators["purchase"] = () => {
+  return `Bot.purchase();\n`;
+};
+
+generators["purchase_by_type"] = (block) => {
   const contract = block.getFieldValue("CONTRACT");
-  if (contract === "PROPOSED") {
-    return `Bot.purchase();\n`;
-  }
   return `Bot.purchase('${contract}');\n`;
 };
 
-/* ------------------------------------------------------------------ */
-/*  During Purchase                                                    */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  Proposal state readers                                               */
+/* ================================================================== */
+
+generators["get_proposal_id"] = () => {
+  return ["Bot.getProposalId()", 0];
+};
+
+generators["get_ask_price"] = () => {
+  return ["Bot.getAskPrice()", 0];
+};
+
+generators["get_payout"] = () => {
+  return ["Bot.getPayout()", 0];
+};
+
+generators["get_profit"] = () => {
+  return ["Bot.getPayout() - Bot.getAskPrice()", 0];
+};
+
+generators["get_spot"] = () => {
+  return ["Bot.getSpotPrice()", 0];
+};
+
+generators["get_proposal_valid"] = () => {
+  return ["Bot.isProposalValid()", 0];
+};
+
+/* ================================================================== */
+/*  During Purchase                                                     */
+/* ================================================================== */
 
 generators["during_purchase"] = (block, generator) => {
   const stack = generator.statementToCode(block, "STACK");
@@ -81,17 +165,49 @@ generators["during_purchase"] = (block, generator) => {
   `;
 };
 
-generators["check_sell"] = () => {
-  return ["Bot.checkSell()", 0];
-};
+/* ================================================================== */
+/*  Sell blocks                                                         */
+/* ================================================================== */
 
 generators["sell_at_market"] = () => {
   return `Bot.sell();\n`;
 };
 
-/* ------------------------------------------------------------------ */
-/*  After Purchase                                                     */
-/* ------------------------------------------------------------------ */
+generators["should_sell"] = () => {
+  return ["Bot.shouldSell()", 0];
+};
+
+generators["get_contract_profit"] = () => {
+  return ["Bot.getContractProfit()", 0];
+};
+
+generators["get_contract_status"] = () => {
+  return ["Bot.getContractStatus()", 0];
+};
+
+generators["get_entry_tick"] = () => {
+  return ["Bot.getEntryTick()", 0];
+};
+
+generators["get_current_tick"] = () => {
+  return ["Bot.getCurrentTick()", 0];
+};
+
+generators["get_exit_tick"] = () => {
+  return ["Bot.getExitTick()", 0];
+};
+
+generators["get_tick_count"] = () => {
+  return ["Bot.getTickCount()", 0];
+};
+
+generators["get_contract_duration"] = () => {
+  return ["Bot.getContractDuration()", 0];
+};
+
+/* ================================================================== */
+/*  After Purchase                                                      */
+/* ================================================================== */
 
 generators["after_purchase"] = (block, generator) => {
   const stack = generator.statementToCode(block, "STACK");
@@ -102,14 +218,74 @@ generators["after_purchase"] = (block, generator) => {
   `;
 };
 
+/* ================================================================== */
+/*  After-purchase result checks                                         */
+/* ================================================================== */
+
+generators["check_result"] = (block) => {
+  const result = block.getFieldValue("RESULT");
+  switch (result) {
+    case "won":
+      return ["Bot.getContractStatus() === 'won'", 0];
+    case "lost":
+      return ["Bot.getContractStatus() === 'lost'", 0];
+    case "not_expired":
+      return ["['won', 'lost', 'sold'].includes(Bot.getContractStatus())", 0];
+    default:
+      return ["false", 0];
+  }
+};
+
+generators["get_total_profit"] = () => {
+  return ["Bot.getTotalProfit()", 0];
+};
+
+generators["get_total_stake"] = () => {
+  return ["Bot.getTotalStake()", 0];
+};
+
+generators["get_loss_count"] = () => {
+  return ["Bot.getConsecutiveLosses()", 0];
+};
+
+generators["get_win_count"] = () => {
+  return ["Bot.getWinCount()", 0];
+};
+
+generators["get_trade_count"] = () => {
+  return ["Bot.getTradeCount()", 0];
+};
+
+/* ================================================================== */
+/*  Trade Again                                                         */
+/* ================================================================== */
+
 generators["trade_again"] = (block) => {
   const again = block.getFieldValue("AGAIN");
   return `return ${again === "TRUE"};\n`;
 };
 
-/* ------------------------------------------------------------------ */
-/*  Tick Analysis                                                      */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  Stake Management                                                    */
+/* ================================================================== */
+
+generators["set_stake"] = (block, generator) => {
+  const stake = generator.valueToCode(block, "STAKE", 0) || "1";
+  return `Bot.setAmount(${stake});\n`;
+};
+
+generators["multiply_stake"] = (block, generator) => {
+  const multiplier = generator.valueToCode(block, "MULTIPLIER", 0) || "2";
+  return `Bot.setAmount(Bot.getAmount() * ${multiplier});\n`;
+};
+
+generators["reset_stake"] = () => {
+  return `Bot.resetAmount();\n`;
+};
+
+/* ================================================================== */
+/*  Tick Analysis                                                       */
+/* ================================================================== */
 
 generators["tick_analysis"] = (block, generator) => {
   const stack = generator.statementToCode(block, "STACK");
@@ -124,33 +300,22 @@ generators["get_last_digit"] = () => {
   return ["Bot.getLastDigit()", 0];
 };
 
-generators["get_tick_count"] = () => {
-  return ["Bot.getTickCount()", 0];
+generators["get_last_digit_candle"] = (block) => {
+  const field = block.getFieldValue("FIELD");
+  return [`Bot.getCandle('${field}')`, 0];
 };
 
-/* ------------------------------------------------------------------ */
-/*  Payout / Profit                                                    */
-/* ------------------------------------------------------------------ */
-
-generators["get_payout"] = () => {
-  return ["Bot.getPayout()", 0];
-};
-
-generators["get_ask_price"] = () => {
-  return ["Bot.getAskPrice()", 0];
-};
-
-generators["get_profit"] = () => {
-  return ["Bot.getProfit()", 0];
-};
+/* ================================================================== */
+/*  Balance                                                             */
+/* ================================================================== */
 
 generators["get_balance"] = () => {
   return ["Bot.getBalance()", 0];
 };
 
-/* ------------------------------------------------------------------ */
-/*  Utility blocks                                                     */
-/* ------------------------------------------------------------------ */
+/* ================================================================== */
+/*  Utility blocks                                                      */
+/* ================================================================== */
 
 generators["bot_log"] = (block, generator) => {
   const msg = generator.valueToCode(block, "MSG", 0) || "'empty'";
@@ -162,6 +327,16 @@ generators["wait_ticks"] = (block, generator) => {
   return `Bot.waitTicks(${ticks});\n`;
 };
 
+generators["notify"] = (block, generator) => {
+  const msg = generator.valueToCode(block, "MSG", 0) || "'notification'";
+  const sound = block.getFieldValue("SOUND") || "info";
+  return `Bot.notify(${msg}, '${sound}');\n`;
+};
+
+/* ================================================================== */
+/*  Blockly Built-in Block Generators                                   */
+/* ================================================================== */
+
 /**
  * Register the DTrader code generator with Blockly.
  * Must be called after Blockly is loaded.
@@ -169,7 +344,7 @@ generators["wait_ticks"] = (block, generator) => {
 export function registerDTraderGenerator(): void {
   const dtraderGen = new Blockly.Generator("DTrader");
 
-  // Use Blockly's built-in generators for standard blocks
+  // Scrub: chain next blocks for statement blocks
   dtraderGen.scrub_ = (block, code, thisOnly) => {
     const nextBlock =
       block.nextConnection && block.nextConnection.targetBlock();
@@ -179,13 +354,19 @@ export function registerDTraderGenerator(): void {
     return code;
   };
 
-  // Register custom generators
+  // Register all custom generators
   for (const [type, fn] of Object.entries(generators)) {
     dtraderGen.forBlock[type] = fn;
   }
 
-  // Register standard block types with the basic generator
+  /* ---- Standard block generators ---- */
+
   dtraderGen.forBlock["math_number"] = (block) => {
+    const num = block.getFieldValue("NUM");
+    return [String(num), 0];
+  };
+
+  dtraderGen.forBlock["math_number_positive"] = (block) => {
     const num = block.getFieldValue("NUM");
     return [String(num), 0];
   };
@@ -195,18 +376,37 @@ export function registerDTraderGenerator(): void {
     const left = generator.valueToCode(block, "A", 0) || "0";
     const right = generator.valueToCode(block, "B", 0) || "0";
     const ops: Record<string, string> = {
-      ADD: "+",
-      MINUS: "-",
-      MULTIPLY: "*",
-      DIVIDE: "/",
-      MODULO: "%",
+      ADD: "+", MINUS: "-", MULTIPLY: "*",
+      DIVIDE: "/", MODULO: "%", POWER: "**",
     };
     return [`(${left} ${ops[op] || "+"} ${right})`, 0];
   };
 
-  dtraderGen.forBlock["math_number_positive"] = (block) => {
-    const num = block.getFieldValue("NUM");
-    return [String(num), 0];
+  dtraderGen.forBlock["math_single"] = (block, generator) => {
+    const op = block.getFieldValue("OP");
+    const val = generator.valueToCode(block, "NUM", 0) || "0";
+    const ops: Record<string, string> = {
+      ROOT: `Math.sqrt(${val})`,
+      ABS: `Math.abs(${val})`,
+      NEG: `(-${val})`,
+      LN: `Math.log(${val})`,
+      LOG10: `Math.log10(${val})`,
+      EXP: `Math.exp(${val})`,
+      POW10: `Math.pow(10, ${val})`,
+    };
+    return [ops[op as string] || val, 0];
+  };
+
+  dtraderGen.forBlock["math_random_int"] = (block, generator) => {
+    const from = generator.valueToCode(block, "FROM", 0) || "0";
+    const to = generator.valueToCode(block, "TO", 0) || "100";
+    return [`Math.floor(Math.random() * (${to} - ${from} + 1) + ${from})`, 0];
+  };
+
+  dtraderGen.forBlock["math_modulo"] = (block, generator) => {
+    const div = generator.valueToCode(block, "DIVIDEND", 0) || "0";
+    const mod = generator.valueToCode(block, "DIVISOR", 0) || "1";
+    return [`(${div} % ${mod})`, 0];
   };
 
   dtraderGen.forBlock["logic_compare"] = (block, generator) => {
@@ -214,12 +414,7 @@ export function registerDTraderGenerator(): void {
     const left = generator.valueToCode(block, "A", 0) || "0";
     const right = generator.valueToCode(block, "B", 0) || "0";
     const ops: Record<string, string> = {
-      EQ: "==",
-      NEQ: "!=",
-      LT: "<",
-      LTE: "<=",
-      GT: ">",
-      GTE: ">=",
+      EQ: "==", NEQ: "!=", LT: "<", LTE: "<=", GT: ">", GTE: ">=",
     };
     return [`(${left} ${ops[op] || "=="} ${right})`, 0];
   };
@@ -227,6 +422,20 @@ export function registerDTraderGenerator(): void {
   dtraderGen.forBlock["logic_boolean"] = (block) => {
     const val = block.getFieldValue("BOOL");
     return [val === "TRUE" ? "true" : "false", 0];
+  };
+
+  dtraderGen.forBlock["logic_operation"] = (block, generator) => {
+    const op = block.getFieldValue("OP");
+    const left = generator.valueToCode(block, "A", 0) || "true";
+    const right = generator.valueToCode(block, "B", 0) || "true";
+    return op === "AND"
+      ? [`(${left} && ${right})`, 0]
+      : [`(${left} || ${right})`, 0];
+  };
+
+  dtraderGen.forBlock["logic_negate"] = (block, generator) => {
+    const val = generator.valueToCode(block, "BOOL", 0) || "true";
+    return [`(!${val})`, 0];
   };
 
   dtraderGen.forBlock["controls_if"] = (block, generator) => {
@@ -249,6 +458,14 @@ export function registerDTraderGenerator(): void {
       : `while (${cond}) {\n${body}}\n`;
   };
 
+  dtraderGen.forBlock["controls_for"] = (block, generator) => {
+    const varName = block.getFieldValue("VAR") || "i";
+    const from = generator.valueToCode(block, "FROM", 0) || "0";
+    const to = generator.valueToCode(block, "TO", 0) || "10";
+    const body = generator.statementToCode(block, "DO");
+    return `for (var ${varName} = ${from}; ${varName} <= ${to}; ${varName}++) {\n${body}}\n`;
+  };
+
   dtraderGen.forBlock["variables_get"] = (block) => {
     const varName = block.getFieldValue("VAR") || "variable";
     return [`${varName}`, 0];
@@ -266,6 +483,25 @@ export function registerDTraderGenerator(): void {
     return `${varName} += ${delta};\n`;
   };
 
+  dtraderGen.forBlock["text"] = (block) => {
+    const text = block.getFieldValue("TEXT") || "";
+    return [`'${text}'`, 0];
+  };
+
+  dtraderGen.forBlock["text_join"] = (block, generator) => {
+    const items = [];
+    for (let i = 0; i < block.inputList.length; i++) {
+      const val = generator.valueToCode(block, `ADD${i}`, 0);
+      if (val) items.push(val);
+    }
+    return [`[${items.join(" + ")}].join('')`, 0];
+  };
+
+  dtraderGen.forBlock["text_length"] = (block, generator) => {
+    const val = generator.valueToCode(block, "VALUE", 0) || "''";
+    return [`${val}.length`, 0];
+  };
+
   // Store generator for use in generateBotCode
   (globalThis as Record<string, unknown>).__dtraderGen = dtraderGen;
 }
@@ -281,7 +517,9 @@ export function generateBotCode(workspace: Blockly.Workspace): string {
   return gen.workspaceToCode(workspace);
 }
 
-/** Returns the wrapped bot execution code with the main loop. */
+/**
+ * Wrap user-generated code in the standard Deriv Bot execution loop.
+ */
 export function wrapInExecutionLoop(userCode: string): string {
   return `
 var BinaryBotPrivateInit;
