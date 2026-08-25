@@ -250,6 +250,16 @@
 .bot-template-card p{font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.5}
 .bot-template-strategy{font-size:10px;color:var(--teal);background:rgba(70,211,189,.1);padding:3px 10px;border-radius:4px;text-transform:uppercase;letter-spacing:.06em}
 
+/* Visual Blockly editor */
+.bot-visual-editor{display:flex;flex-direction:column;gap:16px}
+.bot-visual-editor .bot-header{display:flex;justify-content:space-between;align-items:start}
+.blockly-editor-wrap{height:600px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#1a1a2e}
+.visual-code-output{background:#0c141f;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.code-output-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)}
+.copy-code-btn{background:rgba(70,211,189,.1);color:var(--teal);border:1px solid rgba(70,211,189,.2);border-radius:5px;padding:4px 12px;font-size:11px;cursor:pointer;transition:.2s}.copy-code-btn:hover{background:rgba(70,211,189,.2)}
+.visual-code-output pre{padding:16px;font-size:11px;color:#a0b0c0;overflow-x:auto;max-height:250px;margin:0;font-family:'JetBrains Mono',monospace}
+.visual-editor-card{border-style:dashed!important;border-color:rgba(174,155,255,.3)!important}.visual-editor-card:hover{border-color:var(--purple)!important;background:rgba(174,155,255,.04)!important}
+
 /* Bot config form */
 .bot-config-grid{display:grid;grid-template-columns:1.5fr 1fr;gap:20px}
 .bot-config-form{padding:24px}

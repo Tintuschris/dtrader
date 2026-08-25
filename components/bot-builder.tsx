@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useMemo, useRef } from "react";
 import { IconX, IconSearch, IconPlayerStop, IconPlayerPlay, IconTrash, IconFileCode, IconDownload } from "@tabler/icons-react";
+import dynamic from "next/dynamic";
 import { type BotConfig, type BotState, type BotTemplate, type BotWSDeps, BOT_TEMPLATES } from "./use-bot";
 import { parseDerivBotXml, type ParsedBot } from "../lib/deriv-bot-xml-parser";
 import { downloadBotXml, exportToDerivBotXml } from "../lib/deriv-bot-xml-exporter";
@@ -11,6 +12,8 @@ import {
   searchTemplates,
   type BotTemplateEntry,
 } from "../lib/bot-template-library";
+
+const BlocklyWorkspace = dynamic(() => import("./blockly-workspace"), { ssr: false });
 
 type Market = { symbol: string; display_name: string };
 
@@ -32,7 +35,7 @@ type Props = {
   botApi: BotApi;
 };
 
-type View = "templates" | "configure" | "runner";
+type View = "templates" | "configure" | "runner" | "visual";
 
 export default function BotBuilder({ markets, balance, balanceCurrency, botApi }: Props) {
   const { bots, createBot, startBot, stopBot, pauseBot, resumeBot, deleteBot } = botApi;
@@ -46,6 +49,7 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
   const [libraryCategory, setLibraryCategory] = useState<string>("all");
   const [librarySearch, setLibrarySearch] = useState("");
   const [previewTemplate, setPreviewTemplate] = useState<BotTemplateEntry | null>(null);
+  const [visualCode, setVisualCode] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeBot = useMemo(
@@ -444,6 +448,17 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
               <p>Browse {BOT_TEMPLATE_LIBRARY.length} pre-built strategies. Filter by risk, category, and more.</p>
               <span className="bot-template-strategy">{BOT_TEMPLATE_LIBRARY.length} templates</span>
             </button>
+
+            {/* Visual Blockly editor card */}
+            <button
+              className="bot-template-card visual-editor-card"
+              onClick={() => setView("visual")}
+            >
+              <span className="bot-template-icon">🧩</span>
+              <h3>Visual Editor</h3>
+              <p>Build a custom strategy with drag-and-drop blocks. Full control over trade logic, conditions, and tick analysis.</p>
+              <span className="bot-template-strategy">blockly • no code</span>
+            </button>
           </div>
 
           {/* Hidden file input */}
@@ -704,6 +719,39 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
           fmt={fmt}
           fmtDuration={fmtDuration}
         />
+      )}
+
+      {/* ===== VISUAL BLOCKLY EDITOR ===== */}
+      {view === "visual" && (
+        <div className="bot-visual-editor">
+          <div className="bot-header">
+            <div>
+              <p className="eyebrow">VISUAL BOT EDITOR</p>
+              <h1>Build with blocks</h1>
+              <p className="muted">Drag and drop blocks to create your strategy. The code is generated automatically.</p>
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className="back-btn" onClick={() => setView("templates")}>← Back</button>
+            </div>
+          </div>
+          <div className="blockly-editor-wrap">
+            <BlocklyWorkspace
+              onCodeGenerated={(code) => setVisualCode(code)}
+            />
+          </div>
+          {visualCode && (
+            <div className="visual-code-output">
+              <div className="code-output-header">
+                <span>Generated Code</span>
+                <button
+                  className="copy-code-btn"
+                  onClick={() => navigator.clipboard.writeText(visualCode)}
+                >Copy</button>
+              </div>
+              <pre>{visualCode}</pre>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
