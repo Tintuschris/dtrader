@@ -13,7 +13,7 @@ import {
   type BotTemplateEntry,
 } from "../lib/bot-template-library";
 
-const BlocklyWorkspace = dynamic(() => import("./blockly-workspace"), { ssr: false });
+const VisualBlocklyEditor = dynamic(() => import("./visual-blockly-editor"), { ssr: false });
 
 type Market = { symbol: string; display_name: string };
 
@@ -723,35 +723,11 @@ export default function BotBuilder({ markets, balance, balanceCurrency, botApi }
 
       {/* ===== VISUAL BLOCKLY EDITOR ===== */}
       {view === "visual" && (
-        <div className="bot-visual-editor">
-          <div className="bot-header">
-            <div>
-              <p className="eyebrow">VISUAL BOT EDITOR</p>
-              <h1>Build with blocks</h1>
-              <p className="muted">Drag and drop blocks to create your strategy. The code is generated automatically.</p>
-            </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button className="back-btn" onClick={() => setView("templates")}>← Back</button>
-            </div>
-          </div>
-          <div className="blockly-editor-wrap">
-            <BlocklyWorkspace
-              onCodeGenerated={(code) => setVisualCode(code)}
-            />
-          </div>
-          {visualCode && (
-            <div className="visual-code-output">
-              <div className="code-output-header">
-                <span>Generated Code</span>
-                <button
-                  className="copy-code-btn"
-                  onClick={() => navigator.clipboard.writeText(visualCode)}
-                >Copy</button>
-              </div>
-              <pre>{visualCode}</pre>
-            </div>
-          )}
-        </div>
+        <VisualBlocklyEditor
+          visualCode={visualCode}
+          setVisualCode={setVisualCode}
+          onBack={() => setView("templates")}
+        />
       )}
     </div>
   );
