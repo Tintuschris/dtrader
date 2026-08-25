@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
  * POST /api/deriv/session
  *
  * Creates an authenticated WebSocket URL (OTP) for the given account.
- * Uses OAuth session if available, falls back to server-side PAT.
+ * Creates an authenticated WebSocket URL (OTP) for the given account.
+ * Requires OAuth login via Deriv.
  */
 export async function POST(request: NextRequest) {
   const { accountId } = (await request.json().catch(() => ({}))) as { accountId?: string };
@@ -24,21 +25,11 @@ export async function POST(request: NextRequest) {
     headers = await getAuthHeaders();
   }
 
-  // Fall back to server-side PAT
   if (!headers) {
-    const appId = process.env.DERIV_APP_ID;
-    const token = process.env.DERIV_PAT;
-    if (!appId || !token) {
-      return NextResponse.json(
-        { error: "Not authenticated. Please log in or configure server credentials." },
-        { status: 401 },
-      );
-    }
-    headers = {
-      "Deriv-App-ID": appId,
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    };
+    return NextResponse.json(
+      { error: "Not authenticated. Please log in with your Deriv account." },
+      { status: 401 },
+    );
   }
 
   const response = await fetch(

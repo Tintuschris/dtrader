@@ -26,8 +26,7 @@ function normaliseAccount(account: Record<string, unknown>): DerivAccount | null
 /**
  * GET /api/deriv/accounts
  *
- * Returns the user's Deriv accounts. Uses OAuth session if available,
- * falls back to server-side PAT if configured.
+ * Returns the user's Deriv accounts. Requires OAuth login via Deriv.
  */
 export async function GET() {
   // Try OAuth session first
@@ -40,21 +39,11 @@ export async function GET() {
     usingOAuth = true;
   }
 
-  // Fall back to server-side PAT
   if (!headers) {
-    const appId = process.env.DERIV_APP_ID;
-    const token = process.env.DERIV_PAT;
-    if (!appId || !token) {
-      return NextResponse.json(
-        { error: "Not authenticated. Please log in or configure server credentials." },
-        { status: 401 },
-      );
-    }
-    headers = {
-      "Deriv-App-ID": appId,
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    };
+    return NextResponse.json(
+      { error: "Not authenticated. Please log in with your Deriv account." },
+      { status: 401 },
+    );
   }
 
   const response = await fetch("https://api.derivws.com/trading/v1/options/accounts", {
@@ -64,9 +53,7 @@ export async function GET() {
   const payload = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const errorMsg = usingOAuth
-      ? "Unable to load accounts. Your session may have expired."
-      : "Unable to load Deriv accounts.";
+    const errorMsg = "Unable to load accounts. Your session may have expired.";
     return NextResponse.json({ error: errorMsg }, { status: response.status });
   }
 
