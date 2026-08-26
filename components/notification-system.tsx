@@ -1,0 +1,247 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  IconBell,
+  IconX,
+  IconCheck,
+  IconAlertTriangle,
+  IconInfoCircle,
+  IconTrendingUp,
+  IconTrendingDown,
+  IconCurrencyDollar,
+  IconTarget,
+  IconClock,
+} from "@tabler/icons-react";
+
+/* ------------------------------------------------------------------ */
+/*  Types                                                              */
+/* ------------------------------------------------------------------ */
+
+export type NotificationType = "trade" | "balance" | "alert" | "risk" | "system";
+
+export type Notification = {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  timestamp: number;
+  read: boolean;
+  profit?: number;
+  severity?: "info" | "success" | "warning" | "error";
+};
+
+export type NotificationSettings = {
+  tradeResults: boolean;
+  balanceChanges: boolean;
+  priceAlerts: boolean;
+  riskWarnings: boolean;
+  soundEnabled: boolean;
+};
+
+/* ------------------------------------------------------------------ */
+/*  Internal state (singleton)                                         */
+/* ------------------------------------------------------------------ */
+
+let globalNotifications: Notification[] = [];
+let globalListeners: Set<() => void> = new Set();
+let nextId = 1;
+
+function notify() {
+  for (const l of globalListeners) l();
+}
+
+export function pushNotification(n: Omit<Notification, "id" | "timestamp" | "read">) {
+  const full: Notification = {
+    ...n,
+    id: `n-${nextId++}`,
+    timestamp: Date.now(),
+    read: false,
+  };
+  globalNotifications = [full, ...globalNotifications].slice(0, 100);
+  notify();
+  return full;
+}
+
+export function markAllRead() {
+  globalNotifications = globalNotifications.map((n) => ({ ...n, read: true }));
+  notify();
+}
+
+export function clearNotifications() {
+  globalNotifications = [];
+  notify();
+}
+
+function useNotifications() {
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    const handler = () => forceUpdate((c) => c + 1);
+    globalListeners.add(handler);
+    return () => { globalListeners.delete(handler); };
+  }, []);
+  return globalNotifications;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Toast component                                                    */
+/* ------------------------------------------------------------------ */
+
+function Toast({ notification, onDismiss }: { notification: Notification; onDismiss: () => void }) {
+  const [visible, setVisible] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    requestAnimationFrame(() => setVisible(true));
+    timerRef.current = setTimeout(() => {
+      setVisible(false);
+      setTimeout(onDismiss, 300);
+    }, 4500);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [onDismiss]);
+
+  const icons: Record<NotificationType, React.ReactNode> = {
+    trade: notification.profit != null && notification.profit >= 0
+      ? <IconTrendingUp size={16} />
+      : <IconTrendingDown size={16} />,
+    balance: <IconCurrencyDollar size={16} />,
+    alert: <IconAlertTriangle size={16} />,
+    risk: <IconAlertTriangle size={16} />,
+    system: <IconInfoCircle size={16} />,
+  };
+
+  const severity = notification.severity ?? (notification.profit != null && notification.profit >= 0 ? "success" : "info");
+
+  return (
+    <div
+      className={`toast ${severity} ${visible ? "toast-visible" : ""}`}
+      onClick={() => { setVisible(false); setTimeout(onDismiss, 300); }}
+    >
+      <div className={`toast-icon ${severity}`}>
+        {icons[notification.type]}
+      </div>
+      <div className="toast-body">
+        <div className="toast-title">{notification.title}</div>
+        <div className="toast-message">{notification.message}</div>
+      </div>
+      <button className="toast-close" onClick={(e) => { e.stopPropagation(); setVisible(false); setTimeout(onDismiss, 300); }}>
+        <IconX size={14} />
+      </button>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Toast container (renders active toasts)                            */
+/* ------------------------------------------------------------------ */
+
+export function ToastContainer() {
+  const [toasts, setToasts] = useState<Notification[]>([]);
+
+  useEffect(() => {
+    let lastCount = 0;
+    const handler = () => {
+      if (globalNotifications.length > lastCount) {
+        const newOnes = globalNotifications.slice(0, globalNotifications.length - lastCount);
+        for (const n of newOnes) {
+          setToasts((prev) => [...prev, n]);
+        }
+      }
+      lastCount = globalNotifications.length;
+    };
+    globalListeners.add(handler);
+    return () => { globalListeners.delete(handler); };
+  }, []);
+
+  const dismiss = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  return (
+    <div className="toast-container">
+      {toasts.map((t) => (
+        <Toast key={t.id} notification={t} onDismiss={() => dismiss(t.id)} />
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Notification Center (dropdown panel)                               */
+/* ------------------------------------------------------------------ */
+
+export function NotificationCenter({ onClose }: { onClose: () => void }) {
+  const notifications = useNotifications();
+  const unreadCount = notifications.filter((n) => !n.read).length;
+
+  return (
+    <>
+      <div className="nc-overlay" onClick={onClose} />
+      <div className="nc-panel">
+        <div className="nc-header">
+          <div className="nc-title">
+            <IconBell size={16} />
+            <span>Notifications</span>
+            {unreadCount > 0 && <span className="nc-badge">{unreadCount}</span>}
+          </div>
+          <div className="nc-actions">
+            <button className="nc-action-btn" onClick={() => markAllRead()}>
+              <IconCheck size={14} /> Mark all read
+            </button>
+            <button className="nc-action-btn" onClick={onClose}>
+              <IconX size={14} />
+            </button>
+          </div>
+        </div>
+        <div className="nc-list">
+          {notifications.length === 0 ? (
+            <div className="nc-empty">
+              <IconBell size={32} />
+              <p>No notifications yet</p>
+              <span>Trade results and alerts will appear here</span>
+            </div>
+          ) : (
+            notifications.map((n) => (
+              <div key={n.id} className={`nc-item ${n.read ? "" : "unread"}`}>
+                <div className={`nc-item-icon ${n.severity ?? "info"}`}>
+                  {n.type === "trade" && (n.profit != null && n.profit >= 0 ? <IconTrendingUp size={14} /> : <IconTrendingDown size={14} />)}
+                  {n.type === "balance" && <IconCurrencyDollar size={14} />}
+                  {n.type === "alert" && <IconTarget size={14} />}
+                  {n.type === "risk" && <IconAlertTriangle size={14} />}
+                  {n.type === "system" && <IconInfoCircle size={14} />}
+                </div>
+                <div className="nc-item-body">
+                  <div className="nc-item-header">
+                    <span className="nc-item-title">{n.title}</span>
+                    <span className="nc-item-time">
+                      <IconClock size={10} />
+                      {formatTime(n.timestamp)}
+                    </span>
+                  </div>
+                  <p className="nc-item-message">{n.message}</p>
+                  {n.profit != null && (
+                    <span className={`nc-item-profit ${n.profit >= 0 ? "positive" : "negative"}`}>
+                      {n.profit >= 0 ? "+" : ""}${Math.abs(n.profit).toFixed(2)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+function formatTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "Just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return new Date(ts).toLocaleDateString();
+}
