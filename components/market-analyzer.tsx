@@ -26,19 +26,23 @@ import type { DigitPredictor as DigitPredictorType, EpochProgress, PredictionRec
 import TrainingChart from "./training-chart";
 import ConfusionMatrix from "./confusion-matrix";
 import ProbDistChart from "./prob-dist-chart";
+import UnifiedDashboard from "./unified-dashboard";
+import ModelComparison from "./model-comparison";
+import AutoModelSelection from "./auto-model-selection";
+import TrainingScheduler from "./training-scheduler";
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                           */
 /* ------------------------------------------------------------------ */
 
-type Tab = "overview" | "digits" | "trades" | "even-odd" | "matches" | "neural";
+type Tab = "dashboard" | "overview" | "digits" | "trades" | "even-odd" | "matches" | "neural";
 
 export default function MarketAnalyzerPanel() {
   const analyzerRef = useRef<MarketAnalyzer | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState<string>("1HZ100V");
   const [scores, setScores] = useState<MarketScore[]>([]);
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [tickCounts, setTickCounts] = useState<Record<string, number>>({});
   const [accuracy, setAccuracy] = useState({ total: 0, correct: 0, rate: 0 });
   const [recentAccuracy, setRecentAccuracy] = useState({ total: 0, correct: 0, rate: 0 });
@@ -187,6 +191,7 @@ export default function MarketAnalyzerPanel() {
       {/* Tabs */}
       <div className="analyzer-tabs">
         {([
+          ["dashboard", "Dashboard", IconBrain],
           ["overview", "Overview", IconChartBar],
           ["digits", "Digit Analysis", IconTarget],
           ["trades", "Trade Scores", IconTrendingUp],
@@ -230,6 +235,25 @@ export default function MarketAnalyzerPanel() {
           <p>Click <strong>Start Analysis</strong> to begin streaming live tick data and analyzing digit distributions.</p>
           <p className="muted">The AI will self-improve as it tracks prediction accuracy over time.</p>
         </div>
+      )}
+
+      {/* ===== DASHBOARD TAB ===== */}
+      {activeTab === "dashboard" && (
+        <UnifiedDashboard
+          modelStatus={modelStatus}
+          modelMetrics={modelMetrics}
+          onlineMetrics={onlineMetrics}
+          bufferSize={bufferSize}
+          scores={scores}
+          accuracy={accuracy}
+          recentAccuracy={recentAccuracy}
+          epochHistory={epochHistory}
+          gradNormHistory={gradNormHistory}
+          predictionHistory={predictionHistory}
+          probHistory={probHistory}
+          onTrainNow={() => analyzerRef.current?.getPredictor().trainNow()}
+          onReset={() => analyzerRef.current?.getPredictor().reset()}
+        />
       )}
 
       {/* ===== OVERVIEW TAB ===== */}
@@ -1340,6 +1364,27 @@ function NeuralNetView({
           </>
         )}
       </div>
+
+      {/* Model Comparison */}
+      <ModelComparison
+        currentPredictor={predictor}
+        predictionHistory={predictionHistory}
+      />
+
+      {/* Auto Model Selection */}
+      <AutoModelSelection
+        modelMetrics={modelMetrics}
+        predictionHistory={predictionHistory}
+        onResetModel={onReset}
+      />
+
+      {/* Training Scheduler */}
+      <TrainingScheduler
+        bufferSize={bufferSize}
+        modelStatus={modelStatus}
+        onTrainNow={onTrainNow}
+        lastTrainedAt={modelMetrics.lastTrainedAt}
+      />
 
       <style jsx>{`
         .nn-view { display: flex; flex-direction: column; gap: 16px; }
