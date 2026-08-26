@@ -389,7 +389,7 @@ export default function TradingTerminal() {
       const newTick = makeTick(lastSimTickRef.current);
       lastSimTickRef.current = newTick.value;
       setTicks((current) => [...current.slice(-55), newTick]);
-      try { getGlobalAnalyzer().addTick(symbol, { quote: newTick.value, epoch: 0 }); } catch { /* ok */ }
+      // Do NOT feed simulated ticks to the analyzer — it has its own real WS feed
     }, 1200);
     return () => window.clearInterval(timer);
   }, [running, streamMode]);
