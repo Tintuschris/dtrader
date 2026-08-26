@@ -22,8 +22,10 @@ import {
   type BacktestResult,
   type BacktestProgress,
 } from "../lib/market-analyzer";
-import type { DigitPredictor as DigitPredictorType, EpochProgress } from "../lib/digit-model";
+import type { DigitPredictor as DigitPredictorType, EpochProgress, PredictionRecord, ProbSnapshot } from "../lib/digit-model";
 import TrainingChart from "./training-chart";
+import ConfusionMatrix from "./confusion-matrix";
+import ProbDistChart from "./prob-dist-chart";
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                           */
@@ -41,7 +43,7 @@ export default function MarketAnalyzerPanel() {
   const [accuracy, setAccuracy] = useState({ total: 0, correct: 0, rate: 0 });
   const [recentAccuracy, setRecentAccuracy] = useState({ total: 0, correct: 0, rate: 0 });
   const [modelStatus, setModelStatus] = useState<ModelStatus>("idle");
-  const [modelMetrics, setModelMetrics] = useState<TrainingMetrics>({ loss: 0, accuracy: 0, epoch: 0, samplesTrained: 0, lastTrainedAt: 0, lastGradNorm: 0, currentLR: 0, onlineUpdateCount: 0 });
+  const [modelMetrics, setModelMetrics] = useState<TrainingMetrics>({ loss: 0, accuracy: 0, epoch: 0, samplesTrained: 0, lastTrainedAt: 0, lastGradNorm: 0, currentLR: 0, onlineUpdateCount: 0, weightDivergence: 0 });
   const [bufferSize, setBufferSize] = useState(0);
   const [onlineMetrics, setOnlineMetrics] = useState<OnlineLearningMetrics>({
     rollingAccuracy: 0, rollingCorrect: 0, rollingTotal: 0,
@@ -50,6 +52,8 @@ export default function MarketAnalyzerPanel() {
   });
   const [epochHistory, setEpochHistory] = useState<EpochProgress[]>([]);
   const [gradNormHistory, setGradNormHistory] = useState<{ timestamp: number; gradNorm: number; loss: number; lr: number }[]>([]);
+  const [predictionHistory, setPredictionHistory] = useState<import("../lib/digit-model").PredictionRecord[]>([]);
+  const [probHistory, setProbHistory] = useState<ProbSnapshot[]>([]);
 
   // Initialize analyzer
   useEffect(() => {
@@ -62,6 +66,8 @@ export default function MarketAnalyzerPanel() {
     const unsubOnline = predictor.onOnlineMetricsUpdate((m) => setOnlineMetrics(m));
     const unsubEpoch = predictor.onEpochHistory((h) => setEpochHistory(h));
     const unsubGradNorm = predictor.onGradNormHistory((h) => setGradNormHistory(h));
+    const unsubPredHistory = predictor.onPredictionHistory((h) => setPredictionHistory(h));
+    const unsubProbHistory = predictor.onProbHistory((h) => setProbHistory(h));
 
     const unsub = analyzer.onUpdate(() => {
       // Re-score all active markets periodically
@@ -88,6 +94,8 @@ export default function MarketAnalyzerPanel() {
       unsubOnline();
       unsubEpoch();
       unsubGradNorm();
+      unsubPredHistory();
+      unsubProbHistory();
       analyzer.destroy();
     };
   }, []);
@@ -298,8 +306,32 @@ export default function MarketAnalyzerPanel() {
           predictor={analyzerRef.current?.getPredictor() ?? null}
           onTrainNow={() => analyzerRef.current?.getPredictor().trainNow()}
           onReset={() => analyzerRef.current?.getPredictor().reset()}
+          onExportModel={async () => {
+            const predictor = analyzerRef.current?.getPredictor();
+            if (!predictor) return;
+            const blob = await predictor.exportModel();
+            if (!blob) { alert("No model to export"); return; }
+            const json = JSON.stringify(blob);
+            const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+            const a = document.createElement("a");
+            a.href = url; a.download = `dtrader-model-${Date.now()}.json`; a.click();
+            URL.revokeObjectURL(url);
+          }}
+          onImportModel={async (e: React.ChangeEvent<HTMLInputElement>) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const text = await file.text();
+            const blob = JSON.parse(text);
+            const predictor = analyzerRef.current?.getPredictor();
+            if (!predictor) return;
+            const ok = await predictor.importModel(blob);
+            if (ok) alert("Model imported successfully!");
+            else alert("Failed to import model");
+          }}
           epochHistory={epochHistory}
           gradNormHistory={gradNormHistory}
+          predictionHistory={predictionHistory}
+          probHistory={probHistory}
         />
       )}
 
@@ -876,6 +908,10 @@ type NeuralNetProps = {
   onReset: () => void;
   epochHistory: EpochProgress[];
   gradNormHistory: { timestamp: number; gradNorm: number; loss: number; lr: number }[];
+  predictionHistory: PredictionRecord[];
+  probHistory: ProbSnapshot[];
+  onExportModel: () => void;
+  onImportModel: (e: React.ChangeEvent<HTMLInputElement>) => void;
 };
 
 function NeuralNetView({
@@ -889,6 +925,10 @@ function NeuralNetView({
   onReset,
   epochHistory,
   gradNormHistory,
+  predictionHistory,
+  probHistory,
+  onExportModel,
+  onImportModel,
 }: NeuralNetProps) {
   const prediction = currentScore?.neuralPrediction ?? null;
   const statusColor = onlineMetrics.isOnlineLearning ? "#37d4bd" : modelStatus === "training" ? "#37d4bd" : modelStatus === "ready" ? "#9a8ed2" : modelStatus === "error" ? "#e05555" : "#718197";
@@ -993,6 +1033,13 @@ function NeuralNetView({
           <span className="nn-stat-sub">clipnorm: 1.0</span>
         </div>
         <div className="nn-stat-card">
+          <span className="nn-stat-label">Weight Divergence</span>
+          <span className={`nn-stat-value ${modelMetrics.weightDivergence > 1.0 ? "bad" : modelMetrics.weightDivergence > 0 ? "good" : ""}`}>
+            {modelMetrics.weightDivergence > 0 ? modelMetrics.weightDivergence.toFixed(4) : "—"}
+          </span>
+          <span className="nn-stat-sub">EMA vs live (L2)</span>
+        </div>
+        <div className="nn-stat-card">
           <span className="nn-stat-label">Learning Rate</span>
           <span className="nn-stat-value">
             {modelMetrics.currentLR > 0 ? modelMetrics.currentLR.toExponential(1) : "—"}
@@ -1008,6 +1055,12 @@ function NeuralNetView({
       {/* Real-time Training Chart */}
       <TrainingChart modelMetrics={modelMetrics} onlineMetrics={onlineMetrics} epochHistory={epochHistory} gradNormHistory={gradNormHistory} />
 
+      {/* Confusion Matrix */}
+      <ConfusionMatrix predictionHistory={predictionHistory} />
+
+      {/* Probability Distribution Over Time */}
+      <ProbDistChart probHistory={probHistory} />
+
       {/* Controls */}
       <div className="nn-controls">
         <button className="nn-btn" onClick={onTrainNow} disabled={modelStatus !== "ready" || bufferSize < 200}>
@@ -1016,6 +1069,13 @@ function NeuralNetView({
         <button className="nn-btn nn-btn-danger" onClick={onReset}>
           🔄 Reset Model
         </button>
+        <button className="nn-btn nn-btn-export" onClick={onExportModel} disabled={modelStatus === "loading"}>
+          💾 Export Model
+        </button>
+        <label className="nn-btn nn-btn-import">
+          📂 Import Model
+          <input type="file" accept=".json" style={{ display: "none" }} onChange={onImportModel} />
+        </label>
         <span className="nn-hint">
           {bufferSize < 200 ? `Need ${200 - bufferSize} more samples to train` : "Model is ready for training"}
         </span>
@@ -1310,6 +1370,10 @@ function NeuralNetView({
         .nn-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .nn-btn-danger { border-color: rgba(224,85,85,.3); color: #e05555; background: rgba(224,85,85,.08); }
         .nn-btn-danger:hover { background: rgba(224,85,85,.15); }
+        .nn-btn-export { border-color: rgba(154,142,210,.3); color: #9a8ed2; background: rgba(154,142,210,.08); }
+        .nn-btn-export:hover { background: rgba(154,142,210,.15); }
+        .nn-btn-import { border-color: rgba(55,212,189,.3); color: #37d4bd; background: rgba(55,212,189,.08); cursor: pointer; }
+        .nn-btn-import:hover { background: rgba(55,212,189,.15); }
         .nn-hint { font-size: 11px; color: #566477; }
 
         .nn-prediction h4 { margin: 0 0 12px; font-size: 14px; }

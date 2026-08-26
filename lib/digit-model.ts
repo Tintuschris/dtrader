@@ -12,7 +12,7 @@ export type ModelStatus = "idle" | "loading" | "ready" | "training" | "error";
 
 export type TrainingMetrics = {
   loss: number; accuracy: number; epoch: number; samplesTrained: number; lastTrainedAt: number;
-  lastGradNorm: number; currentLR: number; onlineUpdateCount: number;
+  lastGradNorm: number; currentLR: number; onlineUpdateCount: number; weightDivergence: number;
 };
 
 export type OnlineLearningMetrics = {
@@ -51,6 +51,14 @@ export type PredictionRecord = {
   inputSequence: number[]; predictedProbs: number[]; topDigit: number;
   confidence: number; timestamp: number; actualDigit: number | null; correct: boolean | null;
 };
+
+export type ProbSnapshot = {
+  timestamp: number;
+  probabilities: number[];
+  topDigit: number;
+};
+
+import { idbGet, idbSet, idbDelete, idbClear } from "./model-storage";
 
 /* ---- Configuration ---- */
 
@@ -142,6 +150,10 @@ function initWorker(): Worker {
         }
         break;
       }
+      case "earlyStop": {
+        console.log(`[TF] Early stopping at epoch ${msg.epoch}, best val loss: ${msg.bestValLoss}`);
+        break;
+      }
     }
   };
   w.onerror = (err) => console.error("TF Worker error:", err);
@@ -164,7 +176,7 @@ function postAsync<T>(msg: Record<string, unknown>): Promise<T> {
 export class DigitPredictor {
   private status: ModelStatus = "idle";
   private statusCallbacks = new Set<(s: ModelStatus) => void>();
-  private metrics: TrainingMetrics = { loss: 0, accuracy: 0, epoch: 0, samplesTrained: 0, lastTrainedAt: 0, lastGradNorm: 0, currentLR: 0, onlineUpdateCount: 0 };
+  private metrics: TrainingMetrics = { loss: 0, accuracy: 0, epoch: 0, samplesTrained: 0, lastTrainedAt: 0, lastGradNorm: 0, currentLR: 0, onlineUpdateCount: 0, weightDivergence: 0 };
   private metricsCallbacks = new Set<(m: TrainingMetrics) => void>();
   private digitBuffer: number[] = [];
   private predictionQueue: PredictionRecord[] = [];
@@ -183,6 +195,9 @@ export class DigitPredictor {
   private epochHistoryCallbacks = new Set<(h: EpochProgress[]) => void>();
   private gradNormHistory: { timestamp: number; gradNorm: number; loss: number; lr: number }[] = [];
   private gradNormHistoryCallbacks = new Set<(h: { timestamp: number; gradNorm: number; loss: number; lr: number }[]) => void>();
+  private predictionHistoryCallbacks = new Set<(h: PredictionRecord[]) => void>();
+  private probHistory: ProbSnapshot[] = [];
+  private probHistoryCallbacks = new Set<(h: ProbSnapshot[]) => void>();
 
   async init(): Promise<void> {
     this.setStatus("loading");
@@ -237,6 +252,11 @@ export class DigitPredictor {
   getBufferSize(): number { return this.digitBuffer.length; }
   getPredictionQueueSize(): number { return this.predictionQueue.length; }
   getPredictionHistory(): PredictionRecord[] { return [...this.predictionQueue]; }
+  onPredictionHistory(cb: (h: PredictionRecord[]) => void): () => void { this.predictionHistoryCallbacks.add(cb); return () => this.predictionHistoryCallbacks.delete(cb); }
+  private emitPredictionHistory(): void { for (const cb of this.predictionHistoryCallbacks) cb([...this.predictionQueue]); }
+  onProbHistory(cb: (h: ProbSnapshot[]) => void): () => void { this.probHistoryCallbacks.add(cb); return () => this.probHistoryCallbacks.delete(cb); }
+  getProbHistory(): ProbSnapshot[] { return [...this.probHistory]; }
+  private emitProbHistory(): void { for (const cb of this.probHistoryCallbacks) cb([...this.probHistory]); }
 
   private async predictAsync(): Promise<void> {
     if (!workerReady) return;
@@ -246,6 +266,10 @@ export class DigitPredictor {
         this.predictionQueue.push({ inputSequence: this.digitBuffer.slice(-SEQUENCE_LENGTH), predictedProbs: result.probabilities, topDigit: result.topDigit, confidence: result.confidence, timestamp: Date.now(), actualDigit: null, correct: null });
         this.onlineMetrics.lastConfidence = result.confidence;
         if (this.predictionQueue.length > MAX_PREDICTION_QUEUE) this.predictionQueue = this.predictionQueue.slice(-MAX_PREDICTION_QUEUE);
+        this.probHistory.push({ timestamp: Date.now(), probabilities: [...result.probabilities], topDigit: result.topDigit });
+        if (this.probHistory.length > 500) this.probHistory = this.probHistory.slice(-500);
+        this.emitPredictionHistory();
+        this.emitProbHistory();
       }
     } catch { /* worker not ready */ }
   }
@@ -287,7 +311,7 @@ export class DigitPredictor {
         this.onlineMetrics.onlineUpdates += xs.length;
         this.metrics.samplesTrained += xs.length;
         this.metrics.lastTrainedAt = Date.now();
-        const result = await postAsync<{ loss: number; gradNorm?: number; lr?: number; updateCount?: number }>({ type: "trainOnBatch", xs, ys });
+        const result = await postAsync<{ loss: number; gradNorm?: number; lr?: number; updateCount?: number; weightDivergence?: number }>({ type: "trainOnBatch", xs, ys });
         const loss = result?.loss ?? 0;
         this.metrics.loss = this.metrics.loss * 0.9 + loss * 0.1;
         this.metrics.loss = Math.round(this.metrics.loss * 10000) / 10000;
@@ -301,11 +325,13 @@ export class DigitPredictor {
         }
         if (result?.lr !== undefined) this.metrics.currentLR = result.lr;
         if (result?.updateCount !== undefined) this.metrics.onlineUpdateCount = result.updateCount;
+        if (result?.weightDivergence !== undefined) this.metrics.weightDivergence = result.weightDivergence;
         if (this.rollingHistory.length > 0) this.metrics.accuracy = this.onlineMetrics.rollingAccuracy;
       }
       this.predictionQueue = this.predictionQueue.filter((p) => p.actualDigit === null || Date.now() - p.timestamp < 60_000);
       this.emitOnlineMetrics();
       this.emitMetrics();
+      this.emitPredictionHistory();
     } catch (err) { console.error("Online learning error:", err); }
     finally { this.isOnlineTraining = false; this.onlineMetrics.isOnlineLearning = false; this.emitOnlineMetrics(); }
   }
@@ -368,26 +394,47 @@ export class DigitPredictor {
     try {
       const data = await postAsync<{ topology: unknown; weightData: unknown }>({ type: "getModelData" });
       if (data.topology) {
-        localStorage.setItem(MODEL_STORAGE_KEY + "_topology", JSON.stringify(data.topology));
-        localStorage.setItem(MODEL_STORAGE_KEY + "_weights", JSON.stringify(data.weightData));
+        await idbSet("topology", data.topology);
+        await idbSet("weights", data.weightData);
       }
     } catch { /* storage full */ }
   }
 
   private async loadModelFromStorage(): Promise<boolean> {
     try {
-      const topoStr = localStorage.getItem(MODEL_STORAGE_KEY + "_topology");
-      const wStr = localStorage.getItem(MODEL_STORAGE_KEY + "_weights");
-      if (!topoStr || !wStr) return false;
-      postToWorker({ type: "init", topology: JSON.parse(topoStr), weightData: JSON.parse(wStr) });
+      const topology = await idbGet("topology");
+      const weightData = await idbGet("weights");
+      if (!topology || !weightData) return false;
+      postToWorker({ type: "init", topology, weightData });
       return true;
     } catch { return false; }
   }
 
-  private saveMetrics(): void { try { localStorage.setItem(METRICS_STORAGE_KEY, JSON.stringify(this.metrics)); } catch { /* */ } }
-  private loadMetrics(): void { try { const s = localStorage.getItem(METRICS_STORAGE_KEY); if (s) { this.metrics = { ...this.metrics, ...JSON.parse(s) }; this.emitMetrics(); } } catch { /* */ } }
-  private saveOnlineMetrics(): void { try { localStorage.setItem(ONLINE_METRICS_KEY, JSON.stringify({ totalCorrect: this.onlineMetrics.totalCorrect, totalPredictions: this.onlineMetrics.totalPredictions, onlineUpdates: this.onlineMetrics.onlineUpdates })); } catch { /* */ } }
-  private loadOnlineMetrics(): void { try { const s = localStorage.getItem(ONLINE_METRICS_KEY); if (s) { const sv = JSON.parse(s); this.onlineMetrics.totalCorrect = sv.totalCorrect ?? 0; this.onlineMetrics.totalPredictions = sv.totalPredictions ?? 0; this.onlineMetrics.onlineUpdates = sv.onlineUpdates ?? 0; this.emitOnlineMetrics(); } } catch { /* */ } }
+  private async saveMetrics(): Promise<void> { try { await idbSet("metrics", this.metrics); } catch { /* */ } }
+  private async loadMetrics(): Promise<void> { try { const s = await idbGet<{ loss: number; accuracy: number; epoch: number; samplesTrained: number; lastTrainedAt: number; lastGradNorm?: number; currentLR?: number; onlineUpdateCount?: number }>("metrics"); if (s) { this.metrics = { ...this.metrics, ...s }; this.emitMetrics(); } } catch { /* */ } }
+
+  /** Export model as a downloadable JSON blob */
+  async exportModel(): Promise<{ topology: unknown; weightData: unknown; metrics: unknown; onlineMetrics: unknown } | null> {
+    if (!workerReady) return null;
+    try {
+      const data = await postAsync<{ topology: unknown; weightData: unknown }>({ type: "getModelData" });
+      return { topology: data.topology, weightData: data.weightData, metrics: this.metrics, onlineMetrics: { totalCorrect: this.onlineMetrics.totalCorrect, totalPredictions: this.onlineMetrics.totalPredictions, onlineUpdates: this.onlineMetrics.onlineUpdates } };
+    } catch { return null; }
+  }
+
+  /** Import model from a JSON blob */
+  async importModel(blob: { topology: unknown; weightData: unknown; metrics?: TrainingMetrics; onlineMetrics?: { totalCorrect: number; totalPredictions: number; onlineUpdates: number } }): Promise<boolean> {
+    try {
+      postToWorker({ type: "init", topology: blob.topology, weightData: blob.weightData });
+      await waitForWorker();
+      if (blob.metrics) { this.metrics = { ...this.metrics, ...blob.metrics }; this.emitMetrics(); }
+      if (blob.onlineMetrics) { this.onlineMetrics.totalCorrect = blob.onlineMetrics.totalCorrect; this.onlineMetrics.totalPredictions = blob.onlineMetrics.totalPredictions; this.onlineMetrics.onlineUpdates = blob.onlineMetrics.onlineUpdates; this.emitOnlineMetrics(); }
+      this.setStatus("ready");
+      return true;
+    } catch { return false; }
+  }
+  private async saveOnlineMetrics(): Promise<void> { try { await idbSet("onlineMetrics", { totalCorrect: this.onlineMetrics.totalCorrect, totalPredictions: this.onlineMetrics.totalPredictions, onlineUpdates: this.onlineMetrics.onlineUpdates }); } catch { /* */ } }
+  private async loadOnlineMetrics(): Promise<void> { try { const s = await idbGet<{ totalCorrect?: number; totalPredictions?: number; onlineUpdates?: number }>("onlineMetrics"); if (s) { this.onlineMetrics.totalCorrect = s.totalCorrect ?? 0; this.onlineMetrics.totalPredictions = s.totalPredictions ?? 0; this.onlineMetrics.onlineUpdates = s.onlineUpdates ?? 0; this.emitOnlineMetrics(); } } catch { /* */ } }
 
   async trainNow(): Promise<void> { await this.batchTrainStep(); }
 
@@ -395,12 +442,11 @@ export class DigitPredictor {
     this.stopOnlineLearning();
     postToWorker({ type: "reset" });
     await waitForWorker();
-    this.metrics = { loss: 0, accuracy: 0, epoch: 0, samplesTrained: 0, lastTrainedAt: 0, lastGradNorm: 0, currentLR: 0, onlineUpdateCount: 0 };
+    this.metrics = { loss: 0, accuracy: 0, epoch: 0, samplesTrained: 0, lastTrainedAt: 0, lastGradNorm: 0, currentLR: 0, onlineUpdateCount: 0, weightDivergence: 0 };
     this.onlineMetrics = { rollingAccuracy: 0, rollingCorrect: 0, rollingTotal: 0, totalCorrect: 0, totalPredictions: 0, pendingCount: 0, onlineUpdates: 0, lastConfidence: 0, isOnlineLearning: false };
-    this.digitBuffer = []; this.predictionQueue = []; this.rollingHistory = []; this.initialBatchDone = false; this.isBatchTraining = false; this.epochHistory = []; this.gradNormHistory = [];
-    localStorage.removeItem(MODEL_STORAGE_KEY + "_topology"); localStorage.removeItem(MODEL_STORAGE_KEY + "_weights");
-    localStorage.removeItem(METRICS_STORAGE_KEY); localStorage.removeItem(ONLINE_METRICS_KEY);
-    this.emitMetrics(); this.emitOnlineMetrics(); this.setStatus("ready");
+    this.digitBuffer = []; this.predictionQueue = []; this.rollingHistory = []; this.initialBatchDone = false; this.isBatchTraining = false; this.epochHistory = []; this.gradNormHistory = []; this.probHistory = [];
+    await idbClear();
+    this.emitMetrics(); this.emitOnlineMetrics(); this.emitPredictionHistory(); this.setStatus("ready");
   }
 
   /* ---- Backtesting ---- */
