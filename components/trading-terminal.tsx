@@ -327,8 +327,8 @@ export default function TradingTerminal() {
         const msgType = message.msg_type as string | undefined;
 
         // Deriv ticks_history response: msg_type === "tick_history"
-        if (msgType === "tick_history") {
-          const tickHist = message.tick_history as { prices?: Array<number | string>; pip_size?: number } | undefined;
+        if (msgType === "tick_history" || msgType === "history") {
+          const tickHist = (message.tick_history ?? message.history) as { prices?: Array<number | string>; pip_size?: number } | undefined;
           const prices = tickHist?.prices;
           const pipSize = tickHist?.pip_size ?? 2;
           if (prices?.length) {
