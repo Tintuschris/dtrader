@@ -22,73 +22,79 @@ type DerivTrade = {
   account_type: "demo" | "real";
 };
 
+const DERIV_WS_URL = "https://api.derivws.com/websockets/v3";
+
 /**
  * GET /api/deriv/trades
  *
- * Fetches the user's trade history from Deriv.
- * Uses the open_contract endpoint to get active contracts,
- * and the profit_table endpoint for closed trades.
- * Separates demo and real account trades.
+ * Fetches the user's trade history from Deriv using the v3 WebSocket API.
+ * Uses the profit_table endpoint for closed/completed trades.
  *
  * Query params:
- *   ?account_type=demo|real — filter by account type
- *   ?status=open|won|lost|sold|all — filter by status
  *   ?limit=50 — max results
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const statusFilter = searchParams.get("status") ?? "all";
   const limit = parseInt(searchParams.get("limit") ?? "50", 10);
 
-  // Get auth headers
   const session = await getSession();
-  let headers: Record<string, string> | null = null;
-  let isOAuth = false;
-
-  if (session?.accessToken) {
-    headers = await getAuthHeaders();
-    isOAuth = true;
+  if (!session?.accessToken) {
+    return NextResponse.json({ error: "Not authenticated. Please log in.", trades: [] }, { status: 401 });
   }
 
+  const headers = await getAuthHeaders();
   if (!headers) {
-    return NextResponse.json({ error: "Not authenticated. Please log in with your Deriv account.", trades: [] }, { status: 401 });
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  const appId = process.env.DERIV_APP_ID;
+  if (!appId) {
+    return NextResponse.json({ error: "DERIV_APP_ID not configured" }, { status: 500 });
   }
 
   try {
-    // Fetch open contracts from Deriv
-    const response = await fetch(
-      "https://api.derivws.com/trading/v1/options/profit-table",
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          limit,
-          offset: 0,
-          // Only closed trades — open contracts come via WS
-        }),
-        cache: "no-store",
-      },
-    );
+    // Fetch profit table using v3 WebSocket API via HTTP POST
+    const response = await fetch(`${DERIV_WS_URL}?app_id=${appId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({
+        profit_table: 1,
+        limit,
+        offset: 0,
+      }),
+      cache: "no-store",
+    });
 
     if (!response.ok) {
       console.error("Profit table returned", response.status);
-      return NextResponse.json({ trades: [], total: 0, error: "Failed to fetch trades" });
+      return NextResponse.json({ trades: [], total: 0, error: `API error: ${response.status}` });
     }
 
     const payload = await response.json().catch(() => null);
+
+    // Check for auth errors
+    if (payload?.error) {
+      console.error("Deriv API error:", payload.error);
+      return NextResponse.json({
+        trades: [],
+        total: 0,
+        error: payload.error.message ?? "Deriv API error",
+      });
+    }
+
     const profitData = payload?.profit_table;
     const rawTrades = profitData?.transactions ?? [];
 
-    // Normalize trades
+    // Determine account type from the login ID in the response
+    const accountLoginid = profitData?.loginid ?? "";
+
     const trades: DerivTrade[] = rawTrades.map((t: Record<string, unknown>) => {
-      const appID = String(t.app_id ?? "");
-      // Determine account type from app_id or other indicators
-      const isDemo = appID.includes("demo") || String(t.loginid ?? "").includes("VR");
+      const isDemo = accountLoginid.startsWith("VR") || accountLoginid.includes("demo");
 
       return {
-        contract_id: String(t.contract_id ?? t.order_key ?? ""),
+        contract_id: String(t.contract_id ?? ""),
         contract_type: String(t.contract_type ?? ""),
-        symbol: String(t.underlying_symbol ?? t.symbol ?? ""),
+        symbol: String(t.underlying ?? t.symbol ?? ""),
         buy_price: Number(t.buy_price) || 0,
         payout: Number(t.payout) || 0,
         profit: Number(t.profit) || 0,
@@ -104,16 +110,10 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // Apply status filter
-    let filtered = trades;
-    if (statusFilter !== "all") {
-      filtered = trades.filter((t) => t.status === statusFilter);
-    }
-
     return NextResponse.json({
-      trades: filtered,
-      total: trades.length,
-      authenticated: isOAuth,
+      trades,
+      total: profitData?.count ?? trades.length,
+      authenticated: true,
     });
   } catch (err) {
     console.error("Failed to fetch trades:", err);
