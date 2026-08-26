@@ -48,6 +48,16 @@ export type DigitStats = {
   bias: number;            // -1 to 1, negative = underrepresented
 };
 
+export type NeuralPrediction = {
+  probabilities: number[];
+  topDigit: number;
+  confidence: number;
+  biasStrength: number;
+  entropy: number;
+  modelStatus: string;
+  modelAccuracy: number;
+};
+
 export type MarketScore = {
   symbol: string;
   name: string;
@@ -65,13 +75,16 @@ export type MarketScore = {
   // Tick statistics
   tickCount: number;
   entropy: number;       // randomness measure (0=biased, 1=random)
+  // Neural network prediction
+  neuralPrediction: NeuralPrediction | null;
   lastUpdated: number;
 };
 
 export type DigitTradeScore = {
   digit: number;
   direction: "over" | "under";
-  score: number;          // 0-100
+  score: number;          // 0-100 (final blended score)
+  rawScore: number;       // 0-100 (statistical-only score before neural blending)
   confidence: number;     // 0-100
   expectedEdge: number;   // expected profit per $1 bet
   reasons: string[];
@@ -80,6 +93,9 @@ export type DigitTradeScore = {
   overDigitsBelowThreshold: boolean;   // digits < N are <10%
   mostFrequentFarEnough: boolean;      // most frequent digit ≥3 away
   distributionSkew: number;            // -1 to 1
+  // Neural blending
+  neuralContribution: number;           // how much neural model changed the score (-100 to +100)
+  neuralAgreement: boolean;            // does neural agree with statistical direction
 };
 
 export type EvenOddScore = {
@@ -130,6 +146,10 @@ export type Tick = {
   quote: number;
   epoch: number;
 };
+
+import { DigitPredictor, getDigitPredictor, type ModelStatus, type TrainingMetrics, type OnlineLearningMetrics, type BacktestResult, type BacktestProgress } from "./digit-model";
+export { type ModelStatus, type TrainingMetrics, type OnlineLearningMetrics, type BacktestResult, type BacktestProgress };
+export { DigitPredictor, getDigitPredictor } from "./digit-model";
 
 /* ------------------------------------------------------------------ */
 /*  Self-Learning Engine                                                */
@@ -185,9 +205,19 @@ export class MarketAnalyzer {
   private wsConnections: Map<string, WebSocket> = new Map();
   private updateCallbacks: Set<() => void> = new Set();
   private analysisTimer: ReturnType<typeof setInterval> | null = null;
+  private predictor: DigitPredictor;
 
   constructor() {
     this.weights = loadWeights();
+    this.predictor = getDigitPredictor();
+    // Lazy-init: defer TF.js model loading so it doesn't freeze the UI.
+    setTimeout(async () => {
+      await this.predictor.init();
+      // If streaming started before model was ready, start online learning now
+      if (this.wsConnections.size > 0) {
+        this.predictor.startOnlineLearning();
+      }
+    }, 500);
   }
 
   /* ---- Tick ingestion ---- */
@@ -203,6 +233,14 @@ export class MarketAnalyzer {
     if (buffer.length > 5000) {
       buffer.splice(0, buffer.length - 5000);
     }
+    // Feed digit to the neural network model (online learning)
+    const digit = this.extractLastDigit(tick.quote);
+    if (this.predictor.getStatus() === "ready") {
+      this.predictor.addDigitAndLearn(digit);
+    } else {
+      // Buffer digits even before model is ready so we have data when it initializes
+      this.predictor.addDigit(digit);
+    }
   }
 
   getTicks(symbol: string): Tick[] {
@@ -216,6 +254,19 @@ export class MarketAnalyzer {
       if (this.wsConnections.has(symbol)) continue;
       this.connectSymbol(symbol);
     }
+    // Start online learning (only if model is ready)
+    if (this.predictor.getStatus() === "ready") {
+      this.predictor.startOnlineLearning();
+    }
+    // Retry after delay in case model is still loading
+    const retryInterval = setInterval(() => {
+      if (this.predictor.getStatus() === "ready") {
+        this.predictor.startOnlineLearning();
+        clearInterval(retryInterval);
+      }
+    }, 1000);
+    // Stop retrying after 30 seconds
+    setTimeout(() => clearInterval(retryInterval), 30000);
   }
 
   stopStreaming(): void {
@@ -227,10 +278,11 @@ export class MarketAnalyzer {
       clearInterval(this.analysisTimer);
       this.analysisTimer = null;
     }
+    this.predictor.stopOnlineLearning();
   }
 
   private connectSymbol(symbol: string): void {
-    const ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=1089");
+    const ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
@@ -545,7 +597,104 @@ export class MarketAnalyzer {
       digitScores.push(underScore, overScore);
     }
 
-    // Find best trade
+    // Neural network prediction
+    const neuralPred = this.predictor.predict();
+    const neuralPrediction: NeuralPrediction | null = neuralPred ? {
+      probabilities: neuralPred.probabilities,
+      topDigit: neuralPred.topDigit,
+      confidence: Math.round(neuralPred.confidence * 100),
+      biasStrength: Math.round(neuralPred.biasStrength * 100) / 100,
+      entropy: Math.round(neuralPred.entropy * 1000) / 1000,
+      modelStatus: this.predictor.getStatus(),
+      modelAccuracy: Math.round(this.predictor.getMetrics().accuracy * 100),
+    } : null;
+
+    // === HYBRID SCORING: Blend neural probabilities into each digit score ===
+    // The neural model provides per-digit probabilities that can boost or
+    // penalize statistical scores. The blend weight is proportional to
+    // the neural model's recent accuracy (0-1) and confidence.
+
+    const neuralMetrics = this.predictor.getMetrics();
+    const onlineMetrics = this.predictor.getOnlineMetrics();
+    // Blend weight: how much to trust the neural model (0 = pure statistical, 1 = full neural)
+    const neuralAccuracy = onlineMetrics.rollingAccuracy; // 0-1
+    const neuralConfidence01 = (neuralPred?.confidence ?? 0); // 0-1
+    // Only blend when model has seen enough data and has some accuracy
+    const hasEnoughData = (ticks.length >= 200) && (onlineMetrics.totalPredictions >= 10);
+    // Blend weight ramps up with accuracy: at 10% accuracy (random), weight=0;
+    // at 20% accuracy, weight=0.2; at 50% accuracy, weight=0.6
+    const blendWeight = hasEnoughData
+      ? Math.min(0.4, Math.max(0, (neuralAccuracy - 0.08) * 0.8))
+      : 0;
+
+    for (const ds of digitScores) {
+      const rawScore = ds.score;
+      let neuralBoost = 0;
+      let neuralAgreement = false;
+
+      if (neuralPrediction && blendWeight > 0) {
+        const prob = neuralPrediction.probabilities[ds.digit] ?? 0.1;
+        // How much the neural model favors this digit (above uniform 10%)
+        const digitLift = (prob - 0.1) * 100; // -10 to +90 scale
+        // For "under" trades, we want the digit to be ABOVE the prediction threshold
+        // For "over" trades, similar logic
+        // The neural model predicts which digit will appear next
+        // So if it predicts digit=5, then UNDER 5 scores should get penalized
+        // (digit 5 is likely, so betting under 5 is risky)
+        // and OVER 4 scores should get boosted (5 > 4 is likely)
+        if (ds.direction === "under") {
+          // Under N wins if next digit < N
+          // If neural says digit is high, UNDER scores should be penalized
+          // Sum of neural probs for digits > ds.digit
+          let probAbove = 0;
+          for (let d = ds.digit + 1; d <= 9; d++) {
+            probAbove += neuralPrediction.probabilities[d] ?? 0;
+          }
+          // High prob above = bad for UNDER → penalize
+          // Low prob above = good for UNDER → boost
+          neuralBoost = -(probAbove - (1 - ds.digit / 10)) * 80;
+          neuralAgreement = probAbove < (1 - ds.digit / 10);
+        } else {
+          // Over N wins if next digit > N
+          // Sum of neural probs for digits < ds.digit
+          let probBelow = 0;
+          for (let d = 0; d < ds.digit; d++) {
+            probBelow += neuralPrediction.probabilities[d] ?? 0;
+          }
+          // High prob below = bad for OVER → penalize
+          // Low prob below = good for OVER → boost
+          neuralBoost = -(probBelow - ds.digit / 10) * 80;
+          neuralAgreement = probBelow < (ds.digit / 10);
+        }
+
+        // Also boost if the neural model's top digit aligns with this trade
+        if (neuralPrediction.topDigit === ds.digit) {
+          neuralBoost += 10 * blendWeight;
+          neuralAgreement = true;
+        }
+
+        // Scale neural boost by blend weight and confidence
+        neuralBoost = neuralBoost * blendWeight * neuralConfidence01;
+        neuralBoost = Math.round(Math.max(-30, Math.min(30, neuralBoost)));
+      }
+
+      // Apply neural blend to score
+      const blendedScore = Math.round(Math.min(100, Math.max(0, ds.score + neuralBoost)));
+      ds.rawScore = ds.score;
+      ds.score = blendedScore;
+      ds.neuralContribution = neuralBoost;
+      ds.neuralAgreement = neuralAgreement;
+
+      // If neural strongly disagrees, reduce confidence
+      if (neuralPrediction && blendWeight > 0.1 && !neuralAgreement && Math.abs(neuralBoost) > 10) {
+        ds.confidence = Math.max(10, ds.confidence - Math.round(Math.abs(neuralBoost) * 0.3));
+        ds.reasons.push(`Neural model disagrees (Δ=${neuralBoost > 0 ? "+" : ""}${neuralBoost}) ⚠`);
+      } else if (neuralPrediction && neuralAgreement && neuralBoost > 5) {
+        ds.reasons.push(`Neural model agrees (Δ=+${Math.round(neuralBoost)}) ✓`);
+      }
+    }
+
+    // Find best trade AFTER neural blending
     const bestTrade = digitScores.reduce(
       (best, curr) => (curr.score > (best?.score ?? -1) ? curr : best),
       null as DigitTradeScore | null,
@@ -557,10 +706,10 @@ export class MarketAnalyzer {
     // Matches/Differs analysis
     const matchesDiffersScore = this.scoreMatchesDiffers(symbol, stats);
 
-    // Overall market score
+    // Overall market score — blend statistical + neural + learned
     const bestScore = bestTrade?.score ?? 0;
     const learned = this.weights.learnedAdjustments[symbol] ?? 0;
-    const overallScore = Math.round(
+    let overallScore = Math.round(
       Math.min(100, Math.max(0, bestScore + learned * 100)),
     );
 
@@ -575,6 +724,7 @@ export class MarketAnalyzer {
       matchesDiffersScore,
       tickCount: ticks.length,
       entropy,
+      neuralPrediction,
       lastUpdated: Date.now(),
     };
   }
@@ -754,6 +904,7 @@ export class MarketAnalyzer {
       digit,
       direction,
       score,
+      rawScore: score,  // Will be overwritten by hybrid blending in scoreMarket
       confidence,
       expectedEdge: Math.round(expectedEdge * 1000) / 1000,
       reasons,
@@ -761,6 +912,8 @@ export class MarketAnalyzer {
       overDigitsBelowThreshold,
       mostFrequentFarEnough,
       distributionSkew,
+      neuralContribution: 0,   // Will be set by hybrid blending
+      neuralAgreement: false,  // Will be set by hybrid blending
     };
   }
 
@@ -918,11 +1071,31 @@ export class MarketAnalyzer {
     return Math.floor(Math.abs(quote) * 100) % 10;
   }
 
+  /* ---- Neural model access ---- */
+
+  getPredictor(): DigitPredictor {
+    return this.predictor;
+  }
+
   /* ---- Cleanup ---- */
 
   destroy(): void {
     this.stopStreaming();
     this.tickBuffers.clear();
     this.statsCache.clear();
+    this.predictor.dispose();
   }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Global singleton — allows the terminal to feed ticks directly      */
+/* ------------------------------------------------------------------ */
+
+let globalAnalyzer: MarketAnalyzer | null = null;
+
+export function getGlobalAnalyzer(): MarketAnalyzer {
+  if (!globalAnalyzer) {
+    globalAnalyzer = new MarketAnalyzer();
+  }
+  return globalAnalyzer;
 }
