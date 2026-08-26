@@ -415,8 +415,15 @@ function GradientNormChart({ gradNormHistory }: { gradNormHistory: { timestamp: 
 
 /* ---- Main Training Chart (time-series) ---- */
 
+type TooltipInfo = {
+  x: number; y: number;
+  loss: number; accuracy: number; rollingAccuracy: number;
+  epoch: number; samplesTrained: number; timestamp: number;
+};
+
 export default function TrainingChart({ modelMetrics, onlineMetrics, epochHistory, gradNormHistory }: Props) {
   const [history, setHistory] = useState<DataPoint[]>([]);
+  const [tooltip, setTooltip] = useState<TooltipInfo | null>(null);
   const lastRecordRef = useRef({ epoch: -1, loss: -1, rollingAcc: -1, samples: -1 });
   const lastUpdateRef = useRef(0);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -476,16 +483,66 @@ export default function TrainingChart({ modelMetrics, onlineMetrics, epochHistor
   const accTicks = 5;
   const accTickValues = Array.from({ length: accTicks + 1 }, (_, i) => (i / accTicks) * maxAcc);
 
+  // Hover tooltip handler
+  const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    if (!svgRef.current || history.length < 2) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const svgX = ((e.clientX - rect.left) / rect.width) * CHART_W;
+    // Find nearest data point
+    let nearestIdx = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < history.length; i++) {
+      const px = scaleX(i);
+      const dist = Math.abs(px - svgX);
+      if (dist < minDist) { minDist = dist; nearestIdx = i; }
+    }
+    const p = history[nearestIdx];
+    setTooltip({
+      x: scaleX(nearestIdx), y: Math.min(scaleYLoss(p.loss), scaleYAcc(p.rollingAccuracy)) - 12,
+      loss: p.loss, accuracy: p.accuracy, rollingAccuracy: p.rollingAccuracy,
+      epoch: p.epoch, samplesTrained: p.samplesTrained, timestamp: p.timestamp,
+    });
+  }, [history, scaleX, scaleYLoss, scaleYAcc]);
+
+  const handleMouseLeave = useCallback(() => setTooltip(null), []);
+
   return (
     <div className="training-chart-wrapper">
       {/* Time-series chart */}
       <div className="training-chart-container">
         <div className="training-chart-header">
           <h4>📈 Training Progress (Live)</h4>
-          <div className="training-chart-legend">
-            <span className="legend-item"><span className="legend-dot" style={{ background: "#e05555" }} /> Loss</span>
-            <span className="legend-item"><span className="legend-dot" style={{ background: "#37d4bd" }} /> Rolling Accuracy</span>
-            <span className="legend-item"><span className="legend-dot" style={{ background: "#9a8ed2" }} /> Batch Accuracy</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div className="training-chart-legend">
+              <span className="legend-item"><span className="legend-dot" style={{ background: "#e05555" }} /> Loss</span>
+              <span className="legend-item"><span className="legend-dot" style={{ background: "#37d4bd" }} /> Rolling Accuracy</span>
+              <span className="legend-item"><span className="legend-dot" style={{ background: "#9a8ed2" }} /> Batch Accuracy</span>
+            </div>
+            {history.length > 0 && (
+              <button className="csv-export-btn" onClick={() => {
+                const header = "timestamp,loss,accuracy,rolling_accuracy,epoch,samples_trained\n";
+                const rows = history.map(p =>
+                  `${new Date(p.timestamp).toISOString()},${p.loss.toFixed(6)},${p.accuracy.toFixed(6)},${p.rollingAccuracy.toFixed(6)},${p.epoch},${p.samplesTrained}`
+                ).join("\n");
+                const epochHeader = "\n\nEpoch,TotalEpochs,Loss,Accuracy,ValLoss,ValAccuracy,Samples\n";
+                const epochRows = epochHistory.map(e =>
+                  `${e.epoch},${e.totalEpochs},${e.loss.toFixed(6)},${e.accuracy.toFixed(6)},${e.valLoss.toFixed(6)},${e.valAccuracy.toFixed(6)},${e.samplesInBatch}`
+                ).join("\n");
+                const gnHeader = "\n\nTimestamp,GradNorm,Loss,LR\n";
+                const gnRows = gradNormHistory.map(g =>
+                  `${new Date(g.timestamp).toISOString()},${g.gradNorm.toFixed(6)},${g.loss.toFixed(6)},${g.lr.toExponential(4)}`
+                ).join("\n");
+                const csv = header + rows + epochHeader + epochRows + gnHeader + gnRows;
+                const blob = new Blob([csv], { type: "text/csv" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = `training-history-${Date.now()}.csv`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }} title="Export training history as CSV">
+                📥 CSV
+              </button>
+            )}
           </div>
         </div>
 
@@ -507,7 +564,7 @@ export default function TrainingChart({ modelMetrics, onlineMetrics, epochHistor
           </div>
         ) : (
           <div className="training-chart-svg-wrap">
-            <svg ref={svgRef} width="100%" viewBox={`0 0 ${CHART_W} ${CHART_H}`}>
+            <svg ref={svgRef} width="100%" viewBox={`0 0 ${CHART_W} ${CHART_H}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} style={{ cursor: "crosshair" }}>
               <defs>
                 <linearGradient id="lossGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#e05555" stopOpacity={0.15} />
@@ -559,6 +616,21 @@ export default function TrainingChart({ modelMetrics, onlineMetrics, epochHistor
                   )}
                   <circle cx={accPoints[accPoints.length - 1].x} cy={accPoints[accPoints.length - 1].y} r={3.5} fill="#37d4bd" stroke="#0c141f" strokeWidth={1.5} />
                 </>
+              )}
+
+              {/* Hover tooltip */}
+              {tooltip && (
+                <g>
+                  {/* Vertical crosshair line */}
+                  <line x1={tooltip.x} y1={PAD.top} x2={tooltip.x} y2={PAD.top + INNER_H} stroke="#3a4d62" strokeWidth={0.5} strokeDasharray="3 3" />
+                  {/* Tooltip background */}
+                  <rect x={tooltip.x + 8} y={Math.max(PAD.top, tooltip.y - 60)} width={160} height={72} rx={6} fill="#111c2a" stroke="#2a3444" strokeWidth={1} />
+                  {/* Tooltip text */}
+                  <text x={tooltip.x + 14} y={Math.max(PAD.top + 12, tooltip.y - 46)} fill="#e05555" fontSize={10} fontWeight={700} fontFamily="monospace">Loss: {tooltip.loss.toFixed(4)}</text>
+                  <text x={tooltip.x + 14} y={Math.max(PAD.top + 26, tooltip.y - 32)} fill="#37d4bd" fontSize={10} fontWeight={700} fontFamily="monospace">Roll Acc: {(tooltip.rollingAccuracy * 100).toFixed(1)}%</text>
+                  <text x={tooltip.x + 14} y={Math.max(PAD.top + 40, tooltip.y - 18)} fill="#9a8ed2" fontSize={10} fontFamily="monospace">Batch Acc: {(tooltip.accuracy * 100).toFixed(1)}%</text>
+                  <text x={tooltip.x + 14} y={Math.max(PAD.top + 54, tooltip.y - 4)} fill="#566477" fontSize={9} fontFamily="monospace">{new Date(tooltip.timestamp).toLocaleTimeString()}</text>
+                </g>
               )}
             </svg>
 
@@ -633,6 +705,13 @@ export default function TrainingChart({ modelMetrics, onlineMetrics, epochHistor
         .readout-delta { font-size: 10px; font-weight: 600; font-family: monospace; color: #566477; }
         .readout-delta.good { color: #37d4bd; }
         .readout-delta.bad { color: #e05555; }
+        .csv-export-btn {
+          padding: 3px 8px; background: transparent;
+          border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;
+          color: #718197; font-size: 10px; cursor: pointer; transition: 0.15s;
+          white-space: nowrap;
+        }
+        .csv-export-btn:hover { border-color: #37d4bd; color: #37d4bd; background: rgba(55,212,189,0.05); }
       `}</style>
     </div>
   );
