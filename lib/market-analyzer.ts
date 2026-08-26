@@ -282,37 +282,14 @@ export class MarketAnalyzer {
   }
 
   private connectSymbol(symbol: string): void {
-    const ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${process.env.NEXT_PUBLIC_DERIV_APP_ID}`);
+    const ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
 
     ws.onopen = () => {
-      // Fetch historical ticks first so the analyzer has data immediately
-      ws.send(JSON.stringify({
-        ticks_history: symbol,
-        adjust_start_time: 1,
-        count: 500,
-        end: "latest",
-        style: "ticks",
-        req_id: "history_" + symbol,
-      }));
-      // Then subscribe to live ticks
-      ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: "live_" + symbol }));
+      ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
     };
 
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
-      // Handle historical ticks
-      if (msg.msg_type === "tick_history" && msg.tick_history?.prices) {
-        const prices = msg.tick_history.prices;
-        const pipSize = msg.tick_history.pip_size ?? 2;
-        for (const price of prices) {
-          this.addTick(symbol, {
-            quote: Number(price),
-            epoch: 0,
-          });
-        }
-        this.notifyUpdate();
-      }
-      // Handle live ticks
       if (msg.tick) {
         this.addTick(symbol, {
           quote: Number(msg.tick.quote),

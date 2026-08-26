@@ -4,7 +4,7 @@ import { getSession, getAuthHeaders } from "../../../../lib/deriv-session";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DERIV_WS_URL = "https://ws.derivws.com/websockets/v3";
+const DERIV_WS_URL = "https://api.derivws.com/trading/v1/options";
 
 /**
  * POST /api/deriv/transfer

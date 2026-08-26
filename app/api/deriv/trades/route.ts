@@ -22,7 +22,7 @@ type DerivTrade = {
   account_type: "demo" | "real";
 };
 
-const DERIV_WS_URL = "wss://ws.derivws.com/websockets/v3";
+const DERIV_WS_URL = "https://api.derivws.com/trading/v1/options";
 
 /**
  * GET /api/deriv/trades
@@ -53,9 +53,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Fetch profit table using Deriv v3 API via HTTP POST to WS endpoint
-    // The v3 API supports HTTP POST requests that return JSON responses
-    const response = await fetch(`https://ws.derivws.com/websockets/v3?app_id=${appId}`, {
+    // Fetch profit table using v3 WebSocket API via HTTP POST
+    const response = await fetch(`${DERIV_WS_URL}?app_id=${appId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({
