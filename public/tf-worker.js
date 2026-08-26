@@ -77,6 +77,22 @@ function updateEMA() {
   for (const w of currentWeights) w.dispose();
 }
 
+/** Compute L2 divergence between live weights and EMA weights */
+function computeWeightDivergence() {
+  if (!model || !emaWeights) return 0;
+  const currentWeights = model.getWeights();
+  let totalDivergence = 0;
+  for (let i = 0; i < Math.min(currentWeights.length, emaWeights.length); i++) {
+    const div = tf.tidy(() => {
+      const diff = tf.sub(currentWeights[i], emaWeights[i]);
+      return diff.norm().dataSync()[0];
+    });
+    totalDivergence += div;
+  }
+  for (const w of currentWeights) w.dispose();
+  return Math.round(totalDivergence * 10000) / 10000;
+}
+
 /** Apply EMA weights to model (use for inference/prediction) */
 function applyEMA() {
   if (!model || !emaWeights) return;
@@ -176,6 +192,7 @@ async function trainOnBatch(xs, ys) {
       gradNorm: Math.round(gradNormVal * 10000) / 10000,
       lr: currentOnlineLR,
       updateCount: onlineUpdateCount,
+      weightDivergence: computeWeightDivergence(),
     };
   } finally { xsT.dispose(); ysT.dispose(); }
 }
@@ -203,6 +220,11 @@ async function batchTrain(digitBuffer, seqLength, batchSize, epochs, stride) {
   const xsT = tf.tensor3d(xs, [xs.length, seqLength, 10]);
   const ysT = tf.tensor2d(ys, [ys.length, 10]);
   try {
+    // Early stopping state
+    let bestValLoss = Infinity;
+    let patienceCounter = 0;
+    const PATIENCE = 3; // stop if no improvement for 3 epochs
+
     const history = await model.fit(xsT, ysT, {
       batchSize: batchSize || 32,
       epochs: epochs || 2,
@@ -211,16 +233,35 @@ async function batchTrain(digitBuffer, seqLength, batchSize, epochs, stride) {
       verbose: 0,
       callbacks: {
         onEpochEnd: async (epoch, logs) => {
+          const valLoss = logs?.val_loss ?? 0;
+          const trainAcc = logs?.acc ?? 0;
+          const valAcc = logs?.val_acc ?? 0;
+
+          // Early stopping check
+          if (epoch > 0 && valLoss < bestValLoss) {
+            bestValLoss = valLoss;
+            patienceCounter = 0;
+          } else if (epoch > 0) {
+            patienceCounter++;
+          }
+
           self.postMessage({
             type: 'trainProgress',
             epoch: epoch + 1,
             totalEpochs: epochs || 2,
             loss: logs?.loss ?? 0,
-            accuracy: logs?.acc ?? 0,
-            valLoss: logs?.val_loss ?? 0,
-            valAccuracy: logs?.val_acc ?? 0,
+            accuracy: trainAcc,
+            valLoss: valLoss,
+            valAccuracy: valAcc,
             samplesInBatch: xs.length,
+            earlyStopped: patienceCounter >= PATIENCE,
           });
+
+          // Return true to stop training if patience exceeded
+          if (patienceCounter >= PATIENCE) {
+            self.postMessage({ type: 'earlyStop', epoch: epoch + 1, bestValLoss });
+            return true; // stops model.fit()
+          }
         }
       },
     });
