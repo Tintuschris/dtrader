@@ -307,7 +307,7 @@ export default function TradingTerminal() {
     }, 4000);
 
     try {
-      ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
+      ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${process.env.NEXT_PUBLIC_DERIV_APP_ID}`);
       tickStreamWs.current = ws;
       ws.onopen = () => {
         // First fetch historical ticks so the graph starts with real data

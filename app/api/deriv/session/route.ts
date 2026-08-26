@@ -32,21 +32,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const response = await fetch(
-    `https://api.derivws.com/trading/v1/options/accounts/${encodeURIComponent(accountId)}/otp`,
-    {
-      method: "POST",
-      headers,
-      cache: "no-store",
-    },
-  );
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok || typeof payload?.data?.url !== "string") {
+  // Use the OAuth access token to authenticate with Deriv v3 WebSocket API
+  // The token can be used directly with the v3 WebSocket authorize command
+  const token = session?.accessToken;
+  if (!token) {
     return NextResponse.json(
-      { error: "Unable to create a secure Deriv session." },
-      { status: response.status || 502 },
+      { error: "No access token available." },
+      { status: 401 },
     );
   }
-  return NextResponse.json({ url: payload.data.url });
+
+  // Return the v3 WebSocket URL and token for client-side auth
+  const appId = process.env.NEXT_PUBLIC_DERIV_APP_ID ?? process.env.DERIV_APP_ID;
+  const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=${appId}`;
+
+  return NextResponse.json({ url: wsUrl, token });
 }

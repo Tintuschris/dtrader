@@ -282,7 +282,7 @@ export class MarketAnalyzer {
   }
 
   private connectSymbol(symbol: string): void {
-    const ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
+    const ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${process.env.NEXT_PUBLIC_DERIV_APP_ID}`);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));

@@ -162,12 +162,13 @@ export function useDerivTrading() {
         }
         const data = await res.json();
         const wsUrl: string | undefined = data.url;
+        const authToken: string | undefined = data.token;
         if (!wsUrl) throw new Error("No WebSocket URL returned");
 
-        // Log endpoint without OTP token for debugging
+        // Log endpoint without tokens for debugging
         try {
           const debugUrl = new URL(wsUrl);
-          console.log(`Connecting to Deriv WS: ${debugUrl.origin}${debugUrl.pathname}`);
+          console.log(`Connecting to Deriv v3 WS: ${debugUrl.origin}${debugUrl.pathname}`);
         } catch { /* ignore */ }
 
         setConnectionStatus("connecting");
@@ -178,7 +179,11 @@ export function useDerivTrading() {
           setConnectionStatus("connected");
           setLastError(null);
           reconnectAttempts.current = 0;
-          // subscribe to balance
+          // Authenticate with v3 API using the OAuth token
+          if (authToken) {
+            ws.send(JSON.stringify({ authorize: authToken, req_id: String(nextReqId++) }));
+          }
+          // subscribe to balance (will work after auth)
           ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: String(nextReqId++) }));
         };
 

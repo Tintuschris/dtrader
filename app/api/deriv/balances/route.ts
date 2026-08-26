@@ -23,7 +23,7 @@ type AccountBalance = {
 let balanceCache: { accounts: AccountBalance[]; timestamp: number } | null = null;
 const CACHE_TTL_MS = 30_000;
 
-const DERIV_WS_URL = "https://api.derivws.com/websockets/v3";
+const DERIV_WS_URL = "https://ws.derivws.com/websockets/v3";
 
 export async function GET() {
   if (balanceCache && Date.now() - balanceCache.timestamp < CACHE_TTL_MS) {
@@ -48,7 +48,7 @@ export async function GET() {
     }
 
     // Fetch accounts list via the accounts API
-    const accountsRes = await fetch("https://api.derivws.com/websockets/v3?app_id=" + appId, {
+    const accountsRes = await fetch("https://ws.derivws.com/websockets/v3?app_id=" + appId, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({ accounts: 1 }),
@@ -101,7 +101,7 @@ export async function GET() {
  * Sends a JSON POST to the WS endpoint with authorize + balance requests.
  */
 async function fetchAccountBalance(loginid: string, appId: string): Promise<number | null> {
-  const wsUrl = `${DERIV_WS_URL}?app_id=${appId}`;
+  const wsUrl = `https://ws.derivws.com/websockets/v3?app_id=${appId}`;
 
   // Step 1: Get an OTP for this specific account
   const otpRes = await fetch(wsUrl, {
