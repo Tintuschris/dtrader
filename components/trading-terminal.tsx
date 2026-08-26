@@ -292,61 +292,36 @@ export default function TradingTerminal() {
     }
   }, [loadAccounts, authLoading]);
 
-  /* ---- tick stream (public WebSocket) ---- */
+  /* ---- tick stream (Options API public WebSocket) ---- */
   useEffect(() => {
     let ws: WebSocket | undefined;
-    let historyReceived = false;
+    let tickReceived = false;
 
-    // Safety timeout — if no history arrives in 4s, dismiss skeleton anyway
-    // so the user sees the chart (simulated ticks will fill in)
+    // Safety timeout — dismiss skeleton after 5s even if no ticks arrive
     const skeletonTimeout = setTimeout(() => {
-      if (!historyReceived) {
+      if (!tickReceived) {
         setChartLoading(false);
         setTimeout(() => setChartSkeletonMounted(false), 500);
       }
-    }, 4000);
+    }, 5000);
 
     try {
+      // Use the Options API public WebSocket for live tick data
       ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
       tickStreamWs.current = ws;
       ws.onopen = () => {
-        // First fetch historical ticks so the graph starts with real data
-        ws?.send(JSON.stringify({
-          ticks_history: symbol,
-          adjust_start_time: 1,
-          count: 100,
-          end: "latest",
-          style: "ticks",
-          req_id: "history_init",
-        }));
-        // Then subscribe to live ticks
-        ws?.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: "live_sub" }));
+        // Subscribe to live ticks (ticks_history is NOT supported on the public endpoint)
+        ws?.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
       };
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data) as Record<string, unknown>;
         const msgType = message.msg_type as string | undefined;
 
-        // Deriv ticks_history response: msg_type === "tick_history"
-        if (msgType === "tick_history" || msgType === "history") {
-          const tickHist = (message.tick_history ?? message.history) as { prices?: Array<number | string>; pip_size?: number } | undefined;
-          const prices = tickHist?.prices;
-          const pipSize = tickHist?.pip_size ?? 2;
-          if (prices?.length) {
-            historyReceived = true;
-            clearTimeout(skeletonTimeout);
-            setTicks(prices.slice(-100).map((price) => ({ value: Number(price), digit: digitFromQuote(price, pipSize) })));
-            setStreamMode("live");
-            setChartLoading(false);
-            setTimeout(() => setChartSkeletonMounted(false), 500);
-          }
-        }
-
-        // Live tick updates
         if (msgType === "tick") {
           const tick = message.tick as { quote?: number | string; pip_size?: number } | undefined;
           if (tick?.quote !== undefined) {
-            if (!historyReceived) {
-              historyReceived = true;
+            if (!tickReceived) {
+              tickReceived = true;
               clearTimeout(skeletonTimeout);
               setChartLoading(false);
               setTimeout(() => setChartSkeletonMounted(false), 500);
@@ -358,11 +333,22 @@ export default function TradingTerminal() {
             try { getGlobalAnalyzer().addTick(symbol, { quote: Number(tick.quote), epoch: 0 }); } catch { /* analyzer may not be mounted */ }
           }
         }
+
+        // Handle subscription confirmation
+        if (msgType === "tick") {
+          const sub = message.subscription as { id?: string } | undefined;
+          if (sub?.id && !tickReceived) {
+            tickReceived = true;
+            clearTimeout(skeletonTimeout);
+            setChartLoading(false);
+            setTimeout(() => setChartSkeletonMounted(false), 500);
+          }
+        }
       };
       ws.onerror = () => {
         setStreamMode("simulated");
-        if (!historyReceived) {
-          historyReceived = true;
+        if (!tickReceived) {
+          tickReceived = true;
           clearTimeout(skeletonTimeout);
           setChartLoading(false);
           setTimeout(() => setChartSkeletonMounted(false), 500);

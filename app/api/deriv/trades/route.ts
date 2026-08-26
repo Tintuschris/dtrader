@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession, getAuthHeaders } from "../../../../lib/deriv-session";
+import WebSocket from "ws";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,16 +23,58 @@ type DerivTrade = {
   account_type: "demo" | "real";
 };
 
-const DERIV_WS_URL = "https://api.derivws.com/trading/v1/options";
+const OPTIONS_REST_URL = "https://api.derivws.com/trading/v1/options";
+
+/**
+ * Get an authenticated WebSocket URL via the OTP endpoint.
+ */
+async function getOtpUrl(accountId: string, accessToken: string): Promise<string> {
+  const appId = process.env.DERIV_APP_ID;
+  if (!appId) throw new Error("DERIV_APP_ID not configured");
+
+  const response = await fetch(`${OPTIONS_REST_URL}/accounts/${encodeURIComponent(accountId)}/otp`, {
+    method: "POST",
+    headers: {
+      "Deriv-App-ID": appId,
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) throw new Error(`OTP request failed: HTTP ${response.status}`);
+  const payload = await response.json() as { data?: { url?: string } };
+  const wsUrl = payload?.data?.url;
+  if (!wsUrl) throw new Error("No WebSocket URL returned");
+  return wsUrl;
+}
+
+/**
+ * Make a request to an authenticated Deriv WebSocket.
+ */
+function authWsRequest<T>(wsUrl: string, payload: Record<string, unknown>, expectedMsgType: string, timeoutMs = 10000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    const timer = setTimeout(() => { ws.close(); reject(new Error("Timeout")); }, timeoutMs);
+    ws.on("open", () => ws.send(JSON.stringify(payload)));
+    ws.on("message", (event) => {
+      try {
+        const msg = JSON.parse(String(event));
+        if (msg.msg_type === expectedMsgType) {
+          clearTimeout(timer); ws.close();
+          if (msg.error) reject(new Error(msg.error.message ?? JSON.stringify(msg.error)));
+          else resolve(msg);
+        }
+      } catch { /* ignore */ }
+    });
+    ws.on("error", (err) => { clearTimeout(timer); reject(err); });
+    ws.on("close", () => clearTimeout(timer));
+  });
+}
 
 /**
  * GET /api/deriv/trades
  *
- * Fetches the user's trade history from Deriv using the v3 WebSocket API.
- * Uses the profit_table endpoint for closed/completed trades.
- *
- * Query params:
- *   ?limit=50 — max results
+ * Fetches the user's trade history from Deriv using the authenticated WebSocket.
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -42,55 +85,55 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated. Please log in.", trades: [] }, { status: 401 });
   }
 
-  const headers = await getAuthHeaders();
-  if (!headers) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-  }
-
-  const appId = process.env.DERIV_APP_ID;
-  if (!appId) {
-    return NextResponse.json({ error: "DERIV_APP_ID not configured" }, { status: 500 });
-  }
-
   try {
-    // Fetch profit table using v3 WebSocket API via HTTP POST
-    const response = await fetch(`${DERIV_WS_URL}?app_id=${appId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({
-        profit_table: 1,
-        limit,
-        offset: 0,
-      }),
+    // Step 1: Get accounts list to find the active account
+    const accountsRes = await fetch(`${OPTIONS_REST_URL}/accounts`, {
+      method: "GET",
+      headers: {
+        "Deriv-App-ID": process.env.DERIV_APP_ID ?? "",
+        Authorization: `Bearer ${session.accessToken}`,
+        "Content-Type": "application/json",
+      },
       cache: "no-store",
     });
 
-    if (!response.ok) {
-      console.error("Profit table returned", response.status);
-      return NextResponse.json({ trades: [], total: 0, error: `API error: ${response.status}` });
+    if (!accountsRes.ok) {
+      return NextResponse.json({ trades: [], total: 0, error: "Unable to fetch accounts" });
     }
 
-    const payload = await response.json().catch(() => null);
+    const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
+    const accountsList = accountsPayload?.data?.accounts ?? [];
 
-    // Check for auth errors
-    if (payload?.error) {
-      console.error("Deriv API error:", payload.error);
-      return NextResponse.json({
-        trades: [],
-        total: 0,
-        error: payload.error.message ?? "Deriv API error",
-      });
+    if (!Array.isArray(accountsList) || accountsList.length === 0) {
+      return NextResponse.json({ trades: [], total: 0, authenticated: true });
     }
 
-    const profitData = payload?.profit_table;
-    const rawTrades = profitData?.transactions ?? [];
+    // Step 2: Get profit table for the first account via authenticated WebSocket
+    const firstAccount = accountsList[0];
+    const accountId = String(firstAccount.loginid ?? firstAccount.account_id ?? "");
+    if (!accountId) {
+      return NextResponse.json({ trades: [], total: 0, error: "No account ID found" });
+    }
 
-    // Determine account type from the login ID in the response
-    const accountLoginid = profitData?.loginid ?? "";
+    const wsUrl = await getOtpUrl(accountId, session.accessToken);
+    const profitData = await authWsRequest<{
+      profit_table?: {
+        transactions?: Record<string, unknown>[];
+        count?: number;
+        loginid?: string;
+      };
+    }>(
+      wsUrl,
+      { profit_table: 1, limit, offset: 0 },
+      "profit_table",
+    );
+
+    const profitTable = profitData.profit_table;
+    const rawTrades = profitTable?.transactions ?? [];
+    const accountLoginid = profitTable?.loginid ?? accountId;
 
     const trades: DerivTrade[] = rawTrades.map((t: Record<string, unknown>) => {
       const isDemo = accountLoginid.startsWith("VR") || accountLoginid.includes("demo");
-
       return {
         contract_id: String(t.contract_id ?? ""),
         contract_type: String(t.contract_type ?? ""),
@@ -112,7 +155,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       trades,
-      total: profitData?.count ?? trades.length,
+      total: profitTable?.count ?? trades.length,
       authenticated: true,
     });
   } catch (err) {

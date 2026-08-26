@@ -26,41 +26,58 @@ function normaliseAccount(account: Record<string, unknown>): DerivAccount | null
 /**
  * GET /api/deriv/accounts
  *
- * Returns the user's Deriv accounts. Requires OAuth login via Deriv.
+ * Returns the user's Deriv accounts using the Options API REST endpoint.
+ * The Options API has a GET /accounts REST endpoint that lists all accounts.
  */
 export async function GET() {
-  // Try OAuth session first
   const session = await getSession();
-  let headers: Record<string, string> | null = null;
-  let usingOAuth = false;
 
-  if (session?.accessToken) {
-    headers = await getAuthHeaders();
-    usingOAuth = true;
-  }
-
-  if (!headers) {
+  if (!session?.accessToken) {
     return NextResponse.json(
       { error: "Not authenticated. Please log in with your Deriv account." },
       { status: 401 },
     );
   }
 
-  const response = await fetch("https://api.derivws.com/trading/v1/options/accounts", {
-    headers,
-    cache: "no-store",
-  });
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const errorMsg = "Unable to load accounts. Your session may have expired.";
-    return NextResponse.json({ error: errorMsg }, { status: response.status });
+  const appId = process.env.DERIV_APP_ID;
+  if (!appId) {
+    return NextResponse.json(
+      { error: "DERIV_APP_ID not configured" },
+      { status: 500 },
+    );
   }
 
-  const source = payload?.data?.accounts ?? payload?.data ?? payload?.accounts ?? [];
-  const accounts = Array.isArray(source)
-    ? source.map((account) => normaliseAccount(account as Record<string, unknown>)).filter(Boolean)
-    : [];
+  try {
+    // Use Options API REST endpoint to get accounts list
+    const response = await fetch("https://api.derivws.com/trading/v1/options/accounts", {
+      method: "GET",
+      headers: {
+        "Deriv-App-ID": appId,
+        Authorization: `Bearer ${session.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      cache: "no-store",
+    });
 
-  return NextResponse.json({ accounts, authenticated: usingOAuth });
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: "Unable to load accounts. Your session may have expired." },
+        { status: response.status },
+      );
+    }
+
+    const payload = await response.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
+    const source = payload?.data?.accounts ?? [];
+    const accounts = Array.isArray(source)
+      ? source.map((account) => normaliseAccount(account)).filter(Boolean)
+      : [];
+
+    return NextResponse.json({ accounts, authenticated: true });
+  } catch (err) {
+    console.error("Failed to fetch accounts:", err);
+    return NextResponse.json(
+      { error: "Unable to load accounts. Your session may have expired." },
+      { status: 500 },
+    );
+  }
 }
