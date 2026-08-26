@@ -18,6 +18,7 @@ type Props = {
   modelMetrics: TrainingMetrics;
   onlineMetrics: OnlineLearningMetrics;
   epochHistory: EpochProgress[];
+  gradNormHistory: { timestamp: number; gradNorm: number; loss: number; lr: number }[];
 };
 
 const MAX_POINTS = 200;
@@ -234,9 +235,187 @@ function EpochChart({ epochHistory }: { epochHistory: EpochProgress[] }) {
   );
 }
 
+/* ---- Gradient Norm Chart ---- */
+
+const CLIP_THRESHOLD = 1.0; // clipnorm value from tf-worker.js
+
+function GradientNormChart({ gradNormHistory }: { gradNormHistory: { timestamp: number; gradNorm: number; loss: number; lr: number }[] }) {
+  if (gradNormHistory.length === 0) return null;
+
+  const W = CHART_W;
+  const H = 180;
+  const P = { top: 10, right: 50, bottom: 30, left: 55 };
+  const IW = W - P.left - P.right;
+  const IH = H - P.top - P.bottom;
+
+  // Scale: 0 to max(gradNorm, CLIP_THRESHOLD * 1.5)
+  const maxVal = Math.max(...gradNormHistory.map((e) => e.gradNorm), CLIP_THRESHOLD * 1.5);
+
+  function xScale(i: number): number {
+    if (gradNormHistory.length <= 1) return P.left + IW / 2;
+    return P.left + (i / (gradNormHistory.length - 1)) * IW;
+  }
+  function yScale(v: number): number {
+    return P.top + IH - (v / maxVal) * IH;
+  }
+  function yLR(v: number): number {
+    // LR is tiny (1e-4 to 1e-3), scale it to fill the chart height
+    const maxLR = 0.002;
+    return P.top + IH - (Math.min(v, maxLR) / maxLR) * IH;
+  }
+
+  const gradPoints = gradNormHistory.map((e, i) => ({ x: xScale(i), y: yScale(e.gradNorm) }));
+  const lrPoints = gradNormHistory.map((e, i) => ({ x: xScale(i), y: yLR(e.lr) }));
+  const clipY = yScale(CLIP_THRESHOLD);
+
+  // X-axis labels (time)
+  const labelCount = Math.min(6, gradNormHistory.length);
+  const step = Math.max(1, Math.floor((gradNormHistory.length - 1) / Math.max(1, labelCount - 1)));
+  const timeLabels: number[] = [];
+  for (let i = 0; i < gradNormHistory.length; i += step) timeLabels.push(i);
+  if (timeLabels[timeLabels.length - 1] !== gradNormHistory.length - 1) timeLabels.push(gradNormHistory.length - 1);
+
+  // Count clipped values
+  const clippedCount = gradNormHistory.filter((e) => e.gradNorm >= CLIP_THRESHOLD).length;
+  const latest = gradNormHistory[gradNormHistory.length - 1];
+
+  return (
+    <div className="gn-chart-container">
+      <div className="gn-chart-header">
+        <h4>📐 Gradient Norm</h4>
+        <div className="gn-chart-legend">
+          <span className="legend-item"><span className="legend-dot" style={{ background: "#ce93d8" }} /> Grad Norm</span>
+          <span className="legend-item"><span className="legend-dot" style={{ background: "#f0c040", borderRadius: 0, width: 12, height: 2 }} /> Learning Rate</span>
+          <span className="legend-item"><span className="legend-line" style={{ background: "#e05555" }} /> Clip @ {CLIP_THRESHOLD}</span>
+        </div>
+      </div>
+
+      <div className="gn-chart-svg-wrap">
+        <svg width="100%" viewBox={`0 0 ${W} ${H}`}>
+          <defs>
+            <linearGradient id="gnGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#ce93d8" stopOpacity={0.25} />
+              <stop offset="100%" stopColor="#ce93d8" stopOpacity={0.02} />
+            </linearGradient>
+            <linearGradient id="gnClip" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#e05555" stopOpacity={0.15} />
+              <stop offset="100%" stopColor="#e05555" stopOpacity={0.05} />
+            </linearGradient>
+          </defs>
+
+          {/* Clip threshold zone (above clip line = red danger zone) */}
+          <rect x={P.left} y={P.top} width={IW} height={Math.max(0, clipY - P.top)} fill="url(#gnClip)" />
+
+          {/* Grid lines */}
+          {[0, 0.5, 1.0, 1.5, 2.0].filter(v => v <= maxVal * 1.1).map((v) => (
+            <g key={`gv-${v}`}>
+              <line x1={P.left} y1={yScale(v)} x2={P.left + IW} y2={yScale(v)} stroke="#1e2d3d" strokeWidth={0.5} strokeDasharray={v === CLIP_THRESHOLD ? "" : "2 4"} />
+              <text x={P.left - 6} y={yScale(v) + 3} textAnchor="end" fill="#ce93d8" fontSize={9} opacity={0.7}>{v.toFixed(1)}</text>
+            </g>
+          ))}
+
+          {/* Clip threshold line */}
+          <line x1={P.left} y1={clipY} x2={P.left + IW} y2={clipY} stroke="#e05555" strokeWidth={1.5} strokeDasharray="6 3" />
+          <text x={P.left + IW + 6} y={clipY + 3} fill="#e05555" fontSize={9} fontWeight={700}>{CLIP_THRESHOLD}</text>
+          <text x={P.left + IW + 6} y={clipY + 14} fill="#e05555" fontSize={7} opacity={0.7}>clip</text>
+
+          {/* Time labels */}
+          {gradNormHistory.length > 1 && timeLabels.map((idx) => {
+            const t = new Date(gradNormHistory[idx].timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+            return <text key={idx} x={xScale(idx)} y={H - 6} textAnchor="middle" fill="#566477" fontSize={9}>{t}</text>;
+          })}
+
+          {/* Area under grad norm */}
+          <path d={svgArea(gradPoints, P.top + IH)} fill="url(#gnGrad)" />
+
+          {/* Learning rate line (subtle) */}
+          {lrPoints.length > 1 && (
+            <path d={svgPath(lrPoints)} fill="none" stroke="#f0c040" strokeWidth={1} opacity={0.4} strokeDasharray="4 2" />
+          )}
+
+          {/* Grad norm line */}
+          {gradPoints.length > 1 && (
+            <path d={svgPath(gradPoints)} fill="none" stroke="#ce93d8" strokeWidth={2} />
+          )}
+
+          {/* Clipped points (red dots where norm >= threshold) */}
+          {gradNormHistory.map((e, i) => {
+            if (e.gradNorm < CLIP_THRESHOLD) return null;
+            return (
+              <circle key={`clip-${i}`} cx={xScale(i)} cy={yScale(e.gradNorm)} r={3} fill="#e05555" stroke="#0c141f" strokeWidth={1} />
+            );
+          })}
+
+          {/* Latest point */}
+          {gradPoints.length > 0 && (
+            <circle cx={gradPoints[gradPoints.length - 1].x} cy={gradPoints[gradPoints.length - 1].y} r={3.5} fill="#ce93d8" stroke="#0c141f" strokeWidth={1.5} />
+          )}
+        </svg>
+      </div>
+
+      {/* Readouts */}
+      <div className="gn-readouts">
+        <div className="gn-readout">
+          <span className="gn-label">Grad Norm</span>
+          <span className="gn-value purple" style={{ color: latest.gradNorm >= CLIP_THRESHOLD ? "#e05555" : "#ce93d8" }}>
+            {latest.gradNorm.toFixed(4)}
+          </span>
+          {latest.gradNorm >= CLIP_THRESHOLD && <span className="gn-clipped">CLIPPED</span>}
+        </div>
+        <div className="gn-readout">
+          <span className="gn-label">Learning Rate</span>
+          <span className="gn-value" style={{ color: "#f0c040" }}>{latest.lr.toExponential(1)}</span>
+        </div>
+        <div className="gn-readout">
+          <span className="gn-label">Clipped</span>
+          <span className="gn-value" style={{ color: clippedCount > 0 ? "#e05555" : "#718197" }}>
+            {clippedCount}/{gradNormHistory.length}
+          </span>
+        </div>
+        <div className="gn-readout">
+          <span className="gn-label">Samples</span>
+          <span className="gn-value muted">{gradNormHistory.length}</span>
+        </div>
+      </div>
+
+      <style jsx>{`
+        .gn-chart-container {
+          padding: 12px 14px; background: #0c141f;
+          border: 1px solid var(--border, #2a3444); border-radius: 10px;
+          display: flex; flex-direction: column; gap: 8px;
+        }
+        .gn-chart-header {
+          display: flex; justify-content: space-between; align-items: center;
+          flex-wrap: wrap; gap: 8px;
+        }
+        .gn-chart-header h4 { margin: 0; font-size: 14px; color: #d9e3ed; }
+        .gn-chart-legend { display: flex; gap: 14px; flex-wrap: wrap; }
+        .gn-chart-svg-wrap svg { width: 100%; height: auto; overflow: visible; }
+        .legend-line {
+          width: 12px; height: 2px; display: inline-block;
+          border-radius: 1px;
+        }
+        .gn-readouts {
+          display: flex; gap: 16px; flex-wrap: wrap;
+          padding: 8px 0 0; border-top: 1px solid #1e2d3d;
+        }
+        .gn-readout { display: flex; align-items: baseline; gap: 6px; }
+        .gn-label { font-size: 10px; color: #566477; text-transform: uppercase; }
+        .gn-value { font-size: 14px; font-weight: 700; font-family: monospace; }
+        .gn-value.muted { color: #718197; }
+        .gn-clipped {
+          font-size: 9px; font-weight: 700; padding: 1px 5px;
+          background: rgba(224,85,85,.15); color: #e05555;
+          border-radius: 3px;
+        }
+      `}</style>
+    </div>
+  );
+}
+
 /* ---- Main Training Chart (time-series) ---- */
 
-export default function TrainingChart({ modelMetrics, onlineMetrics, epochHistory }: Props) {
+export default function TrainingChart({ modelMetrics, onlineMetrics, epochHistory, gradNormHistory }: Props) {
   const [history, setHistory] = useState<DataPoint[]>([]);
   const lastRecordRef = useRef({ epoch: -1, loss: -1, rollingAcc: -1, samples: -1 });
   const lastUpdateRef = useRef(0);
@@ -414,6 +593,9 @@ export default function TrainingChart({ modelMetrics, onlineMetrics, epochHistor
 
       {/* Epoch-by-epoch chart */}
       <EpochChart epochHistory={epochHistory} />
+
+      {/* Gradient norm chart */}
+      <GradientNormChart gradNormHistory={gradNormHistory} />
 
       <style jsx>{`
         .training-chart-wrapper {

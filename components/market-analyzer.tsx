@@ -49,6 +49,7 @@ export default function MarketAnalyzerPanel() {
     onlineUpdates: 0, lastConfidence: 0, isOnlineLearning: false,
   });
   const [epochHistory, setEpochHistory] = useState<EpochProgress[]>([]);
+  const [gradNormHistory, setGradNormHistory] = useState<{ timestamp: number; gradNorm: number; loss: number; lr: number }[]>([]);
 
   // Initialize analyzer
   useEffect(() => {
@@ -60,6 +61,7 @@ export default function MarketAnalyzerPanel() {
     const unsubMetrics = predictor.onMetricsUpdate((m) => setModelMetrics(m));
     const unsubOnline = predictor.onOnlineMetricsUpdate((m) => setOnlineMetrics(m));
     const unsubEpoch = predictor.onEpochHistory((h) => setEpochHistory(h));
+    const unsubGradNorm = predictor.onGradNormHistory((h) => setGradNormHistory(h));
 
     const unsub = analyzer.onUpdate(() => {
       // Re-score all active markets periodically
@@ -85,6 +87,7 @@ export default function MarketAnalyzerPanel() {
       unsubMetrics();
       unsubOnline();
       unsubEpoch();
+      unsubGradNorm();
       analyzer.destroy();
     };
   }, []);
@@ -296,6 +299,7 @@ export default function MarketAnalyzerPanel() {
           onTrainNow={() => analyzerRef.current?.getPredictor().trainNow()}
           onReset={() => analyzerRef.current?.getPredictor().reset()}
           epochHistory={epochHistory}
+          gradNormHistory={gradNormHistory}
         />
       )}
 
@@ -871,6 +875,7 @@ type NeuralNetProps = {
   onTrainNow: () => void;
   onReset: () => void;
   epochHistory: EpochProgress[];
+  gradNormHistory: { timestamp: number; gradNorm: number; loss: number; lr: number }[];
 };
 
 function NeuralNetView({
@@ -883,6 +888,7 @@ function NeuralNetView({
   onTrainNow,
   onReset,
   epochHistory,
+  gradNormHistory,
 }: NeuralNetProps) {
   const prediction = currentScore?.neuralPrediction ?? null;
   const statusColor = onlineMetrics.isOnlineLearning ? "#37d4bd" : modelStatus === "training" ? "#37d4bd" : modelStatus === "ready" ? "#9a8ed2" : modelStatus === "error" ? "#e05555" : "#718197";
@@ -1000,7 +1006,7 @@ function NeuralNetView({
       </div>
 
       {/* Real-time Training Chart */}
-      <TrainingChart modelMetrics={modelMetrics} onlineMetrics={onlineMetrics} epochHistory={epochHistory} />
+      <TrainingChart modelMetrics={modelMetrics} onlineMetrics={onlineMetrics} epochHistory={epochHistory} gradNormHistory={gradNormHistory} />
 
       {/* Controls */}
       <div className="nn-controls">

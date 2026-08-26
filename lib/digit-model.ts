@@ -181,6 +181,8 @@ export class DigitPredictor {
   private initialBatchDone = false;
   private epochHistory: EpochProgress[] = [];
   private epochHistoryCallbacks = new Set<(h: EpochProgress[]) => void>();
+  private gradNormHistory: { timestamp: number; gradNorm: number; loss: number; lr: number }[] = [];
+  private gradNormHistoryCallbacks = new Set<(h: { timestamp: number; gradNorm: number; loss: number; lr: number }[]) => void>();
 
   async init(): Promise<void> {
     this.setStatus("loading");
@@ -207,6 +209,8 @@ export class DigitPredictor {
   onOnlineMetricsUpdate(cb: (m: OnlineLearningMetrics) => void): () => void { this.onlineMetricsCallbacks.add(cb); return () => this.onlineMetricsCallbacks.delete(cb); }
   onEpochHistory(cb: (h: EpochProgress[]) => void): () => void { this.epochHistoryCallbacks.add(cb); return () => this.epochHistoryCallbacks.delete(cb); }
   getEpochHistory(): EpochProgress[] { return [...this.epochHistory]; }
+  onGradNormHistory(cb: (h: { timestamp: number; gradNorm: number; loss: number; lr: number }[]) => void): () => void { this.gradNormHistoryCallbacks.add(cb); return () => this.gradNormHistoryCallbacks.delete(cb); }
+  getGradNormHistory(): { timestamp: number; gradNorm: number; loss: number; lr: number }[] { return [...this.gradNormHistory]; }
   getStatus(): ModelStatus { return this.status; }
   getMetrics(): TrainingMetrics { return { ...this.metrics }; }
   getOnlineMetrics(): OnlineLearningMetrics { return { ...this.onlineMetrics }; }
@@ -287,7 +291,14 @@ export class DigitPredictor {
         const loss = result?.loss ?? 0;
         this.metrics.loss = this.metrics.loss * 0.9 + loss * 0.1;
         this.metrics.loss = Math.round(this.metrics.loss * 10000) / 10000;
-        if (result?.gradNorm !== undefined) this.metrics.lastGradNorm = result.gradNorm;
+        if (result?.gradNorm !== undefined) {
+          this.metrics.lastGradNorm = result.gradNorm;
+          // Track gradient norm history for charting
+          const gnEntry = { timestamp: Date.now(), gradNorm: result.gradNorm, loss, lr: result?.lr ?? this.metrics.currentLR };
+          this.gradNormHistory.push(gnEntry);
+          if (this.gradNormHistory.length > 500) this.gradNormHistory = this.gradNormHistory.slice(-500);
+          for (const cb of this.gradNormHistoryCallbacks) cb([...this.gradNormHistory]);
+        }
         if (result?.lr !== undefined) this.metrics.currentLR = result.lr;
         if (result?.updateCount !== undefined) this.metrics.onlineUpdateCount = result.updateCount;
         if (this.rollingHistory.length > 0) this.metrics.accuracy = this.onlineMetrics.rollingAccuracy;
@@ -386,7 +397,7 @@ export class DigitPredictor {
     await waitForWorker();
     this.metrics = { loss: 0, accuracy: 0, epoch: 0, samplesTrained: 0, lastTrainedAt: 0, lastGradNorm: 0, currentLR: 0, onlineUpdateCount: 0 };
     this.onlineMetrics = { rollingAccuracy: 0, rollingCorrect: 0, rollingTotal: 0, totalCorrect: 0, totalPredictions: 0, pendingCount: 0, onlineUpdates: 0, lastConfidence: 0, isOnlineLearning: false };
-    this.digitBuffer = []; this.predictionQueue = []; this.rollingHistory = []; this.initialBatchDone = false; this.isBatchTraining = false; this.epochHistory = [];
+    this.digitBuffer = []; this.predictionQueue = []; this.rollingHistory = []; this.initialBatchDone = false; this.isBatchTraining = false; this.epochHistory = []; this.gradNormHistory = [];
     localStorage.removeItem(MODEL_STORAGE_KEY + "_topology"); localStorage.removeItem(MODEL_STORAGE_KEY + "_weights");
     localStorage.removeItem(METRICS_STORAGE_KEY); localStorage.removeItem(ONLINE_METRICS_KEY);
     this.emitMetrics(); this.emitOnlineMetrics(); this.setStatus("ready");
