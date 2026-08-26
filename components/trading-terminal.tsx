@@ -382,10 +382,12 @@ export default function TradingTerminal() {
   }, [symbol]);
 
   /* ---- simulated ticks ---- */
+  const lastSimTickRef = useRef(640);
   useEffect(() => {
     if (!running || streamMode === "live") return;
     const timer = window.setInterval(() => {
-      const newTick = makeTick(0);
+      const newTick = makeTick(lastSimTickRef.current);
+      lastSimTickRef.current = newTick.value;
       setTicks((current) => [...current.slice(-55), newTick]);
       try { getGlobalAnalyzer().addTick(symbol, { quote: newTick.value, epoch: 0 }); } catch { /* ok */ }
     }, 1200);
