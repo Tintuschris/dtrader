@@ -14,12 +14,14 @@
     "js-interpreter": "^6.0.2",
     "next": "^15.5.23",
     "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "react-dom": "19.1.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.18.1",
     "typescript": "^5"
   }
 }
