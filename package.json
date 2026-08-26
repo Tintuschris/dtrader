@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@tabler/icons-react": "^3.46.0",
+    "@tensorflow/tfjs": "^4.22.0",
     "blockly": "^13.2.1",
     "js-interpreter": "^6.0.2",
     "next": "^15.5.23",

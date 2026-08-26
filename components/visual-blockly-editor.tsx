@@ -15,7 +15,7 @@ import {
   type SavedStrategy,
 } from "../lib/strategy-storage";
 
-const BlocklyWorkspace = dynamic(() => import("./blockly-workspace"), { ssr: false }) as React.ComponentType<{ onCodeGenerated: (code: string) => void; onWorkspaceReady?: (ws: unknown) => void }>;
+const BlocklyWorkspace = dynamic(() => import("./blockly-workspace"), { ssr: false }) as React.ComponentType<{ onCodeGenerated: (code: string) => void; onXmlChange?: (xml: string) => void; onWorkspaceReady?: (ws: unknown) => void; initialXml?: string }>;
 
 type WorkspaceRef = { xml: string; setXml: (xml: string) => void };
 
@@ -63,19 +63,21 @@ export default function VisualBlocklyEditor({
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const blocklyXmlRef = useRef<string>("");
 
   /* ---- Load strategy list on mount ---- */
   useEffect(() => {
     setStrategies(getStrategies());
   }, []);
 
-  /* ---- Auto-save on code changes (debounced 3s) ---- */
+  /* ---- Auto-save on XML changes (debounced 3s) ---- */
   useEffect(() => {
-    if (!activeStrategy || !visualCode.trim()) return;
+    if (!activeStrategy || !blocklyXmlRef.current) return;
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
-      updateStrategy(activeStrategy.id, { xml: visualCode });
-      setActiveStrategy((prev) => prev ? { ...prev, xml: visualCode, updatedAt: Date.now() } : prev);
+      const xml = blocklyXmlRef.current;
+      updateStrategy(activeStrategy.id, { xml });
+      setActiveStrategy((prev) => prev ? { ...prev, xml, updatedAt: Date.now() } : prev);
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 2000);
     }, 3000);
@@ -84,12 +86,13 @@ export default function VisualBlocklyEditor({
 
   /* ---- Save strategy ---- */
   const handleSave = useCallback(() => {
-    if (!visualCode.trim()) return;
+    const xml = blocklyXmlRef.current;
+    if (!xml) return;
     if (activeStrategy) {
       // Update existing
       const updated = updateStrategy(activeStrategy.id, {
         name: strategyName || activeStrategy.name,
-        xml: visualCode,
+        xml,
         description: strategyDesc || activeStrategy.description,
       });
       if (updated) {
@@ -100,7 +103,7 @@ export default function VisualBlocklyEditor({
       // Save new
       const saved = saveStrategy(
         strategyName || `Strategy ${strategies.length + 1}`,
-        visualCode,
+        xml,
         strategyDesc || undefined,
       );
       setActiveStrategy(saved);
@@ -109,7 +112,7 @@ export default function VisualBlocklyEditor({
     setSaveStatus("saved");
     setShowSaveDialog(false);
     setTimeout(() => setSaveStatus("idle"), 2000);
-  }, [visualCode, activeStrategy, strategyName, strategyDesc, strategies.length]);
+  }, [activeStrategy, strategyName, strategyDesc, strategies.length]);
 
   /* ---- Load strategy ---- */
   const handleLoad = useCallback((strategy: SavedStrategy) => {
@@ -145,35 +148,37 @@ export default function VisualBlocklyEditor({
     setVisualCode("");
   }, [setVisualCode]);
 
-  /* ---- Export to .xml file ---- */
+  /* ---- Export to .xml file (uses real Blockly XML, not JS code) ---- */
   const handleExport = useCallback(() => {
+    const xml = blocklyXmlRef.current || activeStrategy?.xml || "";
+    if (!xml) return;
     if (activeStrategy) {
-      exportStrategyXml(activeStrategy);
+      exportStrategyXml({ ...activeStrategy, xml });
     } else {
-      // Export as unnamed
-      const temp = { id: "temp", name: "strategy", xml: visualCode, createdAt: Date.now(), updatedAt: Date.now() } as SavedStrategy;
+      const temp = { id: "temp", name: "strategy", xml, createdAt: Date.now(), updatedAt: Date.now() } as SavedStrategy;
       exportStrategyXml(temp);
     }
-  }, [activeStrategy, visualCode]);
+  }, [activeStrategy]);
 
   /* ---- Import from .xml file ---- */
   const handleImport = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const xml = await importStrategyXml(file);
+      const rawXml = await importStrategyXml(file);
       const name = file.name.replace(/\.xml$/i, "");
-      const saved = saveStrategy(name, xml);
+      const saved = saveStrategy(name, rawXml);
       setActiveStrategy(saved);
       setStrategyName(name);
-      setVisualCode(xml);
+      // The workspace will load the XML and regenerate code via onXmlChange
+      blocklyXmlRef.current = rawXml;
       setStrategies(getStrategies());
     } catch (err) {
       console.error("Import failed:", err);
     }
     // Reset file input
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [setVisualCode]);
+  }, []);
 
   /* ---- Start bot ---- */
   const handleStart = useCallback(async () => {
@@ -326,7 +331,11 @@ export default function VisualBlocklyEditor({
 
       {/* Blockly Workspace */}
       <div className="blockly-editor-wrap">
-        <BlocklyWorkspace onCodeGenerated={(code) => setVisualCode(code)} />
+        <BlocklyWorkspace
+          onCodeGenerated={(code) => setVisualCode(code)}
+          onXmlChange={(xml) => { blocklyXmlRef.current = xml; }}
+          initialXml={activeStrategy?.xml}
+        />
       </div>
 
       {/* Generated Code */}

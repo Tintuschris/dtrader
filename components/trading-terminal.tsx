@@ -5,7 +5,8 @@ import {
   IconSettings, IconMenu2, IconX, IconRefresh, IconChevronDown,
   IconArrowUp, IconArrowDown, IconArrowRight, IconChartLine,
   IconRobot, IconChartBar, IconLogout, IconLogin, IconInfoCircle,
-  IconSwitch2, IconAlertTriangle, IconCurrencyDollar, IconUser, IconBrain,
+  IconSwitch2, IconAlertTriangle, IconCurrencyDollar, IconUser, IconBrain, IconWallet,
+  IconBell, IconChartPie, IconShield,
 } from "@tabler/icons-react";
 import {
   useDerivTrading,
@@ -16,8 +17,14 @@ import { useAuth } from "./use-auth";
 import TradingHistory from "./trading-history";
 import SwipeCarousel from "./swipe-carousel";
 import BotBuilder from "./bot-builder";
-import MarketAnalyzerPanel from "./market-analyzer";
+import dynamic from "next/dynamic";
+const MarketAnalyzerPanel = dynamic(() => import("./market-analyzer"), { ssr: false, loading: () => <div className="workspace"><div className="workspace-heading"><div><p className="eyebrow">ANALYZER</p><h1>Market Analyzer</h1><p className="muted">Loading neural network engine…</p></div></div></div> });
 import { useBot } from "./use-bot";
+import WalletPanel from "./wallet-panel";
+import { ToastContainer, NotificationCenter, pushNotification } from "./notification-system";
+import PortfolioDashboard from "./portfolio-dashboard";
+import { getGlobalAnalyzer } from "../lib/market-analyzer";
+import RiskManagement, { defaultRiskSettings, createInitialRiskState, checkRiskLimits, updateRiskState, type RiskSettings, type RiskState } from "./risk-management";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -113,7 +120,7 @@ function fmt(n: number | string) {
   return Number(n).toFixed(2);
 }
 
-type ActiveTab = "workspace" | "history" | "bots" | "settings" | "analyzer";
+type ActiveTab = "workspace" | "history" | "bots" | "settings" | "analyzer" | "portfolio" | "risk";
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
@@ -143,6 +150,10 @@ export default function TradingTerminal() {
   const [showMarketPicker, setShowMarketPicker] = useState(false);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [marketsLoading, setMarketsLoading] = useState(true);
+  const [showWallet, setShowWallet] = useState(false);
+  const [showNotificationCenter, setShowNotificationCenter] = useState(false);
+  const [riskSettings, setRiskSettings] = useState<RiskSettings>(defaultRiskSettings);
+  const [riskState, setRiskState] = useState<RiskState>(createInitialRiskState);
 
   const tickStreamWs = useRef<WebSocket | null>(null);
   const proposeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -343,6 +354,8 @@ export default function TradingTerminal() {
             const tickPipSize = tick.pip_size ?? 2;
             setTicks((prev) => [...prev.slice(-99), { value: Number(tick.quote), digit: digitFromQuote(tick.quote ?? 0, tickPipSize) }]);
             setStreamMode("live");
+            // Feed tick to the analyzer's ML model
+            try { getGlobalAnalyzer().addTick(symbol, { quote: Number(tick.quote), epoch: 0 }); } catch { /* analyzer may not be mounted */ }
           }
         }
       };
@@ -372,7 +385,9 @@ export default function TradingTerminal() {
   useEffect(() => {
     if (!running || streamMode === "live") return;
     const timer = window.setInterval(() => {
-      setTicks((current) => [...current.slice(-55), makeTick(current.at(-1)?.value ?? 644.52)]);
+      const newTick = makeTick(0);
+      setTicks((current) => [...current.slice(-55), newTick]);
+      try { getGlobalAnalyzer().addTick(symbol, { quote: newTick.value, epoch: 0 }); } catch { /* ok */ }
     }, 1200);
     return () => window.clearInterval(timer);
   }, [running, streamMode]);
@@ -392,6 +407,30 @@ export default function TradingTerminal() {
     const timer = setTimeout(() => clearError(), 4000);
     return () => clearTimeout(timer);
   }, [lastError, clearError]);
+
+  /* ---- notifications for trade results ---- */
+  useEffect(() => {
+    if (!lastResult) return;
+    pushNotification({
+      type: "trade",
+      title: lastResult.status === "won" ? "Trade Won!" : "Trade Lost",
+      message: lastResult.status === "won"
+        ? `You won $${Math.abs(lastResult.profit).toFixed(2)} on your trade!`
+        : `You lost $${Math.abs(lastResult.profit).toFixed(2)} on your trade.`,
+      profit: lastResult.profit,
+      severity: lastResult.status === "won" ? "success" : "error",
+    });
+    // Update risk state
+    setRiskState((prev) => updateRiskState(prev, riskSettings, lastResult));
+  }, [lastResult, riskSettings]);
+
+  /* ---- daily risk reset ---- */
+  useEffect(() => {
+    const today = new Date().toISOString().split("T")[0];
+    if (riskState.lastResetDate !== today) {
+      setRiskState((prev) => ({ ...prev, dailyPnL: 0, lastResetDate: today }));
+    }
+  }, [riskState.lastResetDate]);
 
   /* ---- auto-refresh proposal (paused when not on workspace tab) ---- */
   useEffect(() => {
@@ -428,6 +467,22 @@ export default function TradingTerminal() {
     const stakeNum = parseFloat(stake);
     if (isNaN(stakeNum) || stakeNum <= 0) { setTradeError("Enter a valid stake amount."); return; }
     if (activeContract) { setTradeError("You already have an active contract. Wait for it to settle."); return; }
+    // Risk management check
+    const riskCheck = checkRiskLimits(riskSettings, riskState, stakeNum);
+    if (!riskCheck.allowed) {
+      setTradeError(riskCheck.reason);
+      pushNotification({ type: "risk", title: "Trade Blocked", message: riskCheck.reason, severity: "warning" });
+      return;
+    }
+    // Balance validation
+    if (balance !== null && stakeNum > balance) {
+      setTradeError(`Insufficient balance. You have $${fmt(balance)} ${balanceCurrency} but need $${fmt(stakeNum)}.`);
+      return;
+    }
+    if (stakeNum > 0 && balance !== null && stakeNum > balance * 0.5) {
+      // Warning for large stakes but allow it
+      console.warn(`Large stake: $${fmt(stakeNum)} is >50% of balance $${fmt(balance)}`);
+    }
     setIsBuying(true);
     setTradeError(null);
     clearLastResult();
@@ -439,7 +494,7 @@ export default function TradingTerminal() {
     } finally {
       setIsBuying(false);
     }
-  }, [currentProposal, stake, activeContract, buy, clearLastResult]);
+  }, [currentProposal, stake, activeContract, buy, clearLastResult, balance, balanceCurrency]);
 
   /* ---- derived ---- */
   const current = ticks.at(-1) ?? { value: 644.52, digit: 2 };
@@ -516,15 +571,18 @@ export default function TradingTerminal() {
             </button>
             <button className={`nav-link ${activeTab === "bots" ? "active" : ""}`} onClick={() => setActiveTab("bots")}>Bots</button>
             <button className={`nav-link ${activeTab === "analyzer" ? "active" : ""}`} onClick={() => setActiveTab("analyzer")}>Analyzer</button>
+            <button className={`nav-link ${activeTab === "portfolio" ? "active" : ""}`} onClick={() => setActiveTab("portfolio")}>Portfolio</button>
+            <button className={`nav-link ${activeTab === "risk" ? "active" : ""}`} onClick={() => setActiveTab("risk")}>Risk</button>
             <button className={`nav-link ${activeTab === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}>Settings</button>
           </nav>
         </div>
         <div className="topbar-right">
           {balance !== null && (
-            <div className="balance-pill">
+            <button className="balance-pill" onClick={() => setShowWallet((v) => !v)} title="Click to view all accounts">
               <span className="balance-amount">${fmt(balance)}</span>
               <span className="balance-currency">{balanceCurrency}</span>
-            </div>
+              <span className="balance-expand" /> 
+            </button>
           )}
           {accounts.length > 0 ? (
             <div className="account-select-wrap">
@@ -550,6 +608,9 @@ export default function TradingTerminal() {
           <span className="ws-status" title={accountStatus}>
             <span className={`ws-dot ${connectionStatus}`} />
           </span>
+          <button className="nc-bell-btn" onClick={() => setShowNotificationCenter((v) => !v)} title="Notifications">
+            <IconBell size={18} />
+          </button>
           {authenticated ? (
             <div className="user-menu-wrap">
               <button className="avatar-btn" onClick={() => setShowUserMenu((v) => !v)}>
@@ -585,6 +646,7 @@ export default function TradingTerminal() {
             {balance !== null && (
               <div className="mobile-menu-balance">${fmt(balance)} {balanceCurrency}</div>
             )}
+            <button className="mobile-menu-wallet-btn" onClick={() => { setShowWallet(true); setShowMobileMenu(false); }}><IconWallet size={16} /> Wallet & Accounts</button>
             {accounts.length > 0 && (
               <select
                 className="mobile-account-select"
@@ -1012,6 +1074,28 @@ export default function TradingTerminal() {
         </section>
       )}
 
+      {/* ===== PORTFOLIO TAB ===== */}
+      {activeTab === "portfolio" && (
+        <section className="workspace">
+          <PortfolioDashboard trades={tradeHistory} balance={balance} balanceCurrency={balanceCurrency} />
+        </section>
+      )}
+
+      {/* ===== RISK MANAGEMENT TAB ===== */}
+      {activeTab === "risk" && (
+        <section className="workspace">
+          <RiskManagement
+            settings={riskSettings}
+            onSettingsChange={setRiskSettings}
+            riskState={riskState}
+            currentStake={parseFloat(stake) || 0}
+            balance={balance}
+            onResetSession={() => setRiskState(createInitialRiskState())}
+            lastResult={lastResult}
+          />
+        </section>
+      )}
+
       {/* ===== SETTINGS TAB ===== */}
       {activeTab === "settings" && (
         <section className="workspace">
@@ -1027,6 +1111,8 @@ export default function TradingTerminal() {
               <h3>Account</h3>
               <p className="muted">Connected: {activeAccount?.type === "real" ? "Real" : "Demo"} · {activeAccount?.currency ?? "—"}</p>
               <p className="muted">Status: {connectionStatus}</p>
+              <p className="muted">Balance: ${balance !== null ? fmt(balance) : '—'} {balanceCurrency}</p>
+              <button className="settings-btn" onClick={() => setShowWallet(true)}><IconWallet size={14} /> Open Wallet</button>
             </div>
             <div className="settings-section">
               <h3>Authentication</h3>
@@ -1046,6 +1132,26 @@ export default function TradingTerminal() {
         </section>
       )}
 
+      {/* ===== WALLET PANEL ===== */}
+      {showWallet && (
+        <WalletPanel
+          activeAccountId={activeAccountId}
+          onSelectAccount={(account) => {
+            void activateAccount({ id: account.id, type: account.type, currency: account.currency, balance: account.balance ?? undefined });
+            setShowWallet(false);
+          }}
+          onClose={() => setShowWallet(false)}
+        />
+      )}
+
+      {/* ===== NOTIFICATION CENTER ===== */}
+      {showNotificationCenter && (
+        <NotificationCenter onClose={() => setShowNotificationCenter(false)} />
+      )}
+
+      {/* ===== TOAST NOTIFICATIONS ===== */}
+      <ToastContainer />
+
       {/* ===== MOBILE BOTTOM NAV ===== */}
       <nav className="mobile-bottom-nav">
         <button className={`bottom-nav-item ${activeTab === "workspace" ? "active" : ""}`} onClick={() => setActiveTab("workspace")}>
@@ -1059,6 +1165,10 @@ export default function TradingTerminal() {
         <button className={`bottom-nav-item ${activeTab === "analyzer" ? "active" : ""}`} onClick={() => setActiveTab("analyzer")}>
           <span className="bottom-nav-icon"><IconBrain size={20} /></span>
           <span>Analyzer</span>
+        </button>
+        <button className={`bottom-nav-item ${activeTab === "portfolio" ? "active" : ""}`} onClick={() => setActiveTab("portfolio")}>
+          <span className="bottom-nav-icon"><IconChartPie size={20} /></span>
+          <span>Portfolio</span>
         </button>
         <button className={`bottom-nav-item ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}>
           <span className="bottom-nav-icon"><IconChartBar size={20} /></span>
