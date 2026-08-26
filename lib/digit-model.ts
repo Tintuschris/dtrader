@@ -360,9 +360,10 @@ export class DigitPredictor {
   startTraining(): void { this.startOnlineLearning(); }
   stopTraining(): void { this.stopOnlineLearning(); }
 
-  private async batchTrainStep(): Promise<void> {
-    console.log("[TF] batchTrainStep called: workerReady=", workerReady, "bufferSize=", this.digitBuffer.length, "isBatchTraining=", this.isBatchTraining);
-    if (!workerReady || this.digitBuffer.length < MIN_SAMPLES_TO_TRAIN || this.isBatchTraining) return;
+  private async batchTrainStep(force = false): Promise<void> {
+    console.log("[TF] batchTrainStep called: workerReady=", workerReady, "bufferSize=", this.digitBuffer.length, "isBatchTraining=", this.isBatchTraining, "force=", force);
+    const minSamples = force ? 10 : MIN_SAMPLES_TO_TRAIN;
+    if (!workerReady || this.digitBuffer.length < minSamples || this.isBatchTraining) return;
     this.isBatchTraining = true;
     try {
       const result = await postAsync<{ loss: number; accuracy: number; epoch: number }>({
@@ -436,7 +437,9 @@ export class DigitPredictor {
   private async saveOnlineMetrics(): Promise<void> { try { await idbSet("onlineMetrics", { totalCorrect: this.onlineMetrics.totalCorrect, totalPredictions: this.onlineMetrics.totalPredictions, onlineUpdates: this.onlineMetrics.onlineUpdates }); } catch { /* */ } }
   private async loadOnlineMetrics(): Promise<void> { try { const s = await idbGet<{ totalCorrect?: number; totalPredictions?: number; onlineUpdates?: number }>("onlineMetrics"); if (s) { this.onlineMetrics.totalCorrect = s.totalCorrect ?? 0; this.onlineMetrics.totalPredictions = s.totalPredictions ?? 0; this.onlineMetrics.onlineUpdates = s.onlineUpdates ?? 0; this.emitOnlineMetrics(); } } catch { /* */ } }
 
-  async trainNow(): Promise<void> { await this.batchTrainStep(); }
+  async trainNow(): Promise<void> {
+    await this.batchTrainStep(true);
+  }
 
   async reset(): Promise<void> {
     this.stopOnlineLearning();

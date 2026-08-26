@@ -1087,7 +1087,7 @@ function NeuralNetView({
 
       {/* Controls */}
       <div className="nn-controls">
-        <button className="nn-btn" onClick={onTrainNow} disabled={modelStatus !== "ready" || bufferSize < 200}>
+        <button className="nn-btn" onClick={onTrainNow} disabled={modelStatus !== "ready" || bufferSize < 10}>
           🧠 Train Now
         </button>
         <button className="nn-btn nn-btn-danger" onClick={onReset}>

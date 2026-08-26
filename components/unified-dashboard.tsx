@@ -237,7 +237,7 @@ export default function UnifiedDashboard({
           onToggle={() => toggle("controls")}
         >
           <div className="dash-controls">
-            <button className="dc-btn dc-primary" onClick={onTrainNow} disabled={modelStatus !== "ready" || bufferSize < 200}>
+            <button className="dc-btn dc-primary" onClick={onTrainNow} disabled={modelStatus !== "ready" || bufferSize < 10}>
               🧠 Train Now
             </button>
             <button className="dc-btn dc-danger" onClick={onReset}>
