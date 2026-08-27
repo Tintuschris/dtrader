@@ -195,9 +195,82 @@ export default function MarketAnalyzerPanel() {
             >
               {autoTradeEnabled ? (autoTradeState.isRunning ? '\u25CF ACTIVE' : '\u25CB ON') : 'OFF'}
             </button>
+            <button
+              onClick={() => setShowAutoConfig(!showAutoConfig)}
+              title="Configure auto-trade settings"
+              style={{
+                background: showAutoConfig ? 'rgba(154,142,210,0.15)' : 'rgba(255,255,255,0.05)',
+                border: '1px solid var(--border)',
+                borderRadius: 6, padding: '4px 8px', color: '#93a1b3',
+                fontSize: 12, cursor: 'pointer', marginTop: 2,
+              }}
+            >
+              ⚙
+            </button>
           </div>
         </div>
       </div>
+
+      {/* Auto-Trade Configuration Panel */}
+      {showAutoConfig && (
+        <div className="at-config-panel">
+          <div className="at-config-header">
+            <span className="at-config-title">Auto-Trade Settings</span>
+            <button className="at-config-close" onClick={() => setShowAutoConfig(false)}>×</button>
+          </div>
+          <div className="at-config-grid">
+            <div className="at-config-field">
+              <label>Contract Type</label>
+              <select value={autoTradeConfig.contractType} onChange={(e) => { const ct = e.target.value as typeof autoTradeConfig.contractType; setAutoTradeConfig(p => ({...p, contractType: ct})); getAutoTradeEngine().updateConfig({contractType: ct}); }}>
+                <option value="DIGITOVER">Digit Over</option>
+                <option value="DIGITUNDER">Digit Under</option>
+                <option value="DIGITODD">Digit Odd</option>
+                <option value="DIGITEVEN">Digit Even</option>
+                <option value="DIGITMATCH">Digit Match</option>
+                <option value="DIGITDIFF">Digit Differs</option>
+              </select>
+            </div>
+            <div className="at-config-field">
+              <label>Stake (USD)</label>
+              <input type="number" min="0.35" max="100" step="0.01" value={autoTradeConfig.stake} onChange={(e) => { const v = parseFloat(e.target.value) || 1; setAutoTradeConfig(p => ({...p, stake: v})); getAutoTradeEngine().updateConfig({stake: v, maxStakePerTrade: v * 10}); }} />
+            </div>
+            <div className="at-config-field">
+              <label>Duration (ticks)</label>
+              <input type="number" min="1" max="50" step="1" value={autoTradeConfig.duration} onChange={(e) => { const v = parseInt(e.target.value) || 5; setAutoTradeConfig(p => ({...p, duration: v})); getAutoTradeEngine().updateConfig({duration: v}); }} />
+            </div>
+            <div className="at-config-field">
+              <label>Min AI Score</label>
+              <input type="number" min="10" max="100" step="5" value={autoTradeConfig.minScore} onChange={(e) => { const v = parseInt(e.target.value) || 65; setAutoTradeConfig(p => ({...p, minScore: v})); getAutoTradeEngine().updateConfig({minScore: v}); }} />
+              <span className="at-config-hint">AI must be this confident to trade</span>
+            </div>
+            <div className="at-config-field">
+              <label>Min ML Confidence %</label>
+              <input type="number" min="0" max="100" step="5" value={autoTradeConfig.minConfidence} onChange={(e) => { const v = parseInt(e.target.value) || 30; setAutoTradeConfig(p => ({...p, minConfidence: v})); getAutoTradeEngine().updateConfig({minConfidence: v}); }} />
+              <span className="at-config-hint">Neural network rolling accuracy</span>
+            </div>
+            <div className="at-config-field">
+              <label>Daily Loss Limit (USD)</label>
+              <input type="number" min="1" max="1000" step="1" value={autoTradeConfig.dailyLossLimit} onChange={(e) => { const v = parseFloat(e.target.value) || 50; setAutoTradeConfig(p => ({...p, dailyLossLimit: v})); getAutoTradeEngine().updateConfig({dailyLossLimit: v}); }} />
+              <span className="at-config-hint">Stops trading when hit</span>
+            </div>
+            <div className="at-config-field">
+              <label>Cooldown (seconds)</label>
+              <input type="number" min="3" max="300" step="1" value={autoTradeConfig.cooldownSec} onChange={(e) => { const v = parseInt(e.target.value) || 15; setAutoTradeConfig(p => ({...p, cooldownSec: v})); getAutoTradeEngine().updateConfig({cooldownMs: v * 1000}); }} />
+              <span className="at-config-hint">Min time between trades</span>
+            </div>
+            <div className="at-config-field">
+              <label>Max Open Trades</label>
+              <input type="number" min="1" max="10" step="1" value={autoTradeConfig.maxOpenContracts} onChange={(e) => { const v = parseInt(e.target.value) || 1; setAutoTradeConfig(p => ({...p, maxOpenContracts: v})); getAutoTradeEngine().updateConfig({maxOpenContracts: v}); }} />
+            </div>
+          </div>
+          <div className="at-config-summary">
+            <span>Per-trade risk: <strong>${autoTradeConfig.stake.toFixed(2)}</strong></span>
+            <span>Daily limit: <strong>${autoTradeConfig.dailyLossLimit.toFixed(2)}</strong></span>
+            <span>Cooldown: <strong>{autoTradeConfig.cooldownSec}s</strong></span>
+            <span>Max contracts: <strong>{autoTradeConfig.maxOpenContracts}</strong></span>
+          </div>
+        </div>
+      )}
 
       {/* AI Accuracy Banner */}
       <div className="analyzer-accuracy-banner">
@@ -497,8 +570,36 @@ export default function MarketAnalyzerPanel() {
         .market-rank-fill { height: 100%; border-radius: 2px; transition: width 0.5s; }
         .market-rank-details { display: flex; justify-content: space-between; font-size: 10px; color: #566477; }
         .market-best-trade { color: #9a8ed2; }
-        .market-entropy { font-family: monospace; }
+                .market-entropy { font-family: monospace; }
+
+        /* Auto-trade config panel */
+        .at-config-panel {
+          padding: 16px; background: #0c141f;
+          border: 1px solid rgba(154,142,210,.3); border-radius: 10px;
+          display: flex; flex-direction: column; gap: 12px;
+        }
+        .at-config-header { display: flex; justify-content: space-between; align-items: center; }
+        .at-config-title { font-size: 13px; font-weight: 700; color: #9a8ed2; text-transform: uppercase; letter-spacing: .05em; }
+        .at-config-close { background: none; border: none; color: #718197; font-size: 18px; cursor: pointer; padding: 0 4px; }
+        .at-config-close:hover { color: #d9e3ed; }
+        .at-config-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+        .at-config-field { display: flex; flex-direction: column; gap: 4px; }
+        .at-config-field label { font-size: 11px; color: #718197; text-transform: uppercase; letter-spacing: .03em; font-weight: 600; }
+        .at-config-field select, .at-config-field input {
+          padding: 7px 10px; background: #1a2332;
+          border: 1px solid #2a3444; border-radius: 6px;
+          color: #d9e3ed; font-size: 13px; outline: none;
+        }
+        .at-config-field select:focus, .at-config-field input:focus { border-color: #9a8ed2; }
+        .at-config-hint { font-size: 10px; color: #566477; }
+        .at-config-summary {
+          display: flex; gap: 16px; padding: 10px 14px;
+          background: rgba(154,142,210,.06); border-radius: 8px;
+          font-size: 12px; color: #718197; flex-wrap: wrap;
+        }
+        .at-config-summary strong { color: #9a8ed2; margin-left: 4px; }
       `}</style>
+
     </div>
   );
 }
