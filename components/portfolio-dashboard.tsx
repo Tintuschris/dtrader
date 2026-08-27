@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   IconTrendingUp,
   IconTrendingDown,
@@ -31,10 +31,12 @@ type Trade = {
 };
 
 type PortfolioProps = {
-  trades: Record<string, unknown>[];
+  accountId: string;
   balance: number | null;
   balanceCurrency: string;
 };
+
+type DerivContract = { contract_id: string; contract_type: string; symbol: string; buy_price: number; payout: number; profit: number; status: string; barrier?: string; purchase_time: number };
 
 type TimeRange = "all" | "today" | "week" | "month";
 
@@ -42,20 +44,34 @@ type TimeRange = "all" | "today" | "week" | "month";
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export default function PortfolioDashboard({ trades, balance, balanceCurrency }: PortfolioProps) {
+export default function PortfolioDashboard({ accountId, balance, balanceCurrency }: PortfolioProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
+  const [closedTrades, setClosedTrades] = useState<DerivContract[]>([]);
+  const [openPositions, setOpenPositions] = useState<DerivContract[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const normalizedTrades: Trade[] = useMemo(() => trades.map((t: Record<string, unknown>) => ({
-    id: String(t.id),
-    contract_type: String(t.contract_type),
-    buy_price: Number(t.stake ?? t.buy_price ?? 0),
-    payout: Number(t.payout),
-    profit: Number(t.profit),
-    status: String(t.status),
-    symbol: t.symbol as string | undefined,
-    digit_prediction: t.digit_prediction as number | undefined,
-    timestamp: t.timestamp as number | undefined,
-  })), [trades]);
+  useEffect(() => {
+    if (!accountId) return;
+    let cancelled = false;
+    void (async () => {
+      setLoading(true); setError(null);
+      try {
+        const query = new URLSearchParams({ accountId, limit: "500", offset: "0" });
+        const [historyResponse, portfolioResponse] = await Promise.all([fetch(`/api/deriv/trades?${query}`, { cache: "no-store" }), fetch(`/api/deriv/portfolio?accountId=${encodeURIComponent(accountId)}`, { cache: "no-store" })]);
+        const history = await historyResponse.json() as { trades?: DerivContract[]; error?: string };
+        const portfolio = await portfolioResponse.json() as { positions?: DerivContract[]; error?: string };
+        if (!historyResponse.ok) throw new Error(history.error ?? "Unable to load closed contracts");
+        if (!portfolioResponse.ok) throw new Error(portfolio.error ?? "Unable to load open positions");
+        if (!cancelled) { setClosedTrades(history.trades ?? []); setOpenPositions(portfolio.positions ?? []); }
+      } catch (cause) { if (!cancelled) setError(cause instanceof Error ? cause.message : "Unable to load portfolio"); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [accountId, refreshKey]);
+
+  const normalizedTrades: Trade[] = useMemo(() => closedTrades.map((trade) => ({ id: trade.contract_id, contract_type: trade.contract_type, buy_price: trade.buy_price, payout: trade.payout, profit: trade.profit, status: trade.profit > 0 ? "won" : trade.profit < 0 ? "lost" : "break_even", symbol: trade.symbol, digit_prediction: trade.barrier === undefined ? undefined : Number(trade.barrier), timestamp: trade.purchase_time * 1000 })), [closedTrades]);
 
   const completedTrades = useMemo(() => {
     const now = Date.now();
@@ -69,7 +85,7 @@ export default function PortfolioDashboard({ trades, balance, balanceCurrency }:
         if (timeRange === "month") return now - t.timestamp < 2_592_000_000;
         return true;
       });
-  }, [trades, timeRange]);
+  }, [normalizedTrades, timeRange]);
 
   const stats = useMemo(() => {
     if (completedTrades.length === 0) {
@@ -201,7 +217,7 @@ export default function PortfolioDashboard({ trades, balance, balanceCurrency }:
         <div>
           <p className="eyebrow">PORTFOLIO</p>
           <h1>Performance Dashboard</h1>
-          <p className="muted">Track your trading performance and analytics.</p>
+          <p className="muted">Analytics from your latest 500 completed contracts; open positions are shown separately.</p>
         </div>
         <div className="time-range-tabs">
           {(["all", "today", "week", "month"] as TimeRange[]).map((r) => (
@@ -212,7 +228,16 @@ export default function PortfolioDashboard({ trades, balance, balanceCurrency }:
         </div>
       </div>
 
-      {completedTrades.length === 0 ? (
+      <div className="portfolio-live-summary">
+        <div><span className="summary-label">Selected account</span><strong>{accountId || "—"}</strong></div>
+        <div><span className="summary-label">Available balance</span><strong>{balance === null ? "—" : `${balance.toFixed(2)} ${balanceCurrency}`}</strong></div>
+        <div><span className="summary-label">Open positions</span><strong>{openPositions.length}</strong></div>
+        <button className="filter-btn refresh-btn" onClick={() => setRefreshKey((key) => key + 1)} disabled={loading}>{loading ? "Refreshing…" : "Refresh data"}</button>
+      </div>
+      {error && <div className="portfolio-empty"><p>{error}</p></div>}
+      {!error && openPositions.length > 0 && <div className="open-positions"><h2>Open positions</h2>{openPositions.map((position) => <div className="open-position" key={position.contract_id}><span>{formatType(position.contract_type)} · {position.symbol}</span><span>Stake {position.buy_price.toFixed(2)} {balanceCurrency}</span><strong className={position.profit >= 0 ? "positive" : "negative"}>{position.profit >= 0 ? "+" : ""}{position.profit.toFixed(2)}</strong></div>)}</div>}
+
+      {!error && completedTrades.length === 0 ? (
         <div className="portfolio-empty">
           <IconChartBar size={48} />
           <h2>No trades yet</h2>

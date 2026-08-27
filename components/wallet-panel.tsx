@@ -24,6 +24,13 @@ type AccountBalance = {
   is_wallet?: boolean; // Whether this is a main wallet account
 };
 
+type WalletBalance = {
+  id: string;
+  walletType: string;
+  currency: string;
+  balance: number | null;
+};
+
 type WalletPanelProps = {
   activeAccountId: string;
   accounts: AccountInfo[];
@@ -63,16 +70,32 @@ export default function WalletPanel({
   const [transferLoading, setTransferLoading] = useState(false);
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferSuccess, setTransferSuccess] = useState(false);
+  const [wallets, setWallets] = useState<WalletBalance[]>([]);
+  const [walletError, setWalletError] = useState<string | null>(null);
 
-  const fetchBalances = useCallback(() => {
-    // Account list comes from the WS hook - just set transfer defaults
+  const fetchBalances = useCallback(async () => {
+    setRefreshing(true);
+    setWalletError(null);
+    try {
+      const response = await fetch("/api/deriv/wallets", { cache: "no-store" });
+      const data = (await response.json()) as { wallets?: WalletBalance[]; error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Unable to load wallets");
+      setWallets(data.wallets ?? []);
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : "Unable to load wallets");
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
     if (wsAccounts.length >= 2 && !transferFrom) {
       setTransferFrom(wsAccounts[0].loginid);
       setTransferTo(wsAccounts[1].loginid);
     }
   }, [wsAccounts, transferFrom]);
 
-  // Accounts arrive automatically via the WS hook on connect
+  useEffect(() => { void fetchBalances(); }, [fetchBalances]);
 
   const handleTransfer = useCallback(async () => {
     if (!transferFrom || !transferTo || !transferAmount) return;
@@ -107,26 +130,24 @@ export default function WalletPanel({
     }
   }, [transferFrom, transferTo, transferAmount, fetchBalances]);
 
-  const walletAccounts: AccountBalance[] = [];
   const tradingAccounts: AccountBalance[] = [];
   for (const a of wsAccounts) {
-    const isWallet = a.loginid.startsWith("CRW") || a.loginid.startsWith("VRW");
     const acctType: "demo" | "real" = a.account_type.toLowerCase().includes("real") ? "real" : "demo";
     const entry: AccountBalance = {
       id: a.loginid,
       type: acctType,
       currency: a.currency,
       balance: a.loginid === activeAccountId ? (activeBalance ?? undefined) : undefined,
-      account_type: a.landing_company_name || (isWallet ? "Wallet" : a.trading_type || "Options"),
-      is_wallet: isWallet,
+      account_type: a.landing_company_name || a.trading_type || "Options",
+      is_wallet: false,
     };
-    if (isWallet) walletAccounts.push(entry); else tradingAccounts.push(entry);
+    tradingAccounts.push(entry);
   }
   
-  const walletBalance = walletAccounts.reduce((s, a) => s + (a.balance ?? 0), 0);
+  const walletBalance = wallets.reduce((sum, wallet) => sum + (wallet.balance ?? 0), 0);
   const tradingBalance = tradingAccounts.reduce((s, a) => s + (a.balance ?? 0), 0);
   
-  const totalBalance = activeBalance ?? 0;
+  const visibleBalance = walletBalance + tradingBalance;
 
   return (
     <>
@@ -140,7 +161,7 @@ export default function WalletPanel({
           <div className="wallet-panel-actions">
             <button
               className="wallet-icon-btn"
-              onClick={() => { setRefreshing(true); setTimeout(() => setRefreshing(false), 1000); }}
+              onClick={() => void fetchBalances()}
               disabled={refreshing}
               title="Refresh balances"
             >
@@ -153,34 +174,15 @@ export default function WalletPanel({
         </div>
 
         {/* Wallet Balance */}
-        {walletAccounts.length > 0 && (
-          <div className="wallet-section">
-            <div className="wallet-section-title">Main Wallet</div>
-            {walletAccounts.map((account) => (
-              <div
-                key={account.id}
-                className={`wallet-account wallet-account-wallet ${account.id === activeAccountId ? "active" : ""}`}
-                onClick={() => onSelectAccount({ id: account.id, type: account.type, currency: account.currency, balance: account.balance ?? undefined })}
-              >
-                <div className="wallet-account-left">
-                  <span className="wallet-wallet-badge">WALLET</span>
-                  <div className="wallet-account-info">
-                    <span className="wallet-account-id">{account.id}</span>
-                    <span className="wallet-account-currency">{account.currency}</span>
-                  </div>
-                </div>
-                <div className="wallet-account-right">
-                  <span className="wallet-account-balance wallet-balance-highlight">
-                    ${fmt(account.balance ?? 0)}
-                  </span>
-                  {account.id === activeAccountId && (
-                    <span className="wallet-active-dot" />
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="wallet-section">
+          <div className="wallet-section-title">Main Wallet</div>
+          {walletError ? <div className="wallet-empty">{walletError}</div> : wallets.length === 0 ? <div className="wallet-loading">Loading wallet balances…</div> : wallets.map((wallet) => (
+            <div key={wallet.id} className="wallet-account wallet-account-wallet">
+              <div className="wallet-account-left"><span className="wallet-wallet-badge">WALLET</span><div className="wallet-account-info"><span className="wallet-account-id">{wallet.walletType}</span><span className="wallet-account-currency">{wallet.currency}</span></div></div>
+              <div className="wallet-account-right"><span className="wallet-account-balance wallet-balance-highlight">${fmt(wallet.balance)}</span></div>
+            </div>
+          ))}
+        </div>
 
         {/* Trading Accounts */}
         {tradingAccounts.length > 0 && (
@@ -241,8 +243,8 @@ export default function WalletPanel({
             <strong>${fmt(tradingBalance)}</strong>
           </div>
           <div className="wallet-total-row wallet-total-main">
-            <span>Total Portfolio</span>
-            <strong className="wallet-total-highlight">${fmt(totalBalance)}</strong>
+            <span>Visible balances</span>
+            <strong className="wallet-total-highlight">${fmt(visibleBalance)}</strong>
           </div>
         </div>
 
@@ -250,10 +252,11 @@ export default function WalletPanel({
         {wsAccounts.length >= 2 && (
           <button
             className="wallet-transfer-btn"
-            onClick={() => setShowTransfer(true)}
+            disabled
+            title="Transfers are intentionally disabled until the dedicated Deriv transfer workflow is implemented."
           >
             <IconSwitch2 size={16} />
-            Transfer Between Accounts
+            Transfers coming soon
           </button>
         )}
 
