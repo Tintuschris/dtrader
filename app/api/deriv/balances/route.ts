@@ -19,7 +19,6 @@ type AccountBalance = {
 const OPTIONS_REST_URL = "https://api.derivws.com/trading/v1/options";
 const CFD_REST_URL = "https://api.derivws.com/trading/v1/cfds";
 const MULTIPLIERS_REST_URL = "https://api.derivws.com/trading/v1/multipliers";
-const WALLET_REST_URL = "https://api.derivws.com/trading/v1/wallet";
 
 let balanceCache: { accounts: AccountBalance[]; timestamp: number } | null = null;
 const CACHE_TTL_MS = 30_000;
@@ -53,6 +52,9 @@ async function fetchAccountsList(accessToken: string, baseUrl: string): Promise<
   console.log("[Balances] Parsed accounts count from", baseUrl, ":", Array.isArray(accounts) ? accounts.length : "not array");
   if (Array.isArray(accounts) && accounts.length > 0) {
     console.log("[Balances] First account keys from", baseUrl, ":", Object.keys(accounts[0]));
+    console.log("[Balances] First account sample from", baseUrl, ":", JSON.stringify(accounts[0], null, 2));
+    // Log all account IDs to see wallet patterns
+    console.log("[Balances] All account IDs from", baseUrl, ":", accounts.map(a => extractLoginId(a)));
   }
   return Array.isArray(accounts) ? accounts : [];
 }
@@ -61,18 +63,16 @@ async function fetchAccountsList(accessToken: string, baseUrl: string): Promise<
 async function fetchAllAccounts(accessToken: string): Promise<Array<{ account: Record<string, unknown>; type: string; is_wallet?: boolean }>> {
   const allAccounts: Array<{ account: Record<string, unknown>; type: string; is_wallet?: boolean }> = [];
   
-  // Try Wallet endpoint first (main wallet)
-  try {
-    const walletAccounts = await fetchAccountsList(accessToken, WALLET_REST_URL);
-    walletAccounts.forEach(acct => allAccounts.push({ account: acct, type: "Wallet", is_wallet: true }));
-  } catch (err) {
-    console.log("[Balances] Wallet endpoint failed:", err instanceof Error ? err.message : err);
-  }
-
-  // Try Options endpoint
+  // Try Options endpoint (this should include all accounts including wallets)
   try {
     const optionsAccounts = await fetchAccountsList(accessToken, OPTIONS_REST_URL);
-    optionsAccounts.forEach(acct => allAccounts.push({ account: acct, type: "Options", is_wallet: false }));
+    optionsAccounts.forEach(acct => {
+      const loginId = extractLoginId(acct);
+      // Identify wallet accounts by their ID pattern (CRW = real wallet, VRW = virtual wallet)
+      const isWallet = loginId.startsWith("CRW") || loginId.startsWith("VRW");
+      const accountType = isWallet ? "Wallet" : "Options";
+      allAccounts.push({ account: acct, type: accountType, is_wallet: isWallet });
+    });
   } catch (err) {
     console.log("[Balances] Options endpoint failed:", err instanceof Error ? err.message : err);
   }
