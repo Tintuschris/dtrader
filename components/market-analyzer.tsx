@@ -23,6 +23,7 @@ import {
   type BacktestProgress,
 } from "../lib/market-analyzer";
 import type { DigitPredictor as DigitPredictorType, EpochProgress, PredictionRecord, ProbSnapshot } from "../lib/digit-model";
+import { getAutoTradeEngine, type AutoTradeState } from "../lib/auto-trade";
 import TrainingChart from "./training-chart";
 import ConfusionMatrix from "./confusion-matrix";
 import ProbDistChart from "./prob-dist-chart";
@@ -53,6 +54,11 @@ export default function MarketAnalyzerPanel() {
     rollingAccuracy: 0, rollingCorrect: 0, rollingTotal: 0,
     totalCorrect: 0, totalPredictions: 0, pendingCount: 0,
     onlineUpdates: 0, lastConfidence: 0, isOnlineLearning: false,
+  });
+  const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
+  const [autoTradeState, setAutoTradeState] = useState<AutoTradeState>({
+    isRunning: false, lastTradeTime: 0, tradesToday: 0, pnlToday: 0,
+    consecutiveLosses: 0, lastPrediction: "", lastTradeResult: null, openContracts: 0,
   });
   const [epochHistory, setEpochHistory] = useState<EpochProgress[]>([]);
   const [gradNormHistory, setGradNormHistory] = useState<{ timestamp: number; gradNorm: number; loss: number; lr: number }[]>([]);
@@ -92,8 +98,7 @@ export default function MarketAnalyzerPanel() {
     });
 
     return () => {
-      unsub();
-      unsubStatus();
+      unsub();      unsubStatus();
       unsubMetrics();
       unsubOnline();
       unsubEpoch();
@@ -102,6 +107,14 @@ export default function MarketAnalyzerPanel() {
       unsubProbHistory();
       analyzer.destroy();
     };
+
+  }, []);
+
+  /* ---- auto-trade state subscription ---- */
+  useEffect(() => {
+    const engine = getAutoTradeEngine();
+    const unsub = engine.onStateChange((s) => setAutoTradeState(s));
+    return () => { unsub(); };
   }, []);
 
   const startStreaming = useCallback(() => {
@@ -153,6 +166,30 @@ export default function MarketAnalyzerPanel() {
               <IconPlayerStop size={14} /> Stop
             </button>
           )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end', marginLeft: 8 }}>
+            <span style={{ fontSize: 10, color: '#93a1b3', letterSpacing: '.05em' }}>AUTO-TRADE</span>
+            <button
+              onClick={() => {
+                const engine = getAutoTradeEngine();
+                const next = !autoTradeEnabled;
+                setAutoTradeEnabled(next);
+                engine.updateConfig({ enabled: next, symbol: selectedMarket });
+              }}
+              style={{
+                background: autoTradeEnabled ? 'rgba(70,211,189,0.15)' : 'rgba(255,255,255,0.05)',
+                border: `1px solid ${autoTradeEnabled ? 'rgba(70,211,189,0.4)' : 'var(--border)'}`,
+                borderRadius: 6,
+                padding: '4px 10px',
+                color: autoTradeEnabled ? '#8de7d9' : '#93a1b3',
+                fontSize: 11,
+                cursor: 'pointer',
+                fontWeight: 600,
+                transition: '.15s',
+              }}
+            >
+              {autoTradeEnabled ? (autoTradeState.isRunning ? '\u25CF ACTIVE' : '\u25CB ON') : 'OFF'}
+            </button>
+          </div>
         </div>
       </div>
 

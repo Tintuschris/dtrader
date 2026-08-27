@@ -24,6 +24,7 @@ import WalletPanel from "./wallet-panel";
 import { ToastContainer, NotificationCenter, pushNotification } from "./notification-system";
 import PortfolioDashboard from "./portfolio-dashboard";
 import { getGlobalAnalyzer } from "../lib/market-analyzer";
+import { getAutoTradeEngine } from "../lib/auto-trade";
 import RiskManagement, { defaultRiskSettings, createInitialRiskState, checkRiskLimits, updateRiskState, type RiskSettings, type RiskState } from "./risk-management";
 
 /* ------------------------------------------------------------------ */
@@ -210,6 +211,31 @@ export default function TradingTerminal() {
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  /* ---- wire auto-trade engine ---- */
+  useEffect(() => {
+    if (connectionStatus !== "connected") return;
+    const engine = getAutoTradeEngine();
+    engine.setAdapter({
+      propose: async (req) => {
+        const p = await propose({
+          contract_type: req.contract_type,
+          symbol: req.symbol,
+          amount: req.amount,
+          currency: req.currency,
+          duration_ticks: req.duration,
+        });
+        if (!p) return null;
+        return { id: p.id, ask_price: p.ask_price, payout: p.payout };
+      },
+      buy: async (proposalId, price) => {
+        const c = await buy(proposalId, price);
+        if (!c) return null;
+        return { contract_id: c.contract_id };
+      },
+      subscribeToContract,
+    });
+  }, [connectionStatus, propose, buy, subscribeToContract]);
 
   /* ---- load markets from API ---- */
   useEffect(() => {
