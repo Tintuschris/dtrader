@@ -270,15 +270,12 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
           <table className="history-table">
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Time</th>
+                <th>Date &amp; Time</th>
                 <th>Contract</th>
-                <th>Market</th>
                 <th>Digit</th>
-                <th>Duration</th>
                 <th>Stake</th>
                 <th>Payout</th>
-                <th>P&L</th>
+                <th>P&amp;L</th>
                 <th>Account</th>
                 <th>Status</th>
               </tr>
