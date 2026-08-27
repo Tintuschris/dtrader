@@ -56,6 +56,12 @@ export default function MarketAnalyzerPanel() {
     onlineUpdates: 0, lastConfidence: 0, isOnlineLearning: false,
   });
   const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
+  const [showAutoConfig, setShowAutoConfig] = useState(false);
+  const [autoTradeConfig, setAutoTradeConfig] = useState({
+    contractType: "DIGITOVER" as const,
+    stake: 1, duration: 5, minScore: 65, minConfidence: 30,
+    dailyLossLimit: 50, cooldownSec: 15, maxOpenContracts: 1,
+  });
   const [autoTradeState, setAutoTradeState] = useState<AutoTradeState>({
     isRunning: false, lastTradeTime: 0, tradesToday: 0, pnlToday: 0,
     consecutiveLosses: 0, lastPrediction: "", lastTradeResult: null, openContracts: 0,

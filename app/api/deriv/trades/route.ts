@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession, getAuthHeaders } from "../../../../lib/deriv-session";
+import { getSession } from "../../../../lib/deriv-session";
 import WebSocket from "ws";
 
 export const runtime = "nodejs";
@@ -25,41 +25,56 @@ type DerivTrade = {
 
 const OPTIONS_REST_URL = "https://api.derivws.com/trading/v1/options";
 
-/**
- * Get an authenticated WebSocket URL via the OTP endpoint.
- */
-async function getOtpUrl(accountId: string, accessToken: string): Promise<string> {
-  const appId = process.env.DERIV_APP_ID;
-  if (!appId) throw new Error("DERIV_APP_ID not configured");
-
-  const response = await fetch(`${OPTIONS_REST_URL}/accounts/${encodeURIComponent(accountId)}/otp`, {
-    method: "POST",
+/** Fetch the list of accounts from Deriv's REST endpoint. */
+async function fetchAccountsList(accessToken: string): Promise<Array<Record<string, unknown>>> {
+  const appId = process.env.DERIV_APP_ID ?? "";
+  const res = await fetch(`${OPTIONS_REST_URL}/accounts`, {
+    method: "GET",
     headers: {
+      Authorization: "Bearer " + accessToken,
       "Deriv-App-ID": appId,
-      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
     },
     cache: "no-store",
   });
+  console.log("[Trades] GET /accounts status:", res.status);
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    console.warn("[Trades] GET /accounts error body:", errBody.substring(0, 500));
+    return [];
+  }
+  const raw = await res.json();
+  const accounts =
+    raw?.data?.accounts ?? raw?.data ?? raw?.accounts ??
+    (Array.isArray(raw) ? raw : []);
+  console.log("[Trades] Parsed accounts count:", Array.isArray(accounts) ? accounts.length : "not array");
+  return Array.isArray(accounts) ? accounts : [];
+}
 
-  if (!response.ok) throw new Error(`OTP request failed: HTTP ${response.status}`);
-  const payload = await response.json() as { data?: { url?: string } };
+async function getOtpUrl(accountId: string, accessToken: string): Promise<string> {
+  const appId = process.env.DERIV_APP_ID ?? "";
+  const res = await fetch(`${OPTIONS_REST_URL}/accounts/${encodeURIComponent(accountId)}/otp`, {
+    method: "POST",
+    headers: { "Deriv-App-ID": appId, Authorization: "Bearer " + accessToken },
+    cache: "no-store",
+  });
+  console.log("[Trades] OTP status for", accountId, ":", res.status);
+  if (!res.ok) throw new Error("OTP failed: HTTP " + res.status);
+  const payload = (await res.json()) as { data?: { url?: string } };
   const wsUrl = payload?.data?.url;
-  if (!wsUrl) throw new Error("No WebSocket URL returned");
+  if (!wsUrl) throw new Error("No WebSocket URL in OTP response");
   return wsUrl;
 }
 
-/**
- * Make a request to an authenticated Deriv WebSocket.
- */
-function authWsRequest<T>(wsUrl: string, payload: Record<string, unknown>, expectedMsgType: string, timeoutMs = 10000): Promise<T> {
+function wsRequest<T>(wsUrl: string, payload: Record<string, unknown>, msgType: string, timeoutMs = 10000): Promise<T> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
-    const timer = setTimeout(() => { ws.close(); reject(new Error("Timeout")); }, timeoutMs);
+    const timer = setTimeout(() => { ws.close(); reject(new Error("WS timeout")); }, timeoutMs);
     ws.on("open", () => ws.send(JSON.stringify(payload)));
     ws.on("message", (event) => {
       try {
         const msg = JSON.parse(String(event));
-        if (msg.msg_type === expectedMsgType) {
+        if (msg.msg_type === msgType) {
           clearTimeout(timer); ws.close();
           if (msg.error) reject(new Error(msg.error.message ?? JSON.stringify(msg.error)));
           else resolve(msg);
@@ -71,73 +86,64 @@ function authWsRequest<T>(wsUrl: string, payload: Record<string, unknown>, expec
   });
 }
 
-/**
- * GET /api/deriv/trades
- *
- * Fetches the user's trade history from Deriv using the authenticated WebSocket.
- */
+function extractLoginId(acct: Record<string, unknown>): string {
+  return String(acct.loginid ?? acct.account_id ?? acct.accountId ?? acct.id ?? "");
+}
+
+function normalizeStatus(status: string): string {
+  const s = status.toLowerCase();
+  if (s.includes("won") || s === "win") return "won";
+  if (s.includes("lost") || s === "loss") return "lost";
+  if (s.includes("sold")) return "sold";
+  if (s.includes("open") || s.includes("pending")) return "open";
+  if (s.includes("expired")) return "expired";
+  return s || "unknown";
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const limit = parseInt(searchParams.get("limit") ?? "50", 10);
 
   const session = await getSession();
   if (!session?.accessToken) {
-    return NextResponse.json({ error: "Not authenticated. Please log in.", trades: [] }, { status: 401 });
+    console.log("[Trades] No session");
+    return NextResponse.json({ trades: [], total: 0, error: "Not authenticated. Please log in." }, { status: 401 });
   }
 
   try {
-    // Step 1: Get account ID from session (stored during OAuth) or fallback to accounts REST endpoint
+    // Step 1: Get accountId — try session first, then fetch from REST
     let accountId = session.loginId;
-    
+    let accountsRaw: Array<Record<string, unknown>> = [];
+
     if (!accountId) {
-      // Fallback: fetch accounts list from REST endpoint
-      try {
-        const accountsRes = await fetch(`${OPTIONS_REST_URL}/accounts`, {
-          method: "GET",
-          headers: {
-            "Deriv-App-ID": process.env.DERIV_APP_ID ?? "",
-            Authorization: `Bearer ${session.accessToken}`,
-            "Content-Type": "application/json",
-          },
-          cache: "no-store",
-        });
-        const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
-        const accountsList = accountsPayload?.data?.accounts ?? [];
-        if (Array.isArray(accountsList) && accountsList.length > 0) {
-          // Deriv returns "loginid" as the primary account identifier
-          accountId = String(
-            accountsList[0].loginid ??
-            accountsList[0].account_id ??
-            accountsList[0].accountId ??
-            ""
-          );
-          console.log("[Trades] Fetched accountId from REST:", accountId);
-        }
-      } catch (err) {
-        console.warn("[Trades] REST accounts fetch failed:", err);
+      console.log("[Trades] No loginId in session, fetching accounts list...");
+      accountsRaw = await fetchAccountsList(session.accessToken);
+      if (accountsRaw.length > 0) {
+        accountId = extractLoginId(accountsRaw[0]);
+        console.log("[Trades] Extracted accountId:", accountId);
       }
     }
 
     if (!accountId) {
-      return NextResponse.json({ trades: [], total: 0, error: "Not authenticated — please log in with Deriv" }, { status: 401 });
+      console.warn("[Trades] Could not determine accountId");
+      return NextResponse.json({ trades: [], total: 0, error: "Could not determine account ID. Please log out and log back in." });
     }
 
+    // Step 2: Get profit_table via OTP → authenticated WebSocket
     const wsUrl = await getOtpUrl(accountId, session.accessToken);
-    const profitData = await authWsRequest<{
+    const profitData = await wsRequest<{
       profit_table?: {
         transactions?: Record<string, unknown>[];
         count?: number;
         loginid?: string;
       };
-    }>(
-      wsUrl,
-      { profit_table: 1, limit, offset: 0 },
-      "profit_table",
-    );
+    }>(wsUrl, { profit_table: 1, limit, offset: 0 }, "profit_table");
 
     const profitTable = profitData.profit_table;
     const rawTrades = profitTable?.transactions ?? [];
     const accountLoginid = profitTable?.loginid ?? accountId;
+
+    console.log("[Trades] Got", rawTrades.length, "trades from Deriv for", accountLoginid);
 
     const trades: DerivTrade[] = rawTrades.map((t: Record<string, unknown>) => {
       const isDemo = accountLoginid.startsWith("VR") || accountLoginid.includes("demo");
@@ -166,18 +172,8 @@ export async function GET(request: NextRequest) {
       authenticated: true,
     });
   } catch (err) {
-    console.error("Failed to fetch trades:", err);
+    console.error("[Trades] Error:", err);
     const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ trades: [], total: 0, error: `${message}` });
+    return NextResponse.json({ trades: [], total: 0, error: message });
   }
-}
-
-function normalizeStatus(status: string): string {
-  const s = status.toLowerCase();
-  if (s.includes("won") || s === "win") return "won";
-  if (s.includes("lost") || s === "loss") return "lost";
-  if (s.includes("sold")) return "sold";
-  if (s.includes("open") || s.includes("pending")) return "open";
-  if (s.includes("expired")) return "expired";
-  return s || "unknown";
 }
