@@ -110,25 +110,70 @@ export async function GET() {
       return NextResponse.json({ accounts: [] });
     }
 
-    // Step 2: Get balance via authenticated WebSocket using the loginId
+    // Step 2: Get all sub-accounts via authenticated WebSocket
+    // Deriv real accounts have sub-accounts (options, multipliers, etc.)
     let accounts: AccountBalance[] = [];
     try {
       const wsUrl = await getOtpUrl(accountId, session.accessToken);
-      const balanceData = await authWsRequest<{ balance?: { balance?: number; currency?: string } }>(
+      
+      // First, get the list of all accounts
+      const accountsData = await authWsRequest<{
+        accounts?: Array<Record<string, unknown>>;
+      }>(
         wsUrl,
-        { balance: 1, subscribe: 0 },
-        "balance",
+        { accounts: 1 },
+        "accounts",
       );
-      const bal = balanceData.balance?.balance;
-      const currency = balanceData.balance?.currency ?? "USD";
-      const type: "demo" | "real" = accountId.startsWith("VR") || accountId.includes("demo") ? "demo" : "real";
-      accounts = [{
-        id: accountId,
-        loginid: accountId,
-        type,
-        currency,
-        balance: typeof bal === "number" ? bal : null,
-      }];
+
+      const accountsList = accountsData.accounts ?? [];
+      
+      if (accountsList.length === 0) {
+        // Fallback: just get balance for the main account
+        const balanceData = await authWsRequest<{ balance?: { balance?: number; currency?: string } }>(
+          wsUrl,
+          { balance: 1, subscribe: 0 },
+          "balance",
+        );
+        const bal = balanceData.balance?.balance;
+        const currency = balanceData.balance?.currency ?? "USD";
+        const type: "demo" | "real" = accountId.startsWith("VR") || accountId.includes("demo") ? "demo" : "real";
+        accounts = [{
+          id: accountId,
+          loginid: accountId,
+          type,
+          currency,
+          balance: typeof bal === "number" ? bal : null,
+        }];
+      } else {
+        // Get balance for each sub-account
+        for (const acct of accountsList) {
+          const id = String(acct.loginid ?? acct.account_id ?? "");
+          if (!id) continue;
+          const rawType = String(acct.account_type ?? acct.type ?? "demo").toLowerCase();
+          const type: "demo" | "real" = rawType.includes("real") ? "real" : "demo";
+          const currency = String(acct.currency ?? "USD");
+          
+          try {
+            // Get OTP for this specific sub-account
+            const subWsUrl = await getOtpUrl(id, session.accessToken);
+            const balanceData = await authWsRequest<{ balance?: { balance?: number; currency?: string } }>(
+              subWsUrl,
+              { balance: 1, subscribe: 0 },
+              "balance",
+            );
+            const bal = balanceData.balance?.balance;
+            accounts.push({
+              id,
+              loginid: id,
+              type,
+              currency: balanceData.balance?.currency ?? currency,
+              balance: typeof bal === "number" ? bal : null,
+            });
+          } catch {
+            accounts.push({ id, loginid: id, type, currency, balance: null });
+          }
+        }
+      }
     } catch {
       accounts = [];
     }

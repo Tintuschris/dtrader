@@ -149,6 +149,7 @@ export default function TradingTerminal() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showMarketPicker, setShowMarketPicker] = useState(false);
+  const [marketSearch, setMarketSearch] = useState("");
   const [markets, setMarkets] = useState<Market[]>([]);
   const [marketsLoading, setMarketsLoading] = useState(true);
   const [showWallet, setShowWallet] = useState(false);
@@ -555,7 +556,14 @@ export default function TradingTerminal() {
     return counts.map((c) => Number(((c / total) * 100).toFixed(1)));
   }, [ticks]);
 
-  /* ---- chart auto-scaling ---- */
+  /* ---- chart auto-scaling with Deriv-style axes ---- */
+  const CHART_LEFT = 50;
+  const CHART_RIGHT = 860;
+  const CHART_TOP = 15;
+  const CHART_BOTTOM = 335;
+  const CHART_WIDTH = CHART_RIGHT - CHART_LEFT;
+  const CHART_HEIGHT = CHART_BOTTOM - CHART_TOP;
+
   const chartRange = useMemo(() => {
     if (ticks.length === 0) return { min: 640, max: 650, padding: 5 };
     const values = ticks.map((t) => t.value);
@@ -566,10 +574,40 @@ export default function TradingTerminal() {
     return { min: min - padding, max: max + padding, padding };
   }, [ticks]);
 
+  const chartX = useCallback((index: number) => {
+    const total = Math.max(ticks.length - 1, 1);
+    return CHART_LEFT + (index / total) * CHART_WIDTH;
+  }, [ticks.length]);
+
   const chartY = useCallback((value: number) => {
     const range = chartRange.max - chartRange.min || 1;
-    return 30 + ((chartRange.max - value) / range) * 280;
+    return CHART_TOP + ((chartRange.max - value) / range) * CHART_HEIGHT;
   }, [chartRange]);
+
+  const priceAxisTicks = useMemo(() => {
+    const { min, max } = chartRange;
+    const count = 5;
+    const result = [];
+    for (let i = 0; i < count; i++) {
+      const val = min + (i / (count - 1)) * (max - min);
+      result.push({ value: val, y: chartY(val) });
+    }
+    return result;
+  }, [chartRange, chartY]);
+
+  const timeAxisTicks = useMemo(() => {
+    if (ticks.length < 2) return [];
+    const count = Math.min(5, ticks.length);
+    const result = [];
+    for (let i = 0; i < count; i++) {
+      const idx = Math.floor((i / (count - 1)) * (ticks.length - 1));
+      const now = new Date();
+      now.setSeconds(now.getSeconds() - (ticks.length - 1 - idx));
+      const label = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      result.push({ label, x: chartX(idx) });
+    }
+    return result;
+  }, [ticks, chartX]);
 
   const stakeNum = parseFloat(stake) || 0;
   const potentialPayout = currentProposal?.payout ?? 0;
@@ -763,19 +801,35 @@ export default function TradingTerminal() {
                   {showMarketPicker && (
                     <div className="market-dropdown">
                       <div className="market-dropdown-header">
-                        <span>Select market <span className="market-count">{markets.length}</span></span>
+                        <span>Select market <span className="market-count">{marketSearch ? markets.filter((m) => m.display_name.toLowerCase().includes(marketSearch.toLowerCase()) || m.symbol.toLowerCase().includes(marketSearch.toLowerCase())).length : markets.length}</span></span>
                         <div className="market-dropdown-actions">
                           <button className="market-refresh-btn" onClick={async () => { const res = await fetch("/api/deriv/markets?refresh=1"); const data = await res.json(); if (data.markets?.length) setMarkets(data.markets); }} title="Refresh markets"><IconRefresh size={16} /></button>
                           <button className="market-dropdown-close" onClick={() => setShowMarketPicker(false)}><IconX size={14} /></button>
                         </div>
                       </div>
+                      <div className="market-search-wrap">
+                        <input
+                          className="market-search-input"
+                          type="text"
+                          placeholder="Search markets..."
+                          value={marketSearch}
+                          onChange={(e) => setMarketSearch(e.target.value)}
+                          autoFocus
+                        />
+                      </div>
                       {Object.entries(
-                        markets.reduce((acc, m) => {
-                          const group = m.submarket_display_name || m.market_display_name || "Other";
-                          if (!acc[group]) acc[group] = [];
-                          acc[group].push(m);
-                          return acc;
-                        }, {} as Record<string, Market[]>)
+                        markets
+                          .filter((m) => {
+                            if (!marketSearch) return true;
+                            const q = marketSearch.toLowerCase();
+                            return m.display_name.toLowerCase().includes(q) || m.symbol.toLowerCase().includes(q);
+                          })
+                          .reduce((acc, m) => {
+                            const group = m.submarket_display_name || m.market_display_name || "Other";
+                            if (!acc[group]) acc[group] = [];
+                            acc[group].push(m);
+                            return acc;
+                          }, {} as Record<string, Market[]>)
                       ).map(([group, items]) => (
                         <div key={group} className="market-group">
                           <div className="market-group-label">{group}</div>
@@ -783,7 +837,7 @@ export default function TradingTerminal() {
                             <button
                               key={m.symbol}
                               className={`market-option ${symbol === m.symbol ? "active" : ""}`}
-                              onClick={() => { setSymbol(m.symbol); setShowMarketPicker(false); }}
+                              onClick={() => { setSymbol(m.symbol); setShowMarketPicker(false); setMarketSearch(""); }}
                             >
                               <span className="market-option-name">{m.display_name}</span>
                               <span className="market-option-symbol">{m.symbol}</span>
@@ -817,34 +871,46 @@ export default function TradingTerminal() {
                       <div className="chart-skeleton-shimmer" />
                     </div>
                   )}
-                  <div className="chart-gridlines" />
-                  <svg className="chart" viewBox="0 0 900 360" preserveAspectRatio="none" aria-label="Live price chart" role="img">
+                  <svg className="chart" viewBox="0 0 920 360" preserveAspectRatio="none" aria-label="Live price chart" role="img">
                     <defs>
                       <linearGradient id="area" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0%" stopColor="#37d4bd" stopOpacity=".22" />
+                        <stop offset="0%" stopColor="#37d4bd" stopOpacity=".18" />
                         <stop offset="100%" stopColor="#37d4bd" stopOpacity="0" />
                       </linearGradient>
                     </defs>
-                    <path d={`M 0 ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${(i / Math.max(ticks.length - 1, 1)) * 900} ${chartY(t.value)}`).join(" ")} L 900 360 L 0 360 Z`} fill="url(#area)" />
-                    <path d={`M 0 ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${(i / Math.max(ticks.length - 1, 1)) * 900} ${chartY(t.value)}`).join(" ")}`} fill="none" stroke="#43d6c1" strokeWidth="3" vectorEffect="non-scaling-stroke" />
-                    <line x1="870" y1="0" x2="870" y2="360" stroke="#b9a1ff" strokeDasharray="5 5" opacity=".8" />
-                    <circle cx="870" cy={chartY(current.value)} r="7" fill="#b9a1ff" stroke="#fff" strokeWidth="2" />
-                    {/* Bot trade markers */}
+                    {priceAxisTicks.map((pt, i) => (
+                      <line key={`hg${i}`} x1={CHART_LEFT} y1={pt.y} x2={CHART_RIGHT} y2={pt.y} stroke="rgba(157,179,203,0.08)" strokeWidth="1" />
+                    ))}
+                    {timeAxisTicks.map((tt, i) => (
+                      <line key={`vg${i}`} x1={tt.x} y1={CHART_TOP} x2={tt.x} y2={CHART_BOTTOM} stroke="rgba(157,179,203,0.06)" strokeWidth="1" />
+                    ))}
+                    <path d={`M ${chartX(0)} ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${chartX(i)} ${chartY(t.value)}`).join(" ")} L ${chartX(ticks.length - 1)} ${CHART_BOTTOM} L ${chartX(0)} ${CHART_BOTTOM} Z`} fill="url(#area)" />
+                    <path d={`M ${chartX(0)} ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${chartX(i)} ${chartY(t.value)}`).join(" ")}`} fill="none" stroke="#43d6c1" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+                    {priceAxisTicks.map((pt, i) => (
+                      <text key={`pa${i}`} x={CHART_RIGHT + 8} y={pt.y + 4} fill="#617085" fontSize="10" fontFamily="Space Grotesk, monospace">{pt.value.toFixed(2)}</text>
+                    ))}
+                    {timeAxisTicks.map((tt, i) => (
+                      <text key={`ta${i}`} x={tt.x} y={CHART_BOTTOM + 18} fill="#617085" fontSize="9" fontFamily="Space Grotesk, monospace" textAnchor="middle">{tt.label}</text>
+                    ))}
+                    <line x1={CHART_LEFT} y1={chartY(current.value)} x2={CHART_RIGHT} y2={chartY(current.value)} stroke="#b9a1ff" strokeDasharray="4 3" opacity=".6" strokeWidth="1" />
+                    <line x1={CHART_RIGHT} y1={chartY(current.value)} x2={CHART_RIGHT + 6} y2={chartY(current.value)} stroke="#b9a1ff" strokeWidth="2" />
+                    <rect x={CHART_RIGHT + 6} y={chartY(current.value) - 10} width="58" height="20" rx="4" fill="#b9a1ff" />
+                    <text x={CHART_RIGHT + 35} y={chartY(current.value) + 4} fill="#0b1420" fontSize="10" fontWeight="700" fontFamily="Space Grotesk, monospace" textAnchor="middle">{fmt(current.value)}</text>
+                    <circle cx={CHART_RIGHT} cy={chartY(current.value)} r="4" fill="#b9a1ff" stroke="#0b1420" strokeWidth="2" />
                     {activeContract && (
                       <>
                         {activeContract.entry_tick != null && (
                           <g>
-                            <circle cx={870} cy={chartY(activeContract.entry_tick)} r="5" fill="#f0c040" stroke="#0b1420" strokeWidth="2" />
-                            <text x={860} y={chartY(activeContract.entry_tick) - 10} textAnchor="end" fill="#f0c040" fontSize="10" fontWeight="bold">ENTRY</text>
+                            <circle cx={CHART_RIGHT} cy={chartY(activeContract.entry_tick)} r="5" fill="#f0c040" stroke="#0b1420" strokeWidth="2" />
+                            <text x={CHART_RIGHT - 8} y={chartY(activeContract.entry_tick) - 10} textAnchor="end" fill="#f0c040" fontSize="9" fontWeight="bold">ENTRY</text>
                           </g>
                         )}
                         {activeContract.barrier && (
-                          <line x1="0" y1={chartY(Number(activeContract.barrier))} x2="900" y2={chartY(Number(activeContract.barrier))} stroke="#f08080" strokeDasharray="4 4" strokeWidth="1.5" opacity=".6" />
+                          <line x1={CHART_LEFT} y1={chartY(Number(activeContract.barrier))} x2={CHART_RIGHT} y2={chartY(Number(activeContract.barrier))} stroke="#f08080" strokeDasharray="4 4" strokeWidth="1.5" opacity=".6" />
                         )}
                       </>
                     )}
                   </svg>
-                  <div className="crosshair-label" style={{ top: `${Math.max(5, Math.min(90, (chartY(current.value) / 310) * 100))}%` }}>{fmt(current.value)}</div>
                 </div>
                 <div className="digit-strip-heading">
                   <span>Digit frequency</span>
@@ -871,18 +937,25 @@ export default function TradingTerminal() {
                         <div className="chart-skeleton-shimmer" />
                       </div>
                     )}
-                    <div className="chart-gridlines" />
-                    <svg className="chart" viewBox="0 0 900 360" preserveAspectRatio="none" aria-label="Live price chart" role="img">
+                    <svg className="chart" viewBox="0 0 920 360" preserveAspectRatio="none" aria-label="Live price chart" role="img">
                       <defs>
                         <linearGradient id="area-m" x1="0" x2="0" y1="0" y2="1">
-                          <stop offset="0%" stopColor="#37d4bd" stopOpacity=".22" />
+                          <stop offset="0%" stopColor="#37d4bd" stopOpacity=".18" />
                           <stop offset="100%" stopColor="#37d4bd" stopOpacity="0" />
                         </linearGradient>
                       </defs>
-                      <path d={`M 0 ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${(i / Math.max(ticks.length - 1, 1)) * 900} ${chartY(t.value)}`).join(" ")} L 900 360 L 0 360 Z`} fill="url(#area-m)" />
-                      <path d={`M 0 ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${(i / Math.max(ticks.length - 1, 1)) * 900} ${chartY(t.value)}`).join(" ")}`} fill="none" stroke="#43d6c1" strokeWidth="3" vectorEffect="non-scaling-stroke" />
-                      <line x1="870" y1="0" x2="870" y2="360" stroke="#b9a1ff" strokeDasharray="5 5" opacity=".8" />
-                      <circle cx="870" cy={chartY(current.value)} r="7" fill="#b9a1ff" stroke="#fff" strokeWidth="2" />
+                      {priceAxisTicks.map((pt, i) => (
+                        <line key={`hm${i}`} x1={CHART_LEFT} y1={pt.y} x2={CHART_RIGHT} y2={pt.y} stroke="rgba(157,179,203,0.08)" strokeWidth="1" />
+                      ))}
+                      <path d={`M ${chartX(0)} ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${chartX(i)} ${chartY(t.value)}`).join(" ")} L ${chartX(ticks.length - 1)} ${CHART_BOTTOM} L ${chartX(0)} ${CHART_BOTTOM} Z`} fill="url(#area-m)" />
+                      <path d={`M ${chartX(0)} ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${chartX(i)} ${chartY(t.value)}`).join(" ")}`} fill="none" stroke="#43d6c1" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+                      {priceAxisTicks.map((pt, i) => (
+                        <text key={`pm${i}`} x={CHART_RIGHT + 8} y={pt.y + 4} fill="#617085" fontSize="10" fontFamily="Space Grotesk, monospace">{pt.value.toFixed(2)}</text>
+                      ))}
+                      <line x1={CHART_LEFT} y1={chartY(current.value)} x2={CHART_RIGHT} y2={chartY(current.value)} stroke="#b9a1ff" strokeDasharray="4 3" opacity=".6" strokeWidth="1" />
+                      <circle cx={CHART_RIGHT} cy={chartY(current.value)} r="4" fill="#b9a1ff" stroke="#0b1420" strokeWidth="2" />
+                      <rect x={CHART_RIGHT + 6} y={chartY(current.value) - 10} width="58" height="20" rx="4" fill="#b9a1ff" />
+                      <text x={CHART_RIGHT + 35} y={chartY(current.value) + 4} fill="#0b1420" fontSize="10" fontWeight="700" fontFamily="Space Grotesk, monospace" textAnchor="middle">{fmt(current.value)}</text>
                     </svg>
                     <div className="crosshair-label" style={{ top: `${Math.max(5, Math.min(90, (chartY(current.value) / 310) * 100))}%` }}>{fmt(current.value)}</div>
                   </div>
