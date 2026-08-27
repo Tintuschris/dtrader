@@ -137,6 +137,7 @@ export default function TradingTerminal() {
   const [running, setRunning] = useState(true);
   const [selectedDigit, setSelectedDigit] = useState(4);
   const [streamMode, setStreamMode] = useState<"live" | "simulated">("simulated");
+  const [tickStreamStatus, setTickStreamStatus] = useState<"connecting" | "live" | "reconnecting" | "simulated">("connecting");
   const [chartLoading, setChartLoading] = useState(true);
   const [chartSkeletonMounted, setChartSkeletonMounted] = useState(true);
   const [accounts, setAccounts] = useState<DerivAccount[]>([]);
@@ -157,6 +158,9 @@ export default function TradingTerminal() {
 
   const tickStreamWs = useRef<WebSocket | null>(null);
   const proposeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tickReconnectAttempts = useRef(0);
+  const tickReconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentSymbolRef = useRef(symbol);
 
   const {
     connectionStatus,
@@ -292,10 +296,113 @@ export default function TradingTerminal() {
     }
   }, [loadAccounts, authLoading]);
 
-  /* ---- tick stream (Options API public WebSocket) ---- */
+  /* ---- keep symbol ref in sync ---- */
+  useEffect(() => { currentSymbolRef.current = symbol; }, [symbol]);
+
+  /* ---- tick stream (Options API public WebSocket) with auto-reconnect ---- */
   useEffect(() => {
-    let ws: WebSocket | undefined;
+    let alive = true;
     let tickReceived = false;
+    const MAX_ATTEMPTS = 10;
+    const BASE_DELAY = 1000;
+    const MAX_DELAY = 30000;
+
+    function jitteredDelay(attempt: number): number {
+      const base = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY);
+      return Math.round(base * (0.8 + Math.random() * 0.4));
+    }
+
+    function connect() {
+      if (!alive) return;
+      const sym = currentSymbolRef.current;
+
+      // Close any previous connection
+      if (tickStreamWs.current) {
+        tickStreamWs.current.close();
+        tickStreamWs.current = null;
+      }
+
+      setTickStreamStatus(tickReconnectAttempts.current > 0 ? "reconnecting" : "connecting");
+
+      try {
+        const ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
+        tickStreamWs.current = ws;
+
+        ws.onopen = () => {
+          tickReconnectAttempts.current = 0;
+          ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data) as Record<string, unknown>;
+            const msgType = message.msg_type as string | undefined;
+
+            if (msgType === "tick") {
+              const tick = message.tick as { quote?: number | string; pip_size?: number } | undefined;
+              if (tick?.quote !== undefined) {
+                if (!tickReceived) {
+                  tickReceived = true;
+                  setChartLoading(false);
+                  setTimeout(() => setChartSkeletonMounted(false), 500);
+                }
+                // Reset reconnect attempts on successful tick receipt
+                tickReconnectAttempts.current = 0;
+                setTickStreamStatus("live");
+                setStreamMode("live");
+                const tickPipSize = tick.pip_size ?? 2;
+                setTicks((prev) => [...prev.slice(-99), { value: Number(tick.quote), digit: digitFromQuote(tick.quote ?? 0, tickPipSize) }]);
+                try { getGlobalAnalyzer().addTick(sym, { quote: Number(tick.quote), epoch: 0 }); } catch { /* analyzer may not be mounted */ }
+              }
+            }
+          } catch { /* ignore parse errors */ }
+        };
+
+        ws.onerror = () => {
+          // onerror is always followed by onclose — reconnection is handled there
+        };
+
+        ws.onclose = (event) => {
+          if (!alive) return;
+          // Normal closure codes — don't reconnect
+          if (event.code === 1000 || event.code === 1001) {
+            setTickStreamStatus("simulated");
+            setStreamMode("simulated");
+            return;
+          }
+          // Abnormal closure — attempt reconnect with exponential backoff
+          if (tickReconnectAttempts.current < MAX_ATTEMPTS) {
+            const attempt = tickReconnectAttempts.current;
+            tickReconnectAttempts.current = attempt + 1;
+            const delay = jitteredDelay(attempt);
+            setTickStreamStatus("reconnecting");
+            if (!tickReceived) {
+              setChartLoading(false);
+              setTimeout(() => setChartSkeletonMounted(false), 500);
+            }
+            tickReconnectTimer.current = setTimeout(() => {
+              if (alive) connect();
+            }, delay);
+          } else {
+            // Exhausted all attempts — fall back to simulated
+            setTickStreamStatus("simulated");
+            setStreamMode("simulated");
+            if (!tickReceived) {
+              setChartLoading(false);
+              setTimeout(() => setChartSkeletonMounted(false), 500);
+            }
+          }
+        };
+      } catch {
+        // Connection creation failed
+        setTickStreamStatus("simulated");
+        setStreamMode("simulated");
+        if (!tickReceived) {
+          setChartLoading(false);
+          setTimeout(() => setChartSkeletonMounted(false), 500);
+        }
+      }
+    }
 
     // Safety timeout — dismiss skeleton after 5s even if no ticks arrive
     const skeletonTimeout = setTimeout(() => {
@@ -305,69 +412,23 @@ export default function TradingTerminal() {
       }
     }, 5000);
 
-    try {
-      // Use the Options API public WebSocket for live tick data
-      ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
-      tickStreamWs.current = ws;
-      ws.onopen = () => {
-        // Subscribe to live ticks (ticks_history is NOT supported on the public endpoint)
-        ws?.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
-      };
-      ws.onmessage = (event) => {
-        const message = JSON.parse(event.data) as Record<string, unknown>;
-        const msgType = message.msg_type as string | undefined;
+    connect();
 
-        if (msgType === "tick") {
-          const tick = message.tick as { quote?: number | string; pip_size?: number } | undefined;
-          if (tick?.quote !== undefined) {
-            if (!tickReceived) {
-              tickReceived = true;
-              clearTimeout(skeletonTimeout);
-              setChartLoading(false);
-              setTimeout(() => setChartSkeletonMounted(false), 500);
-            }
-            const tickPipSize = tick.pip_size ?? 2;
-            setTicks((prev) => [...prev.slice(-99), { value: Number(tick.quote), digit: digitFromQuote(tick.quote ?? 0, tickPipSize) }]);
-            setStreamMode("live");
-            // Feed tick to the analyzer's ML model
-            try { getGlobalAnalyzer().addTick(symbol, { quote: Number(tick.quote), epoch: 0 }); } catch { /* analyzer may not be mounted */ }
-          }
-        }
-
-        // Handle subscription confirmation
-        if (msgType === "tick") {
-          const sub = message.subscription as { id?: string } | undefined;
-          if (sub?.id && !tickReceived) {
-            tickReceived = true;
-            clearTimeout(skeletonTimeout);
-            setChartLoading(false);
-            setTimeout(() => setChartSkeletonMounted(false), 500);
-          }
-        }
-      };
-      ws.onerror = () => {
-        setStreamMode("simulated");
-        if (!tickReceived) {
-          tickReceived = true;
-          clearTimeout(skeletonTimeout);
-          setChartLoading(false);
-          setTimeout(() => setChartSkeletonMounted(false), 500);
-        }
-      };
-    } catch {
-      setStreamMode("simulated");
-      clearTimeout(skeletonTimeout);
-      setChartLoading(false);
-      setTimeout(() => setChartSkeletonMounted(false), 500);
-    }
     return () => {
+      alive = false;
       clearTimeout(skeletonTimeout);
-      ws?.close();
-      tickStreamWs.current = null;
+      if (tickReconnectTimer.current) {
+        clearTimeout(tickReconnectTimer.current);
+        tickReconnectTimer.current = null;
+      }
+      if (tickStreamWs.current) {
+        tickStreamWs.current.close();
+        tickStreamWs.current = null;
+      }
     };
   }, [symbol]);
 
-  /* ---- simulated ticks ---- */
+/* ---- simulated ticks ---- */
   const lastSimTickRef = useRef(640);
   useEffect(() => {
     if (!running || streamMode === "live") return;
@@ -675,14 +736,14 @@ export default function TradingTerminal() {
             <div>
               <p className="eyebrow">
                 OPTIONS WORKSPACE
-                <span className="live-badge"><i /> LIVE TICKS</span>
+                <span className={`live-badge ${tickStreamStatus === "reconnecting" ? "reconnecting" : ""}`}><i /> {tickStreamStatus === "reconnecting" ? "RECONNECTING…" : tickStreamStatus === "simulated" ? "SIMULATED" : "LIVE TICKS"}</span>
                 {!isDemo && <span className="real-badge">REAL MONEY</span>}
               </p>
               <h1>Last digit trading</h1>
               <p className="muted">Read the final digit, choose a contract, and place a trade.</p>
             </div>
-            <button className={`stream-button ${running ? "streaming" : ""}`} onClick={() => setRunning((v) => !v)}>
-              <span /> {running ? "Streaming" : "Paused"}
+            <button className={`stream-button ${running ? "streaming" : ""} ${tickStreamStatus === "reconnecting" ? "reconnecting" : ""}`} onClick={() => setRunning((v) => !v)}>
+              <span /> {tickStreamStatus === "reconnecting" ? "Reconnecting…" : running ? "Streaming" : "Paused"}
             </button>
           </div>
 
@@ -848,7 +909,7 @@ export default function TradingTerminal() {
               <div className="cursor-note desktop-only">
                 <span className="cursor-dot" /> Current tick <b>{current.digit}</b>
                 <span className="note-divider" />
-                {streamMode === "live" ? `Live ${symbolLabel}` : "Simulated feed"}
+                {tickStreamStatus === "reconnecting" ? "Reconnecting…" : streamMode === "live" ? `Live ${symbolLabel}` : "Simulated feed"}
                 <span className="note-divider" />
                 {needsBarrier ? "Click digit to select" : "Select Even/Odd"}
               </div>

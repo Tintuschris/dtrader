@@ -86,33 +86,36 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Step 1: Get accounts list to find the active account
-    const accountsRes = await fetch(`${OPTIONS_REST_URL}/accounts`, {
-      method: "GET",
-      headers: {
-        "Deriv-App-ID": process.env.DERIV_APP_ID ?? "",
-        Authorization: `Bearer ${session.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      cache: "no-store",
-    });
-
-    if (!accountsRes.ok) {
-      return NextResponse.json({ trades: [], total: 0, error: "Unable to fetch accounts" });
-    }
-
-    const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
-    const accountsList = accountsPayload?.data?.accounts ?? [];
-
-    if (!Array.isArray(accountsList) || accountsList.length === 0) {
-      return NextResponse.json({ trades: [], total: 0, authenticated: true });
-    }
-
-    // Step 2: Get profit table for the first account via authenticated WebSocket
-    const firstAccount = accountsList[0];
-    const accountId = String(firstAccount.loginid ?? firstAccount.account_id ?? "");
+    // Step 1: Get account ID from session (stored during OAuth) or fallback to accounts REST endpoint
+    let accountId = session.loginId;
+    
     if (!accountId) {
-      return NextResponse.json({ trades: [], total: 0, error: "No account ID found" });
+      // Fallback: try to get accounts list from REST endpoint
+      try {
+        const accountsRes = await fetch(`${OPTIONS_REST_URL}/accounts`, {
+          method: "GET",
+          headers: {
+            "Deriv-App-ID": process.env.DERIV_APP_ID ?? "",
+            Authorization: `Bearer ${session.accessToken}`,
+            "Content-Type": "application/json",
+          },
+          cache: "no-store",
+        });
+
+        if (accountsRes.ok) {
+          const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
+          const accountsList = accountsPayload?.data?.accounts ?? [];
+          if (Array.isArray(accountsList) && accountsList.length > 0) {
+            accountId = String(accountsList[0].loginid ?? accountsList[0].account_id ?? "");
+          }
+        }
+      } catch {
+        // REST endpoint not available — try to get account ID from authenticated WS
+      }
+    }
+
+    if (!accountId) {
+      return NextResponse.json({ trades: [], total: 0, error: "Not authenticated — please log in with Deriv" }, { status: 401 });
     }
 
     const wsUrl = await getOtpUrl(accountId, session.accessToken);
@@ -160,7 +163,8 @@ export async function GET(request: NextRequest) {
     });
   } catch (err) {
     console.error("Failed to fetch trades:", err);
-    return NextResponse.json({ trades: [], total: 0, error: "Network error" });
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ trades: [], total: 0, error: `${message}` });
   }
 }
 

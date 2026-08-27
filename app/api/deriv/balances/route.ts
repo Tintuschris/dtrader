@@ -83,60 +83,55 @@ export async function GET() {
   }
 
   try {
-    // Step 1: Get list of accounts via the OTP endpoint (using first account)
-    // The accounts list is available through the authenticated WebSocket
-    // We'll use the demo account to get the list
-    const accountsRes = await fetch(`${OPTIONS_REST_URL}/accounts`, {
-      method: "GET",
-      headers: await getAuthHeaders() ?? {},
-      cache: "no-store",
-    });
+    // Step 1: Get account ID from session (stored during OAuth) or fallback to REST endpoint
+    let accountId = session.loginId;
+    
+    if (!accountId) {
+      // Fallback: try REST endpoint
+      try {
+        const accountsRes = await fetch(`${OPTIONS_REST_URL}/accounts`, {
+          method: "GET",
+          headers: await getAuthHeaders() ?? {},
+          cache: "no-store",
+        });
+        if (accountsRes.ok) {
+          const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
+          const accountsList = accountsPayload?.data?.accounts ?? [];
+          if (Array.isArray(accountsList) && accountsList.length > 0) {
+            accountId = String(accountsList[0].loginid ?? accountsList[0].account_id ?? "");
+          }
+        }
+      } catch {
+        // REST endpoint not available
+      }
+    }
 
-    if (!accountsRes.ok) {
-      // Fallback: return empty list
+    if (!accountId) {
       return NextResponse.json({ accounts: [] });
     }
 
-    const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
-    const accountsList = accountsPayload?.data?.accounts ?? [];
-
-    if (!Array.isArray(accountsList) || accountsList.length === 0) {
-      return NextResponse.json({ accounts: [] });
+    // Step 2: Get balance via authenticated WebSocket using the loginId
+    let accounts: AccountBalance[] = [];
+    try {
+      const wsUrl = await getOtpUrl(accountId, session.accessToken);
+      const balanceData = await authWsRequest<{ balance?: { balance?: number; currency?: string } }>(
+        wsUrl,
+        { balance: 1, subscribe: 0 },
+        "balance",
+      );
+      const bal = balanceData.balance?.balance;
+      const currency = balanceData.balance?.currency ?? "USD";
+      const type: "demo" | "real" = accountId.startsWith("VR") || accountId.includes("demo") ? "demo" : "real";
+      accounts = [{
+        id: accountId,
+        loginid: accountId,
+        type,
+        currency,
+        balance: typeof bal === "number" ? bal : null,
+      }];
+    } catch {
+      accounts = [];
     }
-
-    // Step 2: Get balance for each account via authenticated WebSocket
-    const accounts: AccountBalance[] = await Promise.all(
-      accountsList.map(async (a): Promise<AccountBalance> => {
-        const loginid = String(a.loginid ?? a.account_id ?? "");
-        const id = loginid;
-        const rawType = String(a.account_type ?? a.type ?? "demo").toLowerCase();
-        const type: "demo" | "real" = rawType.includes("real") ? "real" : "demo";
-        const currency = String(a.currency ?? "USD");
-
-        if (!id) {
-          return { id: "", loginid: "", type: "demo", currency: "USD", balance: null };
-        }
-
-        try {
-          const wsUrl = await getOtpUrl(id, session.accessToken);
-          const balanceData = await authWsRequest<{ balance?: { balance?: number } }>(
-            wsUrl,
-            { balance: 1, subscribe: 0 },
-            "balance",
-          );
-          const balance = balanceData.balance?.balance;
-          return {
-            id,
-            loginid,
-            type,
-            currency,
-            balance: typeof balance === "number" ? balance : null,
-          };
-        } catch {
-          return { id, loginid, type, currency, balance: null };
-        }
-      }),
-    );
 
     balanceCache = { accounts, timestamp: Date.now() };
     return NextResponse.json({ accounts });

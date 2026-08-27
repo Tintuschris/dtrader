@@ -203,6 +203,7 @@ export class MarketAnalyzer {
   private statsCacheEpochs: Map<string, number> = new Map();
   private weights: AnalysisWeights;
   private wsConnections: Map<string, WebSocket> = new Map();
+  private wsReconnectAttempts: Map<string, number> = new Map();
   private updateCallbacks: Set<() => void> = new Set();
   private analysisTimer: ReturnType<typeof setInterval> | null = null;
   private predictor: DigitPredictor;

@@ -108,6 +108,7 @@ export async function GET(request: NextRequest) {
       token_type?: string;
       scope?: string;
       expires_in?: number;
+      loginid?: string;
     };
 
     if (!tokenData.access_token) {
@@ -121,6 +122,7 @@ export async function GET(request: NextRequest) {
       accessToken: tokenData.access_token,
       tokenType: tokenData.token_type ?? "Bearer",
       scopes: tokenData.scope?.split(" ") ?? [],
+      loginId: tokenData.loginid,
     });
 
     // Redirect back to the trading terminal
