@@ -59,8 +59,8 @@ export default function MarketAnalyzerPanel() {
   const [showAutoConfig, setShowAutoConfig] = useState(false);
   const [autoTradeConfig, setAutoTradeConfig] = useState({
     contractType: "DIGITOVER" as const,
-    stake: 1, duration: 5, minScore: 65, minConfidence: 30,
-    dailyLossLimit: 50, cooldownSec: 15, maxOpenContracts: 1,
+    stake: 1, duration: 5, minScore: 65, minConfidence: 13,
+    dailyLossLimit: 50, cooldownSec: 15, maxOpenContracts: 1, maxConsecutiveLosses: 3,
   });
   const [autoTradeState, setAutoTradeState] = useState<AutoTradeState>({
     isRunning: false, lastTradeTime: 0, tradesToday: 0, pnlToday: 0,
@@ -111,7 +111,9 @@ export default function MarketAnalyzerPanel() {
       unsubGradNorm();
       unsubPredHistory();
       unsubProbHistory();
-      analyzer.destroy();
+      // Keep the shared model and its current-symbol observations alive when
+      // the user navigates away; only stop the panel's extra market streams.
+      analyzer.stopStreaming();
     };
 
   }, []);
@@ -150,6 +152,8 @@ export default function MarketAnalyzerPanel() {
 
   const bestMarket = scores.length > 0 ? scores[0] : null;
 
+  useEffect(() => { void analyzerRef.current?.setLearningSymbol(selectedMarket); }, [selectedMarket]);
+
   return (
     <div className="analyzer-container">
       {/* Header */}
@@ -158,8 +162,8 @@ export default function MarketAnalyzerPanel() {
           <p className="eyebrow">MARKET ANALYZER</p>
           <h1><IconBrain size={24} style={{ verticalAlign: "middle", marginRight: 8 }} />AI Digit Analysis</h1>
           <p className="muted">
-            ML-powered analysis of digit distributions across all markets.
-            Self-learns from prediction accuracy.
+            Experimental digit-distribution research. It never places trades automatically;
+            start multi-market streaming here to collect live samples and assess its backtest results.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -178,6 +182,7 @@ export default function MarketAnalyzerPanel() {
               onClick={() => {
                 const engine = getAutoTradeEngine();
                 const next = !autoTradeEnabled;
+                if (next && !window.confirm("Enable experimental ML automation in DEMO mode only? It may lose the demo balance and will stop after its safety limits.")) return;
                 setAutoTradeEnabled(next);
                 engine.updateConfig({ enabled: next, symbol: selectedMarket });
               }}
@@ -245,8 +250,8 @@ export default function MarketAnalyzerPanel() {
             </div>
             <div className="at-config-field">
               <label>Min ML Confidence %</label>
-              <input type="number" min="0" max="100" step="5" value={autoTradeConfig.minConfidence} onChange={(e) => { const v = parseInt(e.target.value) || 30; setAutoTradeConfig(p => ({...p, minConfidence: v})); getAutoTradeEngine().updateConfig({minConfidence: v}); }} />
-              <span className="at-config-hint">Neural network rolling accuracy</span>
+              <input type="number" min="13" max="100" step="1" value={autoTradeConfig.minConfidence} onChange={(e) => { const v = Math.max(13, parseInt(e.target.value) || 13); setAutoTradeConfig(p => ({...p, minConfidence: v})); getAutoTradeEngine().updateConfig({minConfidence: v}); }} />
+              <span className="at-config-hint">Must exceed the 10% random baseline</span>
             </div>
             <div className="at-config-field">
               <label>Daily Loss Limit (USD)</label>
@@ -259,6 +264,11 @@ export default function MarketAnalyzerPanel() {
               <span className="at-config-hint">Min time between trades</span>
             </div>
             <div className="at-config-field">
+              <label>Consecutive loss stop</label>
+              <input type="number" min="1" max="10" step="1" value={autoTradeConfig.maxConsecutiveLosses} onChange={(e) => { const v = parseInt(e.target.value) || 3; setAutoTradeConfig(p => ({...p, maxConsecutiveLosses: v})); getAutoTradeEngine().updateConfig({maxConsecutiveLosses: v}); }} />
+              <span className="at-config-hint">Stops after this many losses in a row</span>
+            </div>
+            <div className="at-config-field">
               <label>Max Open Trades</label>
               <input type="number" min="1" max="10" step="1" value={autoTradeConfig.maxOpenContracts} onChange={(e) => { const v = parseInt(e.target.value) || 1; setAutoTradeConfig(p => ({...p, maxOpenContracts: v})); getAutoTradeEngine().updateConfig({maxOpenContracts: v}); }} />
             </div>
@@ -268,6 +278,7 @@ export default function MarketAnalyzerPanel() {
             <span>Daily limit: <strong>${autoTradeConfig.dailyLossLimit.toFixed(2)}</strong></span>
             <span>Cooldown: <strong>{autoTradeConfig.cooldownSec}s</strong></span>
             <span>Max contracts: <strong>{autoTradeConfig.maxOpenContracts}</strong></span>
+            <span>Mode: <strong>DEMO ONLY</strong></span>
           </div>
         </div>
       )}
@@ -277,10 +288,10 @@ export default function MarketAnalyzerPanel() {
         <div className="accuracy-item">
           <IconBrain size={14} />
           <span className="accuracy-label">ML Accuracy</span>
-          <span className={`accuracy-value ${recentAccuracy.rate >= 55 ? "good" : recentAccuracy.rate < 45 ? "bad" : ""}`}>
+          <span className={`accuracy-value ${recentAccuracy.rate >= 13 ? "good" : recentAccuracy.total >= 100 && recentAccuracy.rate < 8 ? "bad" : ""}`}>
             {recentAccuracy.rate.toFixed(1)}%
           </span>
-          <span className="accuracy-sub">({recentAccuracy.correct}/{recentAccuracy.total} recent)</span>
+          <span className="accuracy-sub">({recentAccuracy.correct}/{recentAccuracy.total} recent; 10% is random baseline)</span>
         </div>
         <div className="accuracy-item">
           <span className="accuracy-label">All-Time</span>

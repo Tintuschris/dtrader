@@ -11,6 +11,7 @@ export type AutoTradeConfig = {
   contractType: "DIGITOVER" | "DIGITUNDER" | "DIGITODD" | "DIGITEVEN" | "DIGITMATCH" | "DIGITDIFF";
   symbol: string; stake: number; duration: number; minScore: number; minConfidence: number;
   maxStakePerTrade: number; dailyLossLimit: number; cooldownMs: number; maxOpenContracts: number;
+  maxConsecutiveLosses: number; minTrainingSamples: number; minValidatedAccuracy: number; demoOnly: boolean;
 };
 
 export type AutoTradeState = {
@@ -25,12 +26,14 @@ export type TradeAdapter = {
     Promise<{ id: string; ask_price: number; payout: number } | null>;
   buy: (proposalId: string, price: number) => Promise<{ contract_id: string } | null>;
   subscribeToContract: (contractId: string, cb: (c: { status: string; profit?: number }) => void) => void;
+  isDemo: () => boolean;
 };
 
 const DEFAULT: AutoTradeConfig = {
   enabled: false, contractType: "DIGITOVER", symbol: "1HZ100V", stake: 1, duration: 5,
-  minScore: 65, minConfidence: 30, maxStakePerTrade: 10, dailyLossLimit: 50,
+  minScore: 65, minConfidence: 13, maxStakePerTrade: 10, dailyLossLimit: 50,
   cooldownMs: 15000, maxOpenContracts: 1,
+  maxConsecutiveLosses: 3, minTrainingSamples: 500, minValidatedAccuracy: 0.13, demoOnly: true,
 };
 
 export class AutoTradeEngine {
@@ -44,6 +47,7 @@ export class AutoTradeEngine {
   private timer: ReturnType<typeof setInterval> | null = null;
   private cbs = new Set<(s: AutoTradeState) => void>();
   private log: Array<{ time: number; symbol: string; prediction: string; result: "won" | "lost"; pnl: number }> = [];
+  private tradingDay = new Date().toDateString();
 
   setAdapter(a: TradeAdapter) { this.adapter = a; }
   getConfig() { return { ...this.config }; }
@@ -59,6 +63,10 @@ export class AutoTradeEngine {
 
   start() {
     if (this.state.isRunning) return;
+    if (!this.adapter) return;
+    if (this.config.demoOnly && !this.adapter.isDemo()) {
+      this.state.lastPrediction = "Blocked: ML automation is demo-only"; this.emit(); return;
+    }
     this.state.isRunning = true; this.emit();
     this.timer = setInterval(() => this.tick(), 3000);
     console.log("[AutoTrade] Started");
@@ -72,8 +80,12 @@ export class AutoTradeEngine {
 
   private async tick() {
     if (!this.state.isRunning || !this.adapter) return;
+    const today = new Date().toDateString();
+    if (today !== this.tradingDay) { this.tradingDay = today; this.reset(); }
     if (this.state.openContracts >= this.config.maxOpenContracts) return;
+    if (this.config.stake > this.config.maxStakePerTrade) { this.state.lastPrediction = "Blocked: stake exceeds safety cap"; this.stop(); return; }
     if (this.state.pnlToday <= -this.config.dailyLossLimit) { this.stop(); return; }
+    if (this.state.consecutiveLosses >= this.config.maxConsecutiveLosses) { this.state.lastPrediction = "Stopped: consecutive-loss limit reached"; this.stop(); return; }
     if (Date.now() - this.state.lastTradeTime < this.config.cooldownMs) return;
 
     const scores = this.analyzer.rankMarkets();
@@ -81,8 +93,11 @@ export class AutoTradeEngine {
     if (!m?.bestTrade) return;
     const best = m.bestTrade;
     const om = this.analyzer.getPredictor().getOnlineMetrics();
+    const predictor = this.analyzer.getPredictor();
+    if (predictor.getBufferSize() < this.config.minTrainingSamples) return;
+    if (om.rollingTotal < 100 || om.rollingAccuracy < this.config.minValidatedAccuracy) return;
     if (best.score < this.config.minScore) return;
-    if (om.rollingAccuracy * 100 < this.config.minConfidence && om.totalPredictions > 10) return;
+    if (om.rollingAccuracy * 100 < this.config.minConfidence) return;
 
     const ct = this.config.contractType;
     try {

@@ -207,6 +207,9 @@ export class MarketAnalyzer {
   private updateCallbacks: Set<() => void> = new Set();
   private analysisTimer: ReturnType<typeof setInterval> | null = null;
   private predictor: DigitPredictor;
+  // One model must learn one market at a time. Mixing digit sequences from
+  // unrelated symbols manufactures transitions that never happened.
+  private learningSymbol: string | null = null;
 
   constructor() {
     this.weights = loadWeights();
@@ -214,10 +217,9 @@ export class MarketAnalyzer {
     // Lazy-init: defer TF.js model loading so it doesn't freeze the UI.
     setTimeout(async () => {
       await this.predictor.init();
-      // If streaming started before model was ready, start online learning now
-      if (this.wsConnections.size > 0) {
-        this.predictor.startOnlineLearning();
-      }
+      // The terminal can feed the selected symbol without opening the
+      // analyzer's multi-market sockets, so learning must not depend on them.
+      this.predictor.startOnlineLearning();
     }, 500);
   }
 
@@ -234,7 +236,9 @@ export class MarketAnalyzer {
     if (buffer.length > 5000) {
       buffer.splice(0, buffer.length - 5000);
     }
-    // Feed digit to the neural network model (online learning)
+    // Feed only the selected market to the shared neural model. Other markets
+    // are still retained for statistical comparison and ranking.
+    if (this.learningSymbol !== symbol) return;
     const digit = this.extractLastDigit(tick.quote);
     if (this.predictor.getStatus() === "ready") {
       this.predictor.addDigitAndLearn(digit);
@@ -247,6 +251,17 @@ export class MarketAnalyzer {
   getTicks(symbol: string): Tick[] {
     return this.tickBuffers.get(symbol) ?? [];
   }
+
+  async setLearningSymbol(symbol: string): Promise<void> {
+    if (this.learningSymbol === symbol) return;
+    this.learningSymbol = symbol;
+    // A model trained on another symbol must not keep its sequence context.
+    // Resetting makes the new training/evaluation stream unambiguous.
+    await this.predictor.reset();
+    this.predictor.startOnlineLearning();
+  }
+
+  getLearningSymbol(): string | null { return this.learningSymbol; }
 
   /* ---- Real-time WebSocket connections ---- */
 

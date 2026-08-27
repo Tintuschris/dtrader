@@ -284,23 +284,24 @@ export class DigitPredictor {
 
   private async validateAndTrain(actualDigit: number): Promise<void> {
     if (this.isOnlineTraining) return;
-    const pending = this.predictionQueue.filter((p) => p.actualDigit === null);
-    if (pending.length === 0) return;
+    // A prediction represents the *next* digit only. Validating every pending
+    // asynchronous prediction against the same tick inflates/contaminates
+    // metrics, so settle exactly the oldest unmatched prediction.
+    const pending = this.predictionQueue.find((p) => p.actualDigit === null);
+    if (!pending) return;
     this.isOnlineTraining = true;
     this.onlineMetrics.isOnlineLearning = true;
     this.emitOnlineMetrics();
     try {
       const xs: number[][][] = [], ys: number[][] = [];
-      for (const pred of pending) {
-        pred.actualDigit = actualDigit;
-        pred.correct = pred.topDigit === actualDigit;
-        this.rollingHistory.push({ correct: pred.correct });
-        if (this.rollingHistory.length > ROLLING_WINDOW) this.rollingHistory.shift();
-        this.onlineMetrics.totalPredictions++;
-        if (pred.correct) this.onlineMetrics.totalCorrect++;
-        xs.push(pred.inputSequence.map((d) => { const oh = new Array(10).fill(0); oh[d] = 1; return oh; }));
-        const target = new Array(10).fill(0); target[actualDigit] = 1; ys.push(target);
-      }
+      pending.actualDigit = actualDigit;
+      pending.correct = pending.topDigit === actualDigit;
+      this.rollingHistory.push({ correct: pending.correct });
+      if (this.rollingHistory.length > ROLLING_WINDOW) this.rollingHistory.shift();
+      this.onlineMetrics.totalPredictions++;
+      if (pending.correct) this.onlineMetrics.totalCorrect++;
+      xs.push(pending.inputSequence.map((d) => { const oh = new Array(10).fill(0); oh[d] = 1; return oh; }));
+      const target = new Array(10).fill(0); target[actualDigit] = 1; ys.push(target);
       if (this.rollingHistory.length > 0) {
         const correct = this.rollingHistory.filter((h) => h.correct).length;
         this.onlineMetrics.rollingCorrect = correct;
