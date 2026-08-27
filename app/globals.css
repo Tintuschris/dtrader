@@ -227,7 +227,7 @@
 .account-tab{background:#111925;border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:8px 18px;font-size:12px;font-weight:500;cursor:pointer;transition:.15s}
 .account-tab:hover{border-color:rgba(70,211,189,.3);color:var(--text)}
 .account-tab.active{background:rgba(70,211,189,.1);border-color:var(--teal);color:var(--teal);font-weight:600}
-.account-mini-badge{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;font-size:10px;font-weight:700}
+.account-mini-badge{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;font-size:11px;font-weight:700}
 .account-mini-badge.demo{background:rgba(70,211,189,.15);color:#8de7d9}
 .account-mini-badge.real{background:rgba(240,128,128,.15);color:#f08080}
 .account-id{margin-left:6px;font-size:10px;color:var(--muted);font-family:monospace}
@@ -390,7 +390,7 @@
   .summary-card{padding:12px}
   .summary-value{font-size:15px}
   .history-table{font-size:11px}
-  .history-table th,.history-table td{padding:8px 8px}
+  .history-table th,.history-table td{padding:8px 10px}
 }
 @media(max-width:480px){
   .topbar{height:50px}
@@ -456,7 +456,7 @@
   .summary-card{padding:12px}
   .summary-value{font-size:15px}
   .history-table{font-size:11px}
-  .history-table th,.history-table td{padding:8px 8px}
+  .history-table th,.history-table td{padding:8px 10px}
   /* Carousel: show mobile, hide desktop */
   .chart-section-desktop{display:none}
   .chart-section-mobile{display:block}

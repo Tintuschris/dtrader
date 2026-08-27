@@ -405,11 +405,14 @@ export function useDerivTrading() {
                     status: finalStatus,
                     digit_prediction: Number(oc.barrier ?? 0),
                     duration_ticks: oc.tick_count ?? 0,
+                    // Use Deriv purchase_time if available, otherwise Date.now()
                     timestamp: Date.now(),
                   };
                   return [record, ...prev].slice(0, 20);
                 });
-                setTimeout(() => setActiveContract(null), 3000);
+                // Clear active contract faster for 1-tick trades
+                const settleDelay = (oc.tick_count && oc.tick_count <= 1) ? 1500 : 3000;
+                setTimeout(() => setActiveContract(null), settleDelay);
               }
             }
             return;

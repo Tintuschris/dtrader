@@ -129,15 +129,22 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
   const fmt = (n: number) => Number(n).toFixed(2);
   const fmtTime = (ts: number) => {
     if (!ts) return "—";
-    const d = new Date(ts * 1000);
+    // Handle both milliseconds (Date.now()) and seconds (Deriv API)
+    const d = ts > 1e11 ? new Date(ts) : new Date(ts * 1000);
     if (isNaN(d.getTime())) return "—";
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   };
   const fmtDate = (ts: number) => {
     if (!ts) return "";
-    const d = new Date(ts * 1000);
+    const d = ts > 1e11 ? new Date(ts) : new Date(ts * 1000);
     if (isNaN(d.getTime())) return "";
     return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  };
+  const fmtFull = (ts: number) => {
+    if (!ts) return "";
+    const d = ts > 1e11 ? new Date(ts) : new Date(ts * 1000);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleString();
   };
 
   return (
@@ -278,13 +285,13 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
             </thead>
             <tbody>
               {filtered.map((t) => (
-                <tr key={t.contract_id} className={`trade-row ${t.status}`}>
-                  <td className="td-date">{fmtDate(t.purchase_time)}</td>
-                  <td className="td-time">{fmtTime(t.purchase_time)}</td>
+                <tr key={t.contract_id} className={`trade-row ${t.status}`} title={fmtFull(t.purchase_time) + (t.symbol ? " - " + t.symbol : "")}>
+                  <td className="td-date">
+                    <div>{fmtDate(t.purchase_time)}</div>
+                    <div className="td-time">{fmtTime(t.purchase_time)}</div>
+                  </td>
                   <td>{formatContractType(t.contract_type)}</td>
-                  <td>{t.symbol}</td>
                   <td className="td-digit">{t.barrier ? `#${t.barrier}` : "—"}</td>
-                  <td>{t.tick_count ? `${t.tick_count}t` : "—"}</td>
                   <td>${fmt(t.buy_price)}</td>
                   <td>${fmt(t.payout)}</td>
                   <td className={`td-profit ${t.profit >= 0 ? "positive" : "negative"}`}>
@@ -294,7 +301,6 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
                     <span className={`account-mini-badge ${t.account_type}`}>
                       {t.account_type === "demo" ? "D" : "R"}
                     </span>
-                    <span className="account-id">{t.account_id}</span>
                   </td>
                   <td>
                     <span className={`status-badge ${t.status}`}>

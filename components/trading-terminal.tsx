@@ -520,6 +520,8 @@ export default function TradingTerminal() {
     if (connectionStatus !== "connected") return;
     const stakeNum = parseFloat(stake);
     if (isNaN(stakeNum) || stakeNum <= 0) return;
+    // Use shorter interval for 1-tick trades for instant execution
+    const proposalDelay = duration === 1 ? 50 : 150;
     proposeTimer.current = setTimeout(() => {
       void propose({
         contract_type: subToApiType(subContract),
@@ -529,7 +531,7 @@ export default function TradingTerminal() {
         duration_ticks: duration,
         barrier: subNeedsBarrier(subContract) ? String(selectedDigit) : undefined,
       });
-    }, 150);
+    }, proposalDelay);
     return () => { if (proposeTimer.current) clearTimeout(proposeTimer.current); };
   }, [subContract, symbol, stake, duration, selectedDigit, connectionStatus, balanceCurrency, propose, clearError, activeTab]);
 
@@ -566,6 +568,10 @@ export default function TradingTerminal() {
     setIsBuying(true);
     setTradeError(null);
     clearLastResult();
+    // For 1-tick trades, provide immediate visual feedback
+    if (duration === 1) {
+      pushNotification({ type: "trade", title: "Placing Trade", message: "1-tick trade submitting…", severity: "info" });
+    }
     try {
       const result = await buy(proposal.id, stakeNum);
       if (!result) setTradeError("Buy request failed. Try again.");
