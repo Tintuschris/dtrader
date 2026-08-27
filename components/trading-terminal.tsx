@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   IconSettings, IconMenu2, IconX, IconRefresh, IconChevronDown,
   IconArrowUp, IconArrowDown, IconArrowRight, IconChartLine,
@@ -121,15 +122,25 @@ function fmt(n: number | string) {
   return Number(n).toFixed(2);
 }
 
-type ActiveTab = "workspace" | "history" | "bots" | "settings" | "analyzer" | "portfolio" | "risk";
+export type ActiveTab = "workspace" | "history" | "bots" | "settings" | "analyzer" | "portfolio" | "risk";
+
+const tabRoutes: Record<ActiveTab, string> = {
+  workspace: "/",
+  history: "/history",
+  bots: "/bots",
+  analyzer: "/analyzer",
+  portfolio: "/portfolio",
+  risk: "/risk",
+  settings: "/settings",
+};
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export default function TradingTerminal() {
+export default function TradingTerminal({ initialTab = "workspace" }: { initialTab?: ActiveTab }) {
   const [isMounted, setIsMounted] = useState(false);
-  const [activeTab, setActiveTab] = useState<ActiveTab>("workspace");
+  const [activeTab, setActiveTab] = useState<ActiveTab>(initialTab);
   const [symbol, setSymbol] = useState("1HZ100V");
   const [contractGroup, setContractGroup] = useState<ContractGroup>(contractGroups[0]);
   const [subContract, setSubContract] = useState<SubContract>("over");
@@ -143,6 +154,7 @@ export default function TradingTerminal() {
   const [chartSkeletonMounted, setChartSkeletonMounted] = useState(true);
   const [accounts, setAccounts] = useState<DerivAccount[]>([]);
   const [activeAccountId, setActiveAccountId] = useState("");
+  const activeAccount = accounts.find((account) => account.id === activeAccountId);
   const [accountStatus, setAccountStatus] = useState("Connecting to Deriv…");
   const [duration, setDuration] = useState(5);
   const [showDurationPicker, setShowDurationPicker] = useState(false);
@@ -216,6 +228,12 @@ export default function TradingTerminal() {
     setIsMounted(true);
   }, []);
 
+  // Navigation is URL-driven. The terminal itself remains mounted in the root
+  // layout so a route change does not tear down the authenticated WebSocket.
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
   /* ---- wire auto-trade engine ---- */
   useEffect(() => {
     if (connectionStatus !== "connected") return;
@@ -238,8 +256,9 @@ export default function TradingTerminal() {
         return { contract_id: c.contract_id };
       },
       subscribeToContract,
+      isDemo: () => activeAccount?.type !== "real",
     });
-  }, [connectionStatus, propose, buy, subscribeToContract]);
+  }, [connectionStatus, propose, buy, subscribeToContract, activeAccount?.type]);
 
   /* ---- load markets from API ---- */
   useEffect(() => {
@@ -281,31 +300,35 @@ export default function TradingTerminal() {
     if (!authLoading && authAccounts.length > 0 && accounts.length === 0) {
       setAccounts(authAccounts);
       const preferred = authAccounts.find((a) => a.type === "demo") ?? authAccounts[0];
-      void activateAccount(preferred);
+      activateAccount(preferred);
     }
   }, [authLoading, authAccounts]);
 
   /* ---- activate account ---- */
   const activateAccount = useCallback(
-    async (account: DerivAccount) => {
+    (account: DerivAccount) => {
+      setActiveAccountId(account.id);
       setAccountStatus(`Opening ${account.type} session…`);
-      try {
-        await connectTrading(account.id);
-        setActiveAccountId(account.id);
-        setAccountStatus(`${account.type === "real" ? "Real" : "Demo"} account connected`);
-      } catch {
-        setAccountStatus("Account connection failed");
-      }
+      void connectTrading(account.id);
     },
     [connectTrading],
   );
+
+  useEffect(() => {
+    if (!activeAccountId) return;
+    if (connectionStatus === "connected") {
+      setAccountStatus(`${activeAccount?.type === "real" ? "Real" : "Demo"} account connected`);
+    } else if (connectionStatus === "error") {
+      setAccountStatus("Account connection failed");
+    }
+  }, [activeAccountId, activeAccount?.type, connectionStatus]);
 
   /* ---- load accounts ---- */
   const loadAccounts = useCallback(async () => {
     if (authAccounts.length > 0) {
       setAccounts(authAccounts);
       const preferred = authAccounts.find((a) => a.type === "demo") ?? authAccounts[0];
-      await activateAccount(preferred);
+      activateAccount(preferred);
       return;
     }
     try {
@@ -314,7 +337,7 @@ export default function TradingTerminal() {
       if (!response.ok || !data.accounts?.length) throw new Error("No accounts available");
       setAccounts(data.accounts);
       const preferred = data.accounts.find((a) => a.type === "demo") ?? data.accounts[0];
-      await activateAccount(preferred);
+      activateAccount(preferred);
     } catch {
       setAccountStatus("Deriv account unavailable");
       setStreamMode("simulated");
@@ -343,9 +366,11 @@ export default function TradingTerminal() {
       return Math.round(base * (0.8 + Math.random() * 0.4));
     }
 
-    function connect() {
+    async function connect() {
       if (!alive) return;
       const sym = currentSymbolRef.current;
+      await getGlobalAnalyzer().setLearningSymbol(sym);
+      if (!alive) return;
 
       // Close any previous connection
       if (tickStreamWs.current) {
@@ -361,7 +386,9 @@ export default function TradingTerminal() {
 
         ws.onopen = () => {
           tickReconnectAttempts.current = 0;
-          ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
+          // Load the same real tick context used by the digit distribution,
+          // then keep the feed subscribed for subsequent live ticks.
+          ws.send(JSON.stringify({ ticks_history: sym, style: "ticks", count: 2000, end: "latest", subscribe: 1 }));
         };
 
         ws.onmessage = (event) => {
@@ -369,6 +396,17 @@ export default function TradingTerminal() {
             const message = JSON.parse(event.data) as Record<string, unknown>;
             const msgType = message.msg_type as string | undefined;
 
+            if (msgType === "history") {
+              const history = message.history as { prices?: Array<number | string>; pip_size?: number } | undefined;
+              const pipSize = history?.pip_size ?? 2;
+              const prices = history?.prices ?? [];
+              if (prices.length) {
+                setTicks(prices.slice(-100).map((quote) => ({ value: Number(quote), digit: digitFromQuote(quote, pipSize) })));
+                prices.slice(-2000).forEach((quote) => getGlobalAnalyzer().addTick(sym, { quote: Number(quote), epoch: 0 }));
+                tickReceived = true; setChartLoading(false); setTimeout(() => setChartSkeletonMounted(false), 500);
+              }
+              return;
+            }
             if (msgType === "tick") {
               const tick = message.tick as { quote?: number | string; pip_size?: number } | undefined;
               if (tick?.quote !== undefined) {
@@ -512,7 +550,7 @@ export default function TradingTerminal() {
     }
   }, [riskState.lastResetDate]);
 
-  /* ---- proposal subscription (replaces 150ms polling) ---- */
+  /* ---- proposal subscription (debounced to avoid pricing storms) ---- */
   // When any trade parameter changes, re-subscribe to a new proposal.
   // The subscription sends continuous updates — no gaps, no stale button.
   useEffect(() => {
@@ -522,15 +560,21 @@ export default function TradingTerminal() {
     if (connectionStatus !== "connected") return;
     const stakeNum = parseFloat(stake);
     if (isNaN(stakeNum) || stakeNum <= 0) return;
-    subscribeProposal({
-      contract_type: subToApiType(subContract),
-      symbol,
-      amount: stakeNum,
-      currency: balanceCurrency,
-      duration_ticks: duration,
-      barrier: subNeedsBarrier(subContract) ? String(selectedDigit) : undefined,
-    });
-  }, [subContract, symbol, stake, duration, selectedDigit, connectionStatus, balanceCurrency, subscribeProposal, clearError, activeTab]);
+    if (proposeTimer.current) clearTimeout(proposeTimer.current);
+    proposeTimer.current = setTimeout(() => {
+      subscribeProposal({
+        contract_type: subToApiType(subContract),
+        symbol,
+        amount: stakeNum,
+        currency: balanceCurrency,
+        duration_ticks: duration,
+        barrier: subNeedsBarrier(subContract) ? String(selectedDigit) : undefined,
+      });
+    }, 250);
+    return () => {
+      if (proposeTimer.current) clearTimeout(proposeTimer.current);
+    };
+  }, [subContract, symbol, stake, duration, selectedDigit, connectionStatus, balanceCurrency, subscribeProposal, clearError, activeTab, lastResult?.contract_id]);
 
   /* ---- handle contract group change ---- */
   const handleContractGroupChange = useCallback((group: ContractGroup) => {
@@ -541,6 +585,7 @@ export default function TradingTerminal() {
   /* ---- place trade ---- */
   const [isBuying, setIsBuying] = useState(false);
   const handlePlaceTrade = useCallback(async () => {
+    if (isBuying) return;
     const proposal = currentProposal ?? proposalRef.current;
     if (!proposal) { setTradeError("No active proposal. Wait for pricing."); return; }
     const stakeNum = parseFloat(stake);
@@ -570,17 +615,20 @@ export default function TradingTerminal() {
       pushNotification({ type: "trade", title: "Placing Trade", message: "1-tick trade submitting…", severity: "info" });
     }
     try {
-      const result = await buy(proposal.id, stakeNum);
+      const result = await buy(proposal.id, proposal.ask_price);
       if (!result) setTradeError("Buy request failed. Try again.");
     } catch (e) {
       setTradeError(`Trade failed: ${String(e)}`);
     } finally {
       setIsBuying(false);
     }
-  }, [currentProposal, stake, activeContract, buy, clearLastResult, balance, balanceCurrency]);
+  }, [isBuying, currentProposal, stake, activeContract, buy, clearLastResult, balance, balanceCurrency]);
 
   /* ---- derived ---- */
   const current = ticks.at(-1) ?? { value: 644.52, digit: 2 };
+  const previous = ticks.at(-2)?.value ?? current.value;
+  const priceDelta = current.value - previous;
+  const priceChangePct = previous === 0 ? 0 : (priceDelta / previous) * 100;
   const symbolLabel = markets.find((m) => m.symbol === symbol)?.display_name ?? (markets[0]?.display_name ?? symbol);
   const percentages = useMemo(() => {
     const counts = Array.from({ length: 10 }, () => 2);
@@ -649,7 +697,6 @@ export default function TradingTerminal() {
   const payoutRate = stakeNum > 0 ? ((potentialProfit / stakeNum) * 100).toFixed(1) : "0.0";
   const subOptions = subContracts[contractGroup];
   const needsBarrier = subNeedsBarrier(subContract);
-  const activeAccount = accounts.find((a) => a.id === activeAccountId);
   const isDemo = activeAccount?.type === "demo";
 
   if (!isMounted) {
@@ -684,16 +731,16 @@ export default function TradingTerminal() {
             <span className="brand-text">DTrader</span>
           </div>
           <nav className="main-nav" aria-label="Main navigation">
-            <button className={`nav-link ${activeTab === "workspace" ? "active" : ""}`} onClick={() => setActiveTab("workspace")}>Workspace</button>
-            <button className={`nav-link ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}>
+            <Link className={`nav-link ${activeTab === "workspace" ? "active" : ""}`} href={tabRoutes.workspace}>Workspace</Link>
+            <Link className={`nav-link ${activeTab === "history" ? "active" : ""}`} href={tabRoutes.history}>
               History
               {tradeHistory.length > 0 && <span className="nav-badge">{tradeHistory.length}</span>}
-            </button>
-            <button className={`nav-link ${activeTab === "bots" ? "active" : ""}`} onClick={() => setActiveTab("bots")}>Bots</button>
-            <button className={`nav-link ${activeTab === "analyzer" ? "active" : ""}`} onClick={() => setActiveTab("analyzer")}>Analyzer</button>
-            <button className={`nav-link ${activeTab === "portfolio" ? "active" : ""}`} onClick={() => setActiveTab("portfolio")}>Portfolio</button>
-            <button className={`nav-link ${activeTab === "risk" ? "active" : ""}`} onClick={() => setActiveTab("risk")}>Risk</button>
-            <button className={`nav-link ${activeTab === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}>Settings</button>
+            </Link>
+            <Link className={`nav-link ${activeTab === "bots" ? "active" : ""}`} href={tabRoutes.bots}>Bots</Link>
+            <Link className={`nav-link ${activeTab === "analyzer" ? "active" : ""}`} href={tabRoutes.analyzer}>Analyzer</Link>
+            <Link className={`nav-link ${activeTab === "portfolio" ? "active" : ""}`} href={tabRoutes.portfolio}>Portfolio</Link>
+            <Link className={`nav-link ${activeTab === "risk" ? "active" : ""}`} href={tabRoutes.risk}>Risk</Link>
+            <Link className={`nav-link ${activeTab === "settings" ? "active" : ""}`} href={tabRoutes.settings}>Settings</Link>
           </nav>
         </div>
         <div className="topbar-right">
@@ -783,11 +830,11 @@ export default function TradingTerminal() {
               </select>
             )}
             <div className="mobile-menu-links">
-              <button className={activeTab === "workspace" ? "active" : ""} onClick={() => { setActiveTab("workspace"); setShowMobileMenu(false); }}><IconChartLine size={16} /> Workspace</button>
-              <button className={activeTab === "history" ? "active" : ""} onClick={() => { setActiveTab("history"); setShowMobileMenu(false); }}><IconChartBar size={16} /> History</button>
-              <button className={activeTab === "bots" ? "active" : ""} onClick={() => { setActiveTab("bots"); setShowMobileMenu(false); }}><IconRobot size={16} /> Bots</button>
-              <button className={activeTab === "analyzer" ? "active" : ""} onClick={() => { setActiveTab("analyzer"); setShowMobileMenu(false); }}><IconBrain size={16} /> Analyzer</button>
-              <button className={activeTab === "settings" ? "active" : ""} onClick={() => { setActiveTab("settings"); setShowMobileMenu(false); }}><IconSettings size={16} /> Settings</button>
+              <Link className={activeTab === "workspace" ? "active" : ""} href={tabRoutes.workspace} onClick={() => setShowMobileMenu(false)}><IconChartLine size={16} /> Workspace</Link>
+              <Link className={activeTab === "history" ? "active" : ""} href={tabRoutes.history} onClick={() => setShowMobileMenu(false)}><IconChartBar size={16} /> History</Link>
+              <Link className={activeTab === "bots" ? "active" : ""} href={tabRoutes.bots} onClick={() => setShowMobileMenu(false)}><IconRobot size={16} /> Bots</Link>
+              <Link className={activeTab === "analyzer" ? "active" : ""} href={tabRoutes.analyzer} onClick={() => setShowMobileMenu(false)}><IconBrain size={16} /> Analyzer</Link>
+              <Link className={activeTab === "settings" ? "active" : ""} href={tabRoutes.settings} onClick={() => setShowMobileMenu(false)}><IconSettings size={16} /> Settings</Link>
             </div>
             <div className="mobile-menu-footer">
               {authenticated ? (
@@ -850,7 +897,7 @@ export default function TradingTerminal() {
                           autoFocus
                         />
                       </div>
-                      {Object.entries(
+                      <div className="market-dropdown-list">{Object.entries(
                         markets
                           .filter((m) => {
                             if (!marketSearch) return true;
@@ -877,7 +924,7 @@ export default function TradingTerminal() {
                             </button>
                           ))}
                         </div>
-                      ))}
+                      ))}</div>
                     </div>
                   )}
                 </div>
@@ -886,7 +933,7 @@ export default function TradingTerminal() {
               <div className="price-row">
                 <div>
                   <span className="price">{fmt(current.value)}</span>
-                  <span className="price-change">+0.24 <b>▲ 0.04%</b></span>
+                  <span className={`price-change ${priceDelta < 0 ? "negative" : ""}`}>{priceDelta >= 0 ? "+" : ""}{fmt(priceDelta)} <b>{priceDelta >= 0 ? "▲" : "▼"} {Math.abs(priceChangePct).toFixed(2)}%</b></span>
                 </div>
                 <div className="last-digit">
                   <span>LAST DIGIT</span>
@@ -1162,7 +1209,7 @@ export default function TradingTerminal() {
                 <div className="trade-history">
                   <div className="trade-history-header">
                     <span>Recent trades</span>
-                    <button className="view-all-btn" onClick={() => setActiveTab("history")}>View all <IconArrowRight size={12} /></button>
+                    <Link className="view-all-btn" href="/history">View all <IconArrowRight size={12} /></Link>
                   </div>
                   <div className="trade-history-list">
                     {tradeHistory.slice(0, 5).map((t) => (
@@ -1194,9 +1241,9 @@ export default function TradingTerminal() {
               <h1>Trade history & reports</h1>
               <p className="muted">Track your performance across all trades.</p>
             </div>
-            <button className="stream-button" onClick={() => setActiveTab("workspace")}>← Back to Workspace</button>
+            <Link className="stream-button" href="/">← Back to Workspace</Link>
           </div>
-          <TradingHistory trades={tradeHistory} balance={balance} balanceCurrency={balanceCurrency} />
+          <TradingHistory accountId={activeAccountId} balanceCurrency={balanceCurrency} />
         </section>
       )}
 
@@ -1232,7 +1279,7 @@ export default function TradingTerminal() {
       {/* ===== PORTFOLIO TAB ===== */}
       {activeTab === "portfolio" && (
         <section className="workspace">
-          <PortfolioDashboard trades={tradeHistory} balance={balance} balanceCurrency={balanceCurrency} />
+          <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} />
         </section>
       )}
 
@@ -1259,7 +1306,7 @@ export default function TradingTerminal() {
               <p className="eyebrow">SETTINGS</p>
               <h1>Settings</h1>
             </div>
-            <button className="stream-button" onClick={() => setActiveTab("workspace")}>← Back to Workspace</button>
+            <Link className="stream-button" href="/">← Back to Workspace</Link>
           </div>
           <div className="settings-panel panel">
             <div className="settings-section">
@@ -1312,31 +1359,31 @@ export default function TradingTerminal() {
 
       {/* ===== MOBILE BOTTOM NAV ===== */}
       <nav className="mobile-bottom-nav">
-        <button className={`bottom-nav-item ${activeTab === "workspace" ? "active" : ""}`} onClick={() => setActiveTab("workspace")}>
+        <Link className={`bottom-nav-item ${activeTab === "workspace" ? "active" : ""}`} href={tabRoutes.workspace}>
           <span className="bottom-nav-icon"><IconChartLine size={20} /></span>
           <span>Trade</span>
-        </button>
-        <button className={`bottom-nav-item ${activeTab === "bots" ? "active" : ""}`} onClick={() => setActiveTab("bots")}>
+        </Link>
+        <Link className={`bottom-nav-item ${activeTab === "bots" ? "active" : ""}`} href={tabRoutes.bots}>
           <span className="bottom-nav-icon"><IconRobot size={20} /></span>
           <span>Bots</span>
-        </button>
-        <button className={`bottom-nav-item ${activeTab === "analyzer" ? "active" : ""}`} onClick={() => setActiveTab("analyzer")}>
+        </Link>
+        <Link className={`bottom-nav-item ${activeTab === "analyzer" ? "active" : ""}`} href={tabRoutes.analyzer}>
           <span className="bottom-nav-icon"><IconBrain size={20} /></span>
           <span>Analyzer</span>
-        </button>
-        <button className={`bottom-nav-item ${activeTab === "portfolio" ? "active" : ""}`} onClick={() => setActiveTab("portfolio")}>
+        </Link>
+        <Link className={`bottom-nav-item ${activeTab === "portfolio" ? "active" : ""}`} href={tabRoutes.portfolio}>
           <span className="bottom-nav-icon"><IconChartPie size={20} /></span>
           <span>Portfolio</span>
-        </button>
-        <button className={`bottom-nav-item ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}>
+        </Link>
+        <Link className={`bottom-nav-item ${activeTab === "history" ? "active" : ""}`} href={tabRoutes.history}>
           <span className="bottom-nav-icon"><IconChartBar size={20} /></span>
           <span>History</span>
           {tradeHistory.length > 0 && <span className="bottom-nav-badge">{tradeHistory.length}</span>}
-        </button>
-        <button className={`bottom-nav-item ${activeTab === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}>
+        </Link>
+        <Link className={`bottom-nav-item ${activeTab === "settings" ? "active" : ""}`} href={tabRoutes.settings}>
           <span className="bottom-nav-icon"><IconSettings size={20} /></span>
           <span>Settings</span>
-        </button>
+        </Link>
       </nav>
 
       <footer className="footer">

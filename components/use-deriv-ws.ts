@@ -234,8 +234,9 @@ export function useDerivTrading() {
               proposalRef.current = proposal;
               setCurrentProposal(proposal);
               setProposalLoading(false);
-              // Capture subscription id from Deriv response
-              if (!proposalSubscriptionIdRef.current && msg.id) {
+              // `id` is Deriv's subscription identifier. It is the only valid
+              // value for `forget`; `req_id` only maps requests to responses.
+              if (msg.id) {
                 proposalSubscriptionIdRef.current = String(msg.id);
               }
               // Capture subscription id for unsubscribe
@@ -529,10 +530,7 @@ export function useDerivTrading() {
       if (req.barrier !== undefined) {
         subMsg.barrier = req.barrier;
       }
-      const subId = send(subMsg);
-      if (subId) {
-        proposalSubscriptionIdRef.current = subId;
-      }
+      send(subMsg);
     },
     [send],
   );
@@ -605,6 +603,10 @@ export function useDerivTrading() {
     (proposalId: string, price: number): Promise<OpenContract | null> => {
       return new Promise((resolve) => {
         setLastError(null);
+        // A proposal ID can only be purchased once. Remove it before sending
+        // the buy request so a second click or a later trade cannot reuse it.
+        proposalRef.current = null;
+        setCurrentProposal(null);
         const msg: Record<string, unknown> = {
           buy: proposalId,
           price,
@@ -726,6 +728,15 @@ export function useDerivTrading() {
     unsubscribeFromContract,
     refreshBalance,
     refreshAccounts,
+    clearProposal: () => {
+      if (proposalSubscriptionIdRef.current) {
+        send({ forget: proposalSubscriptionIdRef.current });
+        proposalSubscriptionIdRef.current = null;
+      }
+      proposalRef.current = null;
+      setCurrentProposal(null);
+      setProposalLoading(false);
+    },
     accounts,
     clearLastResult,
     clearError,
