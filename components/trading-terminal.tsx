@@ -171,6 +171,7 @@ export default function TradingTerminal() {
     activeContract,
     currentProposal,
     proposalLoading,
+    proposalRef,
     lastResult,
     lastError,
     tradeHistory,
@@ -539,7 +540,8 @@ export default function TradingTerminal() {
   /* ---- place trade ---- */
   const [isBuying, setIsBuying] = useState(false);
   const handlePlaceTrade = useCallback(async () => {
-    if (!currentProposal) { setTradeError("No active proposal. Wait for pricing."); return; }
+    const proposal = currentProposal ?? proposalRef.current;
+    if (!proposal) { setTradeError("No active proposal. Wait for pricing."); return; }
     const stakeNum = parseFloat(stake);
     if (isNaN(stakeNum) || stakeNum <= 0) { setTradeError("Enter a valid stake amount."); return; }
     if (activeContract) { setTradeError("You already have an active contract. Wait for it to settle."); return; }
@@ -563,7 +565,7 @@ export default function TradingTerminal() {
     setTradeError(null);
     clearLastResult();
     try {
-      const result = await buy(currentProposal.id, stakeNum);
+      const result = await buy(proposal.id, stakeNum);
       if (!result) setTradeError("Buy request failed. Try again.");
     } catch (e) {
       setTradeError(`Trade failed: ${String(e)}`);
@@ -1088,11 +1090,11 @@ export default function TradingTerminal() {
               </div>
 
               {/* Payout card */}
-              <div className={`payout-card ${lastError && !proposalLoading && !currentProposal ? "payout-error" : ""}`}>
+              <div className={`payout-card ${lastError && !proposalLoading && !currentProposal && !proposalRef.current ? "payout-error" : ""}`}>
                 <div>
                   <span>Potential payout</span>
                   <strong>
-                    {proposalLoading ? "Loading…" : currentProposal ? `$${fmt(potentialPayout)}` : lastError ? "Error" : "—"}
+                    {proposalLoading && !proposalRef.current ? "Loading…" : (currentProposal ?? proposalRef.current) ? `$${fmt(potentialPayout)}` : lastError ? "Error" : "—"}
                   </strong>
                 </div>
                 <div className="payout-rate">
@@ -1127,7 +1129,7 @@ export default function TradingTerminal() {
                     <button
                       className="buy-button"
                       onClick={() => void handlePlaceTrade()}
-                      disabled={isBuying || !currentProposal}
+                      disabled={isBuying || (!currentProposal && !proposalRef.current)}
                     >
                       {isBuying ? "Placing…" : "Buy"}
                       <span><IconArrowUp size={16} /></span>

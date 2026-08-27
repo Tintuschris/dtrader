@@ -102,6 +102,7 @@ export function useDerivTrading() {
   const reconnectAttempts = useRef(0);
   const accountIdRef = useRef<string | undefined>(undefined);
   const pendingProposals = useRef<Map<string, (p: Proposal | null) => void>>(new Map());
+  const proposalRef = useRef<Proposal | null>(null);
   const pendingBuys = useRef<Map<string, (c: OpenContract | null) => void>>(new Map());
   const contractSubscribers = useRef<Map<string, (c: OpenContract) => void>>(new Map());
   const skipAutoSubscribe = useRef(false);
@@ -218,6 +219,7 @@ export function useDerivTrading() {
                 spot: Number(p.spot) || 0,
                 display_name: p.display_name,
               };
+              proposalRef.current = proposal;
               setCurrentProposal(proposal);
               setProposalLoading(false);
               setLastError(null);
@@ -467,7 +469,7 @@ export function useDerivTrading() {
     (req: ProposalRequest): Promise<Proposal | null> => {
       return new Promise((resolve) => {
         const seq = ++proposalSeqRef.current;
-        setProposalLoading(true);
+        if (!proposalRef.current) setProposalLoading(true);
         setLastError(null);
         const msg: Record<string, unknown> = {
           proposal: 1,
@@ -617,6 +619,7 @@ export function useDerivTrading() {
     balanceCurrency,
     activeContract,
     currentProposal,
+    proposalRef,
     proposalLoading,
     lastResult,
     lastError,
