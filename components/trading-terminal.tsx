@@ -183,6 +183,8 @@ export default function TradingTerminal() {
     subscribeToContract,
     unsubscribeFromContract,
     refreshBalance,
+    refreshAccounts,
+    accounts: wsAccounts,
     clearLastResult,
     clearError,
   } = useDerivTrading();
@@ -1286,6 +1288,9 @@ export default function TradingTerminal() {
       {showWallet && (
         <WalletPanel
           activeAccountId={activeAccountId}
+          accounts={wsAccounts}
+          activeBalance={balance}
+          activeCurrency={balanceCurrency}
           onSelectAccount={(account) => {
             void activateAccount({ id: account.id, type: account.type, currency: account.currency, balance: account.balance ?? undefined });
             setShowWallet(false);

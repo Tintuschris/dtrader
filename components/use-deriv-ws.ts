@@ -76,6 +76,15 @@ export type TradeResult = {
   buy_price: number;
 };
 
+export type AccountInfo = {
+  loginid: string;
+  account_type: string;
+  currency: string;
+  is_disabled: boolean;
+  landing_company_name: string;
+  trading_type?: string;
+};
+
 /* ------------------------------------------------------------------ */
 /*  WS request ID counter                                              */
 /* ------------------------------------------------------------------ */
@@ -119,6 +128,7 @@ export function useDerivTrading() {
   const [currentProposal, setCurrentProposal] = useState<Proposal | null>(null);
   const [proposalLoading, setProposalLoading] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<AccountInfo[]>([]);
 
   /* ---- helpers ---- */
 
@@ -181,6 +191,8 @@ export function useDerivTrading() {
           reconnectAttempts.current = 0;
           // subscribe to balance
           ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: String(nextReqId++) }));
+          // Fetch all accounts linked to this login
+          ws.send(JSON.stringify({ account_list: 1, req_id: String(nextReqId++) }));
         };
 
         ws.onmessage = (event) => {
@@ -403,7 +415,25 @@ export function useDerivTrading() {
             return;
           }
 
-          // error (catch-all)
+          // account_list
+          if (msg.msg_type === "account_list") {
+            const al = msg.account_list as Array<Record<string, unknown>> | undefined;
+            if (Array.isArray(al)) {
+              const parsed: AccountInfo[] = al.map((a) => ({
+                loginid: String(a.loginid ?? ""),
+                account_type: String(a.account_type ?? ""),
+                currency: String(a.currency ?? "USD"),
+                is_disabled: !!a.is_disabled,
+                landing_company_name: String(a.landing_company_name ?? ""),
+                trading_type: String(a.trading_type ?? ""),
+              }));
+              setAccounts(parsed);
+              console.log("[WS] Account list:", parsed.map(a => a.loginid + " (" + a.account_type + ")"));
+            }
+            return;
+          }
+
+                    // error (catch-all)
           if (msg.error) {
             const err = msg.error as Record<string, unknown>;
             // Deriv errors can be: { code, message }, { code, message, details }, or just a string
@@ -603,6 +633,13 @@ export function useDerivTrading() {
   /* ---- clear last result / error ---- */
 
   /* ---- manual balance refresh ---- */
+  const refreshAccounts = useCallback(() => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ account_list: 1, req_id: String(nextReqId++) }));
+    }
+  }, []);
+
   const refreshBalance = useCallback(() => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -632,6 +669,8 @@ export function useDerivTrading() {
     subscribeToContract,
     unsubscribeFromContract,
     refreshBalance,
+    refreshAccounts,
+    accounts,
     clearLastResult,
     clearError,
   };

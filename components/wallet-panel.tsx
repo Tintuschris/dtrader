@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { AccountInfo } from "./use-deriv-ws";
 import {
   IconWallet,
   IconArrowRight,
@@ -17,7 +18,7 @@ type AccountBalance = {
   id: string;
   type: "demo" | "real";
   currency: string;
-  balance: number | null;
+  balance?: number | null;
   account_type?: string; // Options, CFDs, Multipliers, Wallet, etc.
   account_subtype?: string; // Standard, Pro, etc.
   is_wallet?: boolean; // Whether this is a main wallet account
@@ -25,7 +26,10 @@ type AccountBalance = {
 
 type WalletPanelProps = {
   activeAccountId: string;
-  onSelectAccount: (account: AccountBalance) => void;
+  accounts: AccountInfo[];
+  activeBalance: number | null;
+  activeCurrency: string;
+  onSelectAccount: (account: { id: string; type: "demo" | "real"; currency: string; balance?: number }) => void;
   onClose: () => void;
 };
 
@@ -44,11 +48,13 @@ function fmt(n: number | string | null) {
 
 export default function WalletPanel({
   activeAccountId,
+  accounts: wsAccounts,
+  activeBalance,
+  activeCurrency,
   onSelectAccount,
   onClose,
 }: WalletPanelProps) {
-  const [accounts, setAccounts] = useState<AccountBalance[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferFrom, setTransferFrom] = useState("");
@@ -58,34 +64,15 @@ export default function WalletPanel({
   const [transferError, setTransferError] = useState<string | null>(null);
   const [transferSuccess, setTransferSuccess] = useState(false);
 
-  const fetchBalances = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-    try {
-      const res = await fetch("/api/deriv/balances", { cache: "no-store" });
-      const data = (await res.json()) as {
-        accounts?: AccountBalance[];
-        error?: string;
-      };
-      if (data.accounts) {
-        setAccounts(data.accounts);
-        // Set defaults for transfer
-        if (data.accounts.length >= 2 && !transferFrom) {
-          setTransferFrom(data.accounts[0].id);
-          setTransferTo(data.accounts[1].id);
-        }
-      }
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  const fetchBalances = useCallback(() => {
+    // Account list comes from the WS hook - just set transfer defaults
+    if (wsAccounts.length >= 2 && !transferFrom) {
+      setTransferFrom(wsAccounts[0].loginid);
+      setTransferTo(wsAccounts[1].loginid);
     }
-  }, [transferFrom]);
+  }, [wsAccounts, transferFrom]);
 
-  useEffect(() => {
-    void fetchBalances();
-  }, [fetchBalances]);
+  // Accounts arrive automatically via the WS hook on connect
 
   const handleTransfer = useCallback(async () => {
     if (!transferFrom || !transferTo || !transferAmount) return;
@@ -110,7 +97,7 @@ export default function WalletPanel({
         setTransferSuccess(true);
         setTransferAmount("");
         // Refresh balances
-        await fetchBalances(true);
+        // Account list is live from WS
         setTimeout(() => setTransferSuccess(false), 3000);
       }
     } catch (e) {
@@ -120,20 +107,26 @@ export default function WalletPanel({
     }
   }, [transferFrom, transferTo, transferAmount, fetchBalances]);
 
-  const walletAccounts = accounts.filter(a => a.is_wallet);
-  const tradingAccounts = accounts.filter(a => !a.is_wallet);
+  const walletAccounts: AccountBalance[] = [];
+  const tradingAccounts: AccountBalance[] = [];
+  for (const a of wsAccounts) {
+    const isWallet = a.loginid.startsWith("CRW") || a.loginid.startsWith("VRW");
+    const acctType: "demo" | "real" = a.account_type.toLowerCase().includes("real") ? "real" : "demo";
+    const entry: AccountBalance = {
+      id: a.loginid,
+      type: acctType,
+      currency: a.currency,
+      balance: a.loginid === activeAccountId ? (activeBalance ?? undefined) : undefined,
+      account_type: a.landing_company_name || (isWallet ? "Wallet" : a.trading_type || "Options"),
+      is_wallet: isWallet,
+    };
+    if (isWallet) walletAccounts.push(entry); else tradingAccounts.push(entry);
+  }
   
-  const walletBalance = walletAccounts.reduce(
-    (sum, a) => sum + (a.balance ?? 0),
-    0,
-  );
+  const walletBalance = walletAccounts.reduce((s, a) => s + (a.balance ?? 0), 0);
+  const tradingBalance = tradingAccounts.reduce((s, a) => s + (a.balance ?? 0), 0);
   
-  const tradingBalance = tradingAccounts.reduce(
-    (sum, a) => sum + (a.balance ?? 0),
-    0,
-  );
-  
-  const totalBalance = walletBalance + tradingBalance;
+  const totalBalance = activeBalance ?? 0;
 
   return (
     <>
@@ -147,7 +140,7 @@ export default function WalletPanel({
           <div className="wallet-panel-actions">
             <button
               className="wallet-icon-btn"
-              onClick={() => void fetchBalances(true)}
+              onClick={() => { setRefreshing(true); setTimeout(() => setRefreshing(false), 1000); }}
               disabled={refreshing}
               title="Refresh balances"
             >
@@ -167,7 +160,7 @@ export default function WalletPanel({
               <div
                 key={account.id}
                 className={`wallet-account wallet-account-wallet ${account.id === activeAccountId ? "active" : ""}`}
-                onClick={() => onSelectAccount(account)}
+                onClick={() => onSelectAccount({ id: account.id, type: account.type, currency: account.currency, balance: account.balance ?? undefined })}
               >
                 <div className="wallet-account-left">
                   <span className="wallet-wallet-badge">WALLET</span>
@@ -178,7 +171,7 @@ export default function WalletPanel({
                 </div>
                 <div className="wallet-account-right">
                   <span className="wallet-account-balance wallet-balance-highlight">
-                    ${fmt(account.balance)}
+                    ${fmt(account.balance ?? 0)}
                   </span>
                   {account.id === activeAccountId && (
                     <span className="wallet-active-dot" />
@@ -203,7 +196,7 @@ export default function WalletPanel({
                   <div
                     key={account.id}
                     className={`wallet-account ${account.id === activeAccountId ? "active" : ""}`}
-                    onClick={() => onSelectAccount(account)}
+                    onClick={() => onSelectAccount({ id: account.id, type: account.type, currency: account.currency, balance: account.balance ?? undefined })}
                   >
                     <div className="wallet-account-left">
                       <span className={`wallet-type-badge ${account.type}`}>
@@ -224,7 +217,7 @@ export default function WalletPanel({
                     </div>
                     <div className="wallet-account-right">
                       <span className="wallet-account-balance">
-                        ${fmt(account.balance)}
+                        ${fmt(account.balance ?? 0)}
                       </span>
                       {account.id === activeAccountId && (
                         <span className="wallet-active-dot" />
@@ -254,7 +247,7 @@ export default function WalletPanel({
         </div>
 
         {/* Transfer button */}
-        {accounts.length >= 2 && (
+        {wsAccounts.length >= 2 && (
           <button
             className="wallet-transfer-btn"
             onClick={() => setShowTransfer(true)}
@@ -296,10 +289,9 @@ export default function WalletPanel({
                 value={transferFrom}
                 onChange={(e) => setTransferFrom(e.target.value)}
               >
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.type === "real" ? "Real" : "Demo"} · {a.currency} · $
-                    {fmt(a.balance)}
+                {wsAccounts.map((a) => (
+                  <option key={a.loginid} value={a.loginid}>
+                    {a.account_type === "real" ? "Real" : "Demo"} · {a.currency}
                   </option>
                 ))}
               </select>
@@ -313,10 +305,9 @@ export default function WalletPanel({
                 value={transferTo}
                 onChange={(e) => setTransferTo(e.target.value)}
               >
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.type === "real" ? "Real" : "Demo"} · {a.currency} · $
-                    {fmt(a.balance)}
+                {wsAccounts.map((a) => (
+                  <option key={a.loginid} value={a.loginid}>
+                    {a.account_type === "real" ? "Real" : "Demo"} · {a.currency}
                   </option>
                 ))}
               </select>
