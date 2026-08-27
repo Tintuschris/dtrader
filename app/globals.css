@@ -206,9 +206,9 @@
 .history-empty{text-align:center;padding:60px 20px;color:var(--muted)}
 .history-empty-icon{font-size:40px;margin-bottom:12px}
 .history-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.history-table{width:100%;border-collapse:collapse;font-size:12px}
+.history-table{width:100%;border-collapse:collapse;font-size:12px;min-width:900px}
 .history-table th{text-align:left;padding:10px 12px;color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.05em;border-bottom:1px solid var(--border);white-space:nowrap}
-.history-table td{padding:10px 12px;border-bottom:1px solid rgba(157,179,203,.06);white-space:nowrap}
+.history-table td{padding:10px 12px;border-bottom:1px solid rgba(157,179,203,.06);white-space:normal;max-width:150px;overflow:hidden;text-overflow:ellipsis}
 .history-table tr:hover{background:rgba(255,255,255,.02)}
 .td-time{color:var(--muted);font-size:11px}
 .td-digit{color:var(--purple);font-family:'Space Grotesk';font-weight:600}
@@ -230,8 +230,21 @@
 .account-mini-badge{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:4px;font-size:10px;font-weight:700}
 .account-mini-badge.demo{background:rgba(70,211,189,.15);color:#8de7d9}
 .account-mini-badge.real{background:rgba(240,128,128,.15);color:#f08080}
+.account-id{margin-left:6px;font-size:10px;color:var(--muted);font-family:monospace}
 .refresh-btn{margin-left:auto!important}
 .td-date{color:var(--muted);font-size:11px}
+
+/* ================================================================= */
+/*  History pagination                                               */
+/* ================================================================= */
+.history-pagination{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(17,25,37,.5);border:1px solid var(--border);border-radius:8px;margin-bottom:16px}
+.pagination-info{font-size:12px;color:var(--muted)}
+.pagination-controls{display:flex;align-items:center;gap:8px}
+.pagination-btn{background:rgba(70,211,189,.1);border:1px solid rgba(70,211,189,.2);color:var(--teal);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:500;cursor:pointer;transition:.15s}
+.pagination-btn:hover:not(:disabled){background:rgba(70,211,189,.2);border-color:var(--teal)}
+.pagination-btn:disabled{opacity:.4;cursor:not-allowed}
+.pagination-size{background:#111925;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer}
+.pagination-size:hover{border-color:rgba(70,211,189,.3)}
 
 /* ================================================================= */
 /*  Bot Builder                                                       */
@@ -559,6 +572,16 @@
 .wallet-total{padding:16px 20px;border-bottom:1px solid var(--border);text-align:center}
 .wallet-total span{display:block;color:var(--muted);font-size:11px;margin-bottom:4px}
 .wallet-total strong{font-family:'Space Grotesk';font-size:24px;color:#8de7d9}
+.wallet-section{margin-bottom:16px}
+.wallet-section-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:8px 12px 4px}
+.wallet-account-wallet{background:linear-gradient(145deg,rgba(240,192,64,.08),rgba(240,192,64,.04));border-color:rgba(240,192,64,.2)}
+.wallet-wallet-badge{font-size:9px;font-weight:700;letter-spacing:.08em;padding:3px 8px;border-radius:4px;text-transform:uppercase;background:rgba(240,192,64,.15);color:#f0c040}
+.wallet-balance-highlight{color:#f0c040}
+.wallet-total-section{padding:16px 20px;border-top:1px solid var(--border);background:rgba(17,25,37,.5)}
+.wallet-total-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-size:12px;color:var(--muted)}
+.wallet-total-row strong{font-family:'Space Grotesk';font-weight:600;color:var(--text)}
+.wallet-total-main{margin-top:8px;padding-top:12px;border-top:1px solid var(--border)}
+.wallet-total-highlight{color:#8de7d9;font-size:16px}
 .wallet-accounts{flex:1;padding:8px 12px}
 .wallet-loading,.wallet-empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:13px}
 .wallet-account{display:flex;justify-content:space-between;align-items:center;padding:12px;border-radius:10px;cursor:pointer;transition:.15s;border:1px solid transparent;margin-bottom:4px}
@@ -568,9 +591,11 @@
 .wallet-type-badge{font-size:9px;font-weight:700;letter-spacing:.08em;padding:3px 8px;border-radius:4px;text-transform:uppercase}
 .wallet-type-badge.real{background:rgba(240,192,64,.12);color:#f0c040}
 .wallet-type-badge.demo{background:rgba(70,211,189,.12);color:#8de7d9}
-.wallet-account-info{display:flex;flex-direction:column}
+.wallet-account-info{display:flex;flex-direction:column;gap:2px}
 .wallet-account-id{font-size:12px;color:var(--text);font-family:'Space Grotesk';font-weight:500}
 .wallet-account-currency{font-size:10px;color:var(--muted)}
+.wallet-account-type{font-size:9px;color:var(--teal);font-weight:500;text-transform:uppercase;letter-spacing:.05em}
+.wallet-account-subtype{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .wallet-account-right{display:flex;align-items:center;gap:8px}
 .wallet-account-balance{font-family:'Space Grotesk';font-size:14px;font-weight:600;color:var(--text)}
 .wallet-active-dot{width:8px;height:8px;border-radius:50%;background:var(--teal);box-shadow:0 0 6px var(--teal)}

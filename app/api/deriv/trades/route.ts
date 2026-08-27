@@ -21,6 +21,7 @@ type DerivTrade = {
   sell_time?: number;
   is_sold: boolean;
   account_type: "demo" | "real";
+  account_id: string;
 };
 
 const OPTIONS_REST_URL = "https://api.derivws.com/trading/v1/options";
@@ -31,24 +32,31 @@ async function fetchAccountsList(accessToken: string): Promise<Array<Record<stri
   const res = await fetch(`${OPTIONS_REST_URL}/accounts`, {
     method: "GET",
     headers: {
-      Authorization: "Bearer " + accessToken,
       "Deriv-App-ID": appId,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     cache: "no-store",
   });
-  console.log("[Trades] GET /accounts status:", res.status);
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => "");
-    console.warn("[Trades] GET /accounts error body:", errBody.substring(0, 500));
-    return [];
+
+  if (!res.ok) return [];
+  const payload = await res.json().catch(() => null);
+  const source = payload?.data?.accounts ?? payload?.data ?? payload?.accounts ?? [];
+  return Array.isArray(source) ? source : [];
+}
+
+/** Improved account type detection based on account ID patterns. */
+function determineAccountType(accountId: string): "demo" | "real" {
+  // Demo accounts typically start with "VR" or contain "demo"
+  if (accountId.startsWith("VR") || accountId.toLowerCase().includes("demo")) {
+    return "demo";
   }
-  const raw = await res.json();
-  const accounts =
-    raw?.data?.accounts ?? raw?.data ?? raw?.accounts ??
-    (Array.isArray(raw) ? raw : []);
-  console.log("[Trades] Parsed accounts count:", Array.isArray(accounts) ? accounts.length : "not array");
-  return Array.isArray(accounts) ? accounts : [];
+  // Real accounts typically start with numbers or "CR"
+  if (/^\d+$/.test(accountId) || accountId.startsWith("CR")) {
+    return "real";
+  }
+  // Default to real if pattern doesn't match
+  return "real";
 }
 
 async function getOtpUrl(accountId: string, accessToken: string): Promise<string> {
@@ -146,7 +154,6 @@ export async function GET(request: NextRequest) {
     console.log("[Trades] Got", rawTrades.length, "trades from Deriv for", accountLoginid);
 
     const trades: DerivTrade[] = rawTrades.map((t: Record<string, unknown>) => {
-      const isDemo = accountLoginid.startsWith("VR") || accountLoginid.includes("demo");
       return {
         contract_id: String(t.contract_id ?? ""),
         contract_type: String(t.contract_type ?? ""),
@@ -162,7 +169,8 @@ export async function GET(request: NextRequest) {
         purchase_time: Number(t.purchase_time ?? t.transaction_time ?? 0),
         sell_time: typeof t.sell_time === "number" ? t.sell_time : undefined,
         is_sold: Boolean(t.is_sold),
-        account_type: isDemo ? "demo" : "real",
+        account_type: determineAccountType(accountLoginid),
+        account_id: accountLoginid,
       };
     });
 

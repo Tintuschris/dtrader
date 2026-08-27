@@ -18,6 +18,9 @@ type AccountBalance = {
   type: "demo" | "real";
   currency: string;
   balance: number | null;
+  account_type?: string; // Options, CFDs, Multipliers, Wallet, etc.
+  account_subtype?: string; // Standard, Pro, etc.
+  is_wallet?: boolean; // Whether this is a main wallet account
 };
 
 type WalletPanelProps = {
@@ -117,10 +120,20 @@ export default function WalletPanel({
     }
   }, [transferFrom, transferTo, transferAmount, fetchBalances]);
 
-  const totalBalance = accounts.reduce(
+  const walletAccounts = accounts.filter(a => a.is_wallet);
+  const tradingAccounts = accounts.filter(a => !a.is_wallet);
+  
+  const walletBalance = walletAccounts.reduce(
     (sum, a) => sum + (a.balance ?? 0),
     0,
   );
+  
+  const tradingBalance = tradingAccounts.reduce(
+    (sum, a) => sum + (a.balance ?? 0),
+    0,
+  );
+  
+  const totalBalance = walletBalance + tradingBalance;
 
   return (
     <>
@@ -146,38 +159,25 @@ export default function WalletPanel({
           </div>
         </div>
 
-        {/* Total */}
-        <div className="wallet-total">
-          <span>Total Balance</span>
-          <strong>${fmt(totalBalance)}</strong>
-        </div>
-
-        {/* Account list */}
-        <div className="wallet-accounts">
-          {loading ? (
-            <div className="wallet-loading">Loading balances…</div>
-          ) : accounts.length === 0 ? (
-            <div className="wallet-empty">No accounts found. Log in first.</div>
-          ) : (
-            accounts.map((account) => (
+        {/* Wallet Balance */}
+        {walletAccounts.length > 0 && (
+          <div className="wallet-section">
+            <div className="wallet-section-title">Main Wallet</div>
+            {walletAccounts.map((account) => (
               <div
                 key={account.id}
-                className={`wallet-account ${account.id === activeAccountId ? "active" : ""}`}
+                className={`wallet-account wallet-account-wallet ${account.id === activeAccountId ? "active" : ""}`}
                 onClick={() => onSelectAccount(account)}
               >
                 <div className="wallet-account-left">
-                  <span className={`wallet-type-badge ${account.type}`}>
-                    {account.type === "real" ? "REAL" : "DEMO"}
-                  </span>
+                  <span className="wallet-wallet-badge">WALLET</span>
                   <div className="wallet-account-info">
                     <span className="wallet-account-id">{account.id}</span>
-                    <span className="wallet-account-currency">
-                      {account.currency}
-                    </span>
+                    <span className="wallet-account-currency">{account.currency}</span>
                   </div>
                 </div>
                 <div className="wallet-account-right">
-                  <span className="wallet-account-balance">
+                  <span className="wallet-account-balance wallet-balance-highlight">
                     ${fmt(account.balance)}
                   </span>
                   {account.id === activeAccountId && (
@@ -185,8 +185,72 @@ export default function WalletPanel({
                   )}
                 </div>
               </div>
-            ))
-          )}
+            ))}
+          </div>
+        )}
+
+        {/* Trading Accounts */}
+        {tradingAccounts.length > 0 && (
+          <div className="wallet-section">
+            <div className="wallet-section-title">Trading Accounts</div>
+            <div className="wallet-accounts">
+              {loading ? (
+                <div className="wallet-loading">Loading balances…</div>
+              ) : tradingAccounts.length === 0 ? (
+                <div className="wallet-empty">No trading accounts found.</div>
+              ) : (
+                tradingAccounts.map((account) => (
+                  <div
+                    key={account.id}
+                    className={`wallet-account ${account.id === activeAccountId ? "active" : ""}`}
+                    onClick={() => onSelectAccount(account)}
+                  >
+                    <div className="wallet-account-left">
+                      <span className={`wallet-type-badge ${account.type}`}>
+                        {account.type === "real" ? "REAL" : "DEMO"}
+                      </span>
+                      <div className="wallet-account-info">
+                        <span className="wallet-account-id">{account.id}</span>
+                        <span className="wallet-account-currency">
+                          {account.currency}
+                        </span>
+                        {account.account_type && (
+                          <span className="wallet-account-type">{account.account_type}</span>
+                        )}
+                        {account.account_subtype && account.account_subtype !== "Standard" && (
+                          <span className="wallet-account-subtype">{account.account_subtype}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="wallet-account-right">
+                      <span className="wallet-account-balance">
+                        ${fmt(account.balance)}
+                      </span>
+                      {account.id === activeAccountId && (
+                        <span className="wallet-active-dot" />
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Total Balance */}
+        <div className="wallet-total-section">
+          <div className="wallet-total-row">
+            <span>Wallet Balance</span>
+            <strong>${fmt(walletBalance)}</strong>
+          </div>
+          <div className="wallet-total-row">
+            <span>Trading Balance</span>
+            <strong>${fmt(tradingBalance)}</strong>
+          </div>
+          <div className="wallet-total-row wallet-total-main">
+            <span>Total Portfolio</span>
+            <strong className="wallet-total-highlight">${fmt(totalBalance)}</strong>
+          </div>
         </div>
 
         {/* Transfer button */}

@@ -20,6 +20,7 @@ type DerivTrade = {
   sell_time?: number;
   is_sold: boolean;
   account_type: "demo" | "real";
+  account_id: string;
 };
 
 type Props = {
@@ -37,16 +38,19 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
   const [derivTrades, setDerivTrades] = useState<DerivTrade[]>([]);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [pagination, setPagination] = useState({ currentPage: 1, pageSize: 20, total: 0 });
 
   // Fetch trades from Deriv API
   const fetchTrades = useCallback(async () => {
     setLoading(true);
     setFetchError(null);
     try {
-      const res = await fetch("/api/deriv/trades?limit=100", { cache: "no-store" });
+      const offset = (pagination.currentPage - 1) * pagination.pageSize;
+      const res = await fetch(`/api/deriv/trades?limit=${pagination.pageSize}&offset=${offset}`, { cache: "no-store" });
       const data = await res.json();
       if (data.trades?.length) {
         setDerivTrades(data.trades);
+        setPagination(prev => ({ ...prev, total: data.total || data.trades.length }));
       } else if (data.error) {
         setFetchError(data.error);
       }
@@ -55,7 +59,7 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pagination.currentPage, pagination.pageSize]);
 
   useEffect(() => {
     void fetchTrades();
@@ -77,6 +81,7 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
       purchase_time: t.timestamp,
       is_sold: t.status === "sold",
       account_type: "demo" as const,
+      account_id: "local",
     }));
 
     // Merge: Deriv trades + local trades (dedupe by contract_id)
@@ -100,6 +105,15 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
       return true;
     });
   }, [allTrades, statusFilter, accountFilter]);
+
+  // Pagination helpers
+  const totalPages = Math.ceil(pagination.total / pagination.pageSize);
+  const goToPage = (page: number) => {
+    setPagination(prev => ({ ...prev, currentPage: page }));
+  };
+  const changePageSize = (size: number) => {
+    setPagination(prev => ({ ...prev, pageSize: size, currentPage: 1 }));
+  };
 
   // Stats (for filtered set)
   const stats = useMemo(() => {
@@ -192,6 +206,42 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
         </button>
       </div>
 
+      {/* Pagination controls */}
+      {totalPages > 1 && (
+        <div className="history-pagination">
+          <div className="pagination-info">
+            Page {pagination.currentPage} of {totalPages} ({pagination.total} total trades)
+          </div>
+          <div className="pagination-controls">
+            <button
+              className="pagination-btn"
+              onClick={() => goToPage(pagination.currentPage - 1)}
+              disabled={pagination.currentPage === 1 || loading}
+            >
+              Previous
+            </button>
+            <select
+              className="pagination-size"
+              value={pagination.pageSize}
+              onChange={(e) => changePageSize(Number(e.target.value))}
+              disabled={loading}
+            >
+              <option value={10}>10 per page</option>
+              <option value={20}>20 per page</option>
+              <option value={50}>50 per page</option>
+              <option value={100}>100 per page</option>
+            </select>
+            <button
+              className="pagination-btn"
+              onClick={() => goToPage(pagination.currentPage + 1)}
+              disabled={pagination.currentPage === totalPages || loading}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Trade table */}
       {loading && filtered.length === 0 ? (
         <div className="history-empty">
@@ -244,6 +294,7 @@ export default function TradingHistory({ trades, balance, balanceCurrency }: Pro
                     <span className={`account-mini-badge ${t.account_type}`}>
                       {t.account_type === "demo" ? "D" : "R"}
                     </span>
+                    <span className="account-id">{t.account_id}</span>
                   </td>
                   <td>
                     <span className={`status-badge ${t.status}`}>
