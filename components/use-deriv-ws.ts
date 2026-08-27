@@ -234,6 +234,12 @@ export function useDerivTrading() {
               proposalRef.current = proposal;
               setCurrentProposal(proposal);
               setProposalLoading(false);
+              // Capture subscription id from Deriv response
+              if (!proposalSubscriptionIdRef.current && msg.id) {
+                proposalSubscriptionIdRef.current = String(msg.id);
+              }
+              // Capture subscription id for unsubscribe
+
               setLastError(null);
               // Resolve by reqId first, then fall back to the most recent pending proposal
               const resolve = reqId ? pendingProposals.current.get(reqId) : undefined;
@@ -494,6 +500,52 @@ export function useDerivTrading() {
     [],
   );
 
+  /* ---- proposal subscription ---- */
+  // Instead of polling with one-shot requests every 150ms, we use Deriv's
+  // proposal subscription: {proposal: 1, subscribe: 1}. This sends continuous
+  // updates without gaps, so currentProposal is never null after the first response.
+  const proposalSubscriptionIdRef = useRef<string | null>(null);
+
+  const subscribeProposal = useCallback(
+    (req: ProposalRequest) => {
+      // Unsubscribe the old proposal first
+      if (proposalSubscriptionIdRef.current) {
+        send({ forget: proposalSubscriptionIdRef.current });
+        proposalSubscriptionIdRef.current = null;
+      }
+      if (!proposalRef.current) setProposalLoading(true);
+      setLastError(null);
+      const subMsg: Record<string, unknown> = {
+        proposal: 1,
+        subscribe: 1,
+        amount: req.amount,
+        basis: "stake",
+        contract_type: req.contract_type,
+        currency: req.currency,
+        duration: req.duration_ticks,
+        duration_unit: "t",
+        underlying_symbol: req.symbol,
+      };
+      if (req.barrier !== undefined) {
+        subMsg.barrier = req.barrier;
+      }
+      const subId = send(subMsg);
+      if (subId) {
+        proposalSubscriptionIdRef.current = subId;
+      }
+    },
+    [send],
+  );
+
+  // Cleanup subscription on unmount
+  useEffect(() => {
+    return () => {
+      if (proposalSubscriptionIdRef.current) {
+        send({ forget: proposalSubscriptionIdRef.current });
+      }
+    };
+  }, [send]);
+
   /* ---- propose ---- */
   const proposalSeqRef = useRef(0);
   const proposeRef = useRef<(req: ProposalRequest) => Promise<Proposal | null>>(undefined);
@@ -666,6 +718,7 @@ export function useDerivTrading() {
     tradeHistory,
     connect,
     propose,
+    subscribeProposal,
     buy,
     buyBot,
     sell,

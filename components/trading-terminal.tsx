@@ -177,6 +177,7 @@ export default function TradingTerminal() {
     tradeHistory,
     connect: connectTrading,
     propose,
+    subscribeProposal,
     buy,
     buyBot,
     sell,
@@ -511,29 +512,25 @@ export default function TradingTerminal() {
     }
   }, [riskState.lastResetDate]);
 
-  /* ---- auto-refresh proposal (paused when not on workspace tab) ---- */
+  /* ---- proposal subscription (replaces 150ms polling) ---- */
+  // When any trade parameter changes, re-subscribe to a new proposal.
+  // The subscription sends continuous updates — no gaps, no stale button.
   useEffect(() => {
-    if (proposeTimer.current) clearTimeout(proposeTimer.current);
-    if (activeTab !== "workspace") return; // Don't fire proposals when bot/other tabs are active
+    if (activeTab !== "workspace") return;
     setTradeError(null);
     clearError();
     if (connectionStatus !== "connected") return;
     const stakeNum = parseFloat(stake);
     if (isNaN(stakeNum) || stakeNum <= 0) return;
-    // Use shorter interval for 1-tick trades for instant execution
-    const proposalDelay = duration === 1 ? 50 : 150;
-    proposeTimer.current = setTimeout(() => {
-      void propose({
-        contract_type: subToApiType(subContract),
-        symbol,
-        amount: stakeNum,
-        currency: balanceCurrency,
-        duration_ticks: duration,
-        barrier: subNeedsBarrier(subContract) ? String(selectedDigit) : undefined,
-      });
-    }, proposalDelay);
-    return () => { if (proposeTimer.current) clearTimeout(proposeTimer.current); };
-  }, [subContract, symbol, stake, duration, selectedDigit, connectionStatus, balanceCurrency, propose, clearError, activeTab]);
+    subscribeProposal({
+      contract_type: subToApiType(subContract),
+      symbol,
+      amount: stakeNum,
+      currency: balanceCurrency,
+      duration_ticks: duration,
+      barrier: subNeedsBarrier(subContract) ? String(selectedDigit) : undefined,
+    });
+  }, [subContract, symbol, stake, duration, selectedDigit, connectionStatus, balanceCurrency, subscribeProposal, clearError, activeTab]);
 
   /* ---- handle contract group change ---- */
   const handleContractGroupChange = useCallback((group: ContractGroup) => {
