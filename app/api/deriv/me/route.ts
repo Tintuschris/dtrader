@@ -47,7 +47,7 @@ export async function GET() {
       ? source
           .map((a: Record<string, unknown>) => {
             const id = String(
-              a.account_id ?? a.accountId ?? a.id ?? "",
+              a.loginid ?? a.account_id ?? a.accountId ?? a.id ?? "",
             );
             if (!id) return null;
             const rawType = String(

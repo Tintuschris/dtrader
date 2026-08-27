@@ -90,7 +90,7 @@ export async function GET(request: NextRequest) {
     let accountId = session.loginId;
     
     if (!accountId) {
-      // Fallback: try to get accounts list from REST endpoint
+      // Fallback: fetch accounts list from REST endpoint
       try {
         const accountsRes = await fetch(`${OPTIONS_REST_URL}/accounts`, {
           method: "GET",
@@ -101,16 +101,20 @@ export async function GET(request: NextRequest) {
           },
           cache: "no-store",
         });
-
-        if (accountsRes.ok) {
-          const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
-          const accountsList = accountsPayload?.data?.accounts ?? [];
-          if (Array.isArray(accountsList) && accountsList.length > 0) {
-            accountId = String(accountsList[0].loginid ?? accountsList[0].account_id ?? "");
-          }
+        const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
+        const accountsList = accountsPayload?.data?.accounts ?? [];
+        if (Array.isArray(accountsList) && accountsList.length > 0) {
+          // Deriv returns "loginid" as the primary account identifier
+          accountId = String(
+            accountsList[0].loginid ??
+            accountsList[0].account_id ??
+            accountsList[0].accountId ??
+            ""
+          );
+          console.log("[Trades] Fetched accountId from REST:", accountId);
         }
-      } catch {
-        // REST endpoint not available — try to get account ID from authenticated WS
+      } catch (err) {
+        console.warn("[Trades] REST accounts fetch failed:", err);
       }
     }
 

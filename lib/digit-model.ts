@@ -438,6 +438,17 @@ export class DigitPredictor {
   private async loadOnlineMetrics(): Promise<void> { try { const s = await idbGet<{ totalCorrect?: number; totalPredictions?: number; onlineUpdates?: number }>("onlineMetrics"); if (s) { this.onlineMetrics.totalCorrect = s.totalCorrect ?? 0; this.onlineMetrics.totalPredictions = s.totalPredictions ?? 0; this.onlineMetrics.onlineUpdates = s.onlineUpdates ?? 0; this.emitOnlineMetrics(); } } catch { /* */ } }
 
   async trainNow(): Promise<void> {
+    // If worker isn't ready, try to initialize it first
+    if (!workerReady) {
+      console.log("[TF] trainNow: worker not ready, attempting init...");
+      try {
+        initWorker();
+        await waitForWorker();
+      } catch (err) {
+        console.error("[TF] trainNow: worker init failed:", err);
+        return;
+      }
+    }
     await this.batchTrainStep(true);
   }
 

@@ -12,7 +12,7 @@ type DerivAccount = {
 };
 
 function normaliseAccount(account: Record<string, unknown>): DerivAccount | null {
-  const id = String(account.account_id ?? account.accountId ?? account.id ?? "");
+  const id = String(account.loginid ?? account.account_id ?? account.accountId ?? account.id ?? "");
   if (!id) return null;
   const rawType = String(account.account_type ?? account.accountType ?? account.type ?? "demo").toLowerCase();
   return {

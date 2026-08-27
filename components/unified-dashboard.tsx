@@ -237,14 +237,14 @@ export default function UnifiedDashboard({
           onToggle={() => toggle("controls")}
         >
           <div className="dash-controls">
-            <button className="dc-btn dc-primary" onClick={onTrainNow} disabled={modelStatus !== "ready" || bufferSize < 10}>
+            <button className="dc-btn dc-primary" onClick={onTrainNow} disabled={modelStatus === "loading" || bufferSize < 10}>
               🧠 Train Now
             </button>
             <button className="dc-btn dc-danger" onClick={onReset}>
               🔄 Reset Model
             </button>
             <span className="dc-hint">
-              {bufferSize < 200 ? `Need ${200 - bufferSize} more samples` : "Model ready"}
+              {modelStatus === "loading" ? "Model loading... please wait" : bufferSize < 10 ? `Need ${10 - bufferSize} more samples to train` : bufferSize < 200 ? `${bufferSize} samples — ${200 - bufferSize} more for auto-batch training` : "Model ready — click to train now"}
             </span>
           </div>
         </Section>

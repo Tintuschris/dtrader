@@ -117,12 +117,48 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Save the session
+    // Deriv OAuth token response does NOT include loginid.
+    // Fetch the user's accounts to extract loginId for OTP-based API calls.
+    let loginId: string | undefined;
+    try {
+      const accountsRes = await fetch(
+        "https://api.derivws.com/trading/v1/options/accounts",
+        {
+          headers: {
+            Authorization: "Bearer " + tokenData.access_token,
+            "Deriv-App-ID": clientId,
+            "Content-Type": "application/json",
+          },
+          cache: "no-store",
+        },
+      );
+      if (accountsRes.ok) {
+        const accountsPayload = (await accountsRes.json()) as {
+          data?: { accounts?: Array<Record<string, unknown>> };
+        };
+        const accountsList = accountsPayload?.data?.accounts ?? [];
+        if (Array.isArray(accountsList) && accountsList.length > 0) {
+          loginId = String(
+            accountsList[0].loginid ??
+              accountsList[0].account_id ??
+              accountsList[0].accountId ??
+              "",
+          );
+          console.log("[OAuth] Fetched loginId:", loginId);
+        }
+      } else {
+        console.warn("[OAuth] Failed to fetch accounts:", accountsRes.status);
+      }
+    } catch (err) {
+      console.warn("[OAuth] Error fetching accounts for loginId:", err);
+    }
+
+    // Save the session with the fetched loginId
     await saveSession({
       accessToken: tokenData.access_token,
       tokenType: tokenData.token_type ?? "Bearer",
       scopes: tokenData.scope?.split(" ") ?? [],
-      loginId: tokenData.loginid,
+      loginId,
     });
 
     // Redirect back to the trading terminal

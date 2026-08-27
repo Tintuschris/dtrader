@@ -87,22 +87,31 @@ export async function GET() {
     let accountId = session.loginId;
     
     if (!accountId) {
-      // Fallback: try REST endpoint
+      // Fallback: fetch accounts list from REST endpoint
       try {
         const accountsRes = await fetch(`${OPTIONS_REST_URL}/accounts`, {
           method: "GET",
-          headers: await getAuthHeaders() ?? {},
+          headers: {
+            "Deriv-App-ID": process.env.DERIV_APP_ID ?? "",
+            Authorization: `Bearer ${session.accessToken}`,
+            "Content-Type": "application/json",
+          },
           cache: "no-store",
         });
-        if (accountsRes.ok) {
-          const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
-          const accountsList = accountsPayload?.data?.accounts ?? [];
-          if (Array.isArray(accountsList) && accountsList.length > 0) {
-            accountId = String(accountsList[0].loginid ?? accountsList[0].account_id ?? "");
-          }
+        const accountsPayload = await accountsRes.json() as { data?: { accounts?: Array<Record<string, unknown>> } };
+        const accountsList = accountsPayload?.data?.accounts ?? [];
+        if (Array.isArray(accountsList) && accountsList.length > 0) {
+          // Deriv returns "loginid" as the primary account identifier
+          accountId = String(
+            accountsList[0].loginid ??
+            accountsList[0].account_id ??
+            accountsList[0].accountId ??
+            ""
+          );
+          console.log("[Balances] Fetched accountId from REST:", accountId);
         }
-      } catch {
-        // REST endpoint not available
+      } catch (err) {
+        console.warn("[Balances] REST accounts fetch failed:", err);
       }
     }
 
