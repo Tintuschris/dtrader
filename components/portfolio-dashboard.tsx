@@ -16,6 +16,7 @@ import {
   IconArrowUpRight,
   IconArrowDownRight,
   IconRefresh,
+  IconChartPie,
 } from "@tabler/icons-react";
 
 /* ------------------------------------------------------------------ */
@@ -238,6 +239,25 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
 
   const maxPnl = Math.max(...pnlCurve.map(Math.abs), 1);
   const maxHourlyPnl = Math.max(...hourlyPerf.map((h) => Math.abs(h.pnl)), 1);
+
+  // No account selected — show connect prompt
+  if (!accountId) {
+    return (
+      <div className="portfolio-dashboard">
+        <div className="portfolio-header">
+          <div>
+            <p className="eyebrow">PORTFOLIO</p>
+            <h1>Performance Dashboard</h1>
+          </div>
+        </div>
+        <div className="portfolio-empty" style={{ textAlign: "center", padding: "60px 20px" }}>
+          <IconChartPie size={48} style={{ opacity: 0.3, marginBottom: 16 }} />
+          <h2 style={{ marginBottom: 8 }}>No account selected</h2>
+          <p className="muted">Connect a Deriv account to view your portfolio, open positions, and trade history.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="portfolio-dashboard">
