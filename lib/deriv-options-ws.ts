@@ -10,7 +10,16 @@ export async function getOptionsAccounts(accessToken: string): Promise<OptionsAc
     headers: { "Deriv-App-ID": appId, Authorization: `Bearer ${accessToken}` },
     cache: "no-store",
   });
-  if (!response.ok) throw new Error("Unable to retrieve Options accounts");
+  if (!response.ok) {
+    const failure = (await response.json().catch(() => null)) as {
+      errors?: Array<{ message?: string }>;
+      error?: { message?: string };
+      message?: string;
+    } | null;
+    throw new Error(
+      failure?.errors?.[0]?.message ?? failure?.error?.message ?? failure?.message ?? "Unable to retrieve Options accounts",
+    );
+  }
   const body = (await response.json()) as {
     data?: { accounts?: Record<string, unknown>[] } | Record<string, unknown>[];
     accounts?: Record<string, unknown>[] };
@@ -43,7 +52,16 @@ export async function getOptionsSocketUrl(accountId: string, accessToken: string
     headers: { "Deriv-App-ID": appId, Authorization: `Bearer ${accessToken}` },
     cache: "no-store",
   });
-  if (!response.ok) throw new Error("Unable to create an Options WebSocket session");
+  if (!response.ok) {
+    const failure = (await response.json().catch(() => null)) as {
+      errors?: Array<{ message?: string }>;
+      error?: { message?: string };
+      message?: string;
+    } | null;
+    throw new Error(
+      failure?.errors?.[0]?.message ?? failure?.error?.message ?? failure?.message ?? "Unable to create an Options WebSocket session",
+    );
+  }
   const body = (await response.json()) as { data?: { url?: string } };
   if (!body.data?.url) throw new Error("Deriv did not return a WebSocket URL");
   return body.data.url;
@@ -71,8 +89,12 @@ export function requestOptionsWs<T>(url: string, request: Record<string, unknown
       try {
         const message = JSON.parse(String(payload)) as { msg_type?: string; error?: { message?: string } };
         lastMessageType = message.msg_type ?? "untyped response";
+        if (message.error) {
+          finish(new Error(message.error.message ?? "Deriv request failed"));
+          return;
+        }
         if (message.msg_type === messageType)
-          finish(message.error ? new Error(message.error.message ?? "Deriv request failed") : undefined, message as T);
+          finish(undefined, message as T);
       } catch {
         lastMessageType = "unparseable response";
       }
