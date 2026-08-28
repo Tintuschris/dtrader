@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
   const offset = numberParam(searchParams.get("offset"), 0, Number.MAX_SAFE_INTEGER);
   try {
     const account = await resolveOptionsAccount(session.accessToken, searchParams.get("accountId") ?? session.loginId);
+    console.info("[deriv:history] requesting", { accountId: account.id, limit, offset });
     const socketUrl = await getOptionsSocketUrl(account.id, session.accessToken);
     const response = await requestOptionsWs<{ profit_table?: { transactions?: Record<string, unknown>[]; count?: number } }>(socketUrl, { profit_table: 1, description: 1, limit, offset }, "profit_table");
     const source = response.profit_table?.transactions ?? [];
@@ -29,8 +30,10 @@ export async function GET(request: NextRequest) {
         sell_time: Number(item.sell_time ?? 0) || undefined, account_type: account.type, account_id: account.id,
       };
     });
+    console.info("[deriv:history] received", { accountId: account.id, count: trades.length });
     return NextResponse.json({ trades, total: response.profit_table?.count ?? null, hasMore: source.length === limit, account });
   } catch (error) {
+    console.error("[deriv:history] failed", { error: error instanceof Error ? error.message : String(error) });
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to load trade history." }, { status: 500 });
   }
 }

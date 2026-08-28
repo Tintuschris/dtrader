@@ -11,17 +11,16 @@ type Wallet = {
   balance: number | null;
 };
 
-function normaliseWallet(source: Record<string, unknown>): Wallet | null {
-  const id = String(source.wallet_id ?? source.id ?? source.wallet_type ?? "");
-  if (!id) return null;
-  const balances = source.balances as Record<string, unknown> | undefined;
-  const amount = source.balance ?? balances?.total ?? balances?.available ?? balances?.balance;
-  return {
-    id,
-    walletType: String(source.wallet_type ?? source.type ?? "Wallet"),
-    currency: String(source.currency ?? balances?.currency ?? "USD"),
-    balance: typeof amount === "number" ? amount : Number.isFinite(Number(amount)) ? Number(amount) : null,
-  };
+function normaliseWallet(source: Record<string, unknown>): Wallet[] {
+  const walletId = String(source.wallet_id ?? source.id ?? "");
+  const balances = source.balances as Record<string, { balance?: string | number }> | undefined;
+  if (!walletId || !balances) return [];
+  return Object.entries(balances).map(([currency, value]) => ({
+    id: `${walletId}:${currency}`,
+    walletType: String(source.type ?? source.wallet_type ?? "Wallet"),
+    currency,
+    balance: Number.isFinite(Number(value?.balance)) ? Number(value.balance) : null,
+  }));
 }
 
 export async function GET() {
@@ -41,7 +40,8 @@ export async function GET() {
 
   const source = payload?.data?.wallets ?? payload?.data ?? payload?.wallets ?? [];
   const wallets = Array.isArray(source)
-    ? source.map((wallet) => normaliseWallet(wallet as Record<string, unknown>)).filter(Boolean)
+    ? source.flatMap((wallet) => normaliseWallet(wallet as Record<string, unknown>))
     : [];
+  console.info("[deriv:wallets] received", { count: wallets.length });
   return NextResponse.json({ wallets });
 }

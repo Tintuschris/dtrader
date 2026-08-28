@@ -12,7 +12,7 @@ export async function getOptionsAccounts(accessToken: string): Promise<OptionsAc
   const entries = Array.isArray(body.data) ? body.data : body.data?.accounts ?? body.accounts ?? [];
   return entries.map((account) => {
     const id = String(account.loginid ?? account.account_id ?? account.id ?? "");
-    const virtual = account.is_virtual === 1 || account.is_virtual === true || String(account.type ?? "").toLowerCase().includes("demo") || id.startsWith("VR");
+    const virtual = account.is_virtual === 1 || account.is_virtual === true || String(account.account_type ?? account.type ?? "").toLowerCase().includes("demo") || id.startsWith("VR");
     return { id, type: (virtual ? "demo" : "real") as OptionsAccount["type"], currency: String(account.currency ?? "USD") };
   }).filter((account) => account.id);
 }
@@ -30,16 +30,26 @@ export async function getOptionsSocketUrl(accountId: string, accessToken: string
 export function requestOptionsWs<T>(url: string, request: Record<string, unknown>, messageType: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
-    const timer = setTimeout(() => { socket.close(); reject(new Error("Deriv request timed out")); }, 12_000);
-    const finish = (error?: Error, value?: T) => { clearTimeout(timer); socket.close(); if (error) reject(error); else resolve(value as T); };
+    let settled = false;
+    let lastMessageType = "no response";
+    const finish = (error?: Error, value?: T) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); socket.close();
+      if (error) reject(error); else resolve(value as T);
+    };
+    const timer = setTimeout(() => finish(new Error(`Deriv request timed out waiting for ${messageType}; last response: ${lastMessageType}`)), 12_000);
     socket.on("open", () => socket.send(JSON.stringify(request)));
     socket.on("message", (payload) => {
       try {
         const message = JSON.parse(String(payload)) as { msg_type?: string; error?: { message?: string } };
+        lastMessageType = message.msg_type ?? "untyped response";
         if (message.msg_type === messageType) finish(message.error ? new Error(message.error.message ?? "Deriv request failed") : undefined, message as T);
-      } catch { /* Ignore unrelated malformed frames. */ }
+      } catch { lastMessageType = "unparseable response"; }
     });
     socket.on("error", (error) => finish(error));
+    socket.on("close", (code, reason) => {
+      if (!settled) finish(new Error(`Deriv WebSocket closed (${code}) before ${messageType}: ${reason.toString() || lastMessageType}`));
+    });
   });
 }
 
