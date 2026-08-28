@@ -578,7 +578,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
         duration_ticks: duration,
         barrier: subNeedsBarrier(subContract) ? String(selectedDigit) : undefined,
       });
-    }, 250);
+    }, 100);
     return () => {
       if (proposeTimer.current) clearTimeout(proposeTimer.current);
     };
