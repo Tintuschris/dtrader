@@ -286,7 +286,14 @@ export function useDerivTrading() {
                 display_name: p.display_name,
               };
               proposalRef.current = proposal;
-              setCurrentProposal(proposal);
+              // Only update React state if values actually changed to avoid
+              // unnecessary re-renders that cause payout flickering
+              setCurrentProposal((prev) => {
+                if (prev && prev.id === proposal.id && prev.payout === proposal.payout && prev.ask_price === proposal.ask_price) {
+                  return prev; // Same values — skip re-render
+                }
+                return proposal;
+              });
               setProposalLoading(false);
               if (msg.id) {
                 proposalSubscriptionIdRef.current = String(msg.id);
