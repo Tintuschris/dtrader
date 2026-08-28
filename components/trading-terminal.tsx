@@ -1294,7 +1294,9 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       {/* ===== ANALYZER TAB ===== */}
       {activeTab === "analyzer" && (
         <section className="workspace">
-          <MarketAnalyzerPanel />
+          <ErrorBoundary name="MarketAnalyzer" fallback={<div style={{ padding: 40, textAlign: "center" }}><IconAlertTriangle size={32} color="#f59e0b" /><h3 style={{ margin: "12px 0 8px" }}>Analyzer Failed to Load</h3><p style={{ color: "var(--muted)", fontSize: 13 }}>The neural network engine encountered an error. Try refreshing the page.</p></div>}>
+            <MarketAnalyzerPanel />
+          </ErrorBoundary>
         </section>
       )}
 
