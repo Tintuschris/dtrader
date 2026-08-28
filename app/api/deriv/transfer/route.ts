@@ -22,7 +22,7 @@ function isWalletId(id: string): boolean {
 }
 
 function generateRequestId(): string {
-  return `tx_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  return crypto.randomUUID();
 }
 
 type WalletInfo = { wallet_id: string; currency: string; type: string };
