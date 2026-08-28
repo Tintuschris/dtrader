@@ -201,8 +201,6 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     refreshBalance,
     refreshAccounts,
     accounts: wsAccounts,
-    fetchProfitTable,
-    fetchPortfolio,
     clearLastResult,
     clearError,
   } = useDerivTrading();
@@ -1301,7 +1299,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
             </div>
             <Link className="stream-button" href="/">← Back to Workspace</Link>
           </div>
-          <TradingHistory accountId={activeAccountId} balanceCurrency={balanceCurrency} fetchProfitTable={fetchProfitTable} />
+          <TradingHistory accountId={activeAccountId} balanceCurrency={balanceCurrency} />
         </section>
       )}
 
