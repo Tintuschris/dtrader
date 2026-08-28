@@ -8,9 +8,21 @@ export const dynamic = "force-dynamic";
 const numberParam = (value: string | null, fallback: number, maximum: number) =>
   Math.min(Math.max(Number.parseInt(value ?? "", 10) || fallback, 0), maximum);
 
+/** Structured logger — every step writes a JSON line to server logs */
+function log(level: "info" | "warn" | "error", step: string, data: Record<string, unknown>) {
+  const entry = JSON.stringify({ ts: new Date().toISOString(), level, step, ...data });
+  if (level === "error") console.error(entry);
+  else if (level === "warn") console.warn(entry);
+  else console.log(entry);
+}
+
 export async function GET(request: NextRequest) {
+  const t0 = Date.now();
+
+  /* ── 1. Session check ─────────────────────────────────────────── */
   const session = await getSession();
   if (!session?.accessToken) {
+    log("warn", "session", { status: "missing" });
     return NextResponse.json({ error: "Please log in to load trade history." }, { status: 401 });
   }
 
@@ -19,16 +31,28 @@ export async function GET(request: NextRequest) {
   const offset = numberParam(searchParams.get("offset"), 0, Number.MAX_SAFE_INTEGER);
   const targetAccountId = searchParams.get("accountId") ?? session.loginId;
 
-  // The Options API requires a PAT, not an OAuth token.
-  // Use PAT directly for the account resolution + OTP + WebSocket chain.
+  log("info", "start", {
+    hasToken: !!session.accessToken,
+    tokenPrefix: session.accessToken.substring(0, 6),
+    targetAccountId: targetAccountId ?? "(none)",
+    loginId: session.loginId ?? "(none)",
+    limit,
+    offset,
+  });
+
+  /* ── 2. PAT check ─────────────────────────────────────────────── */
   const pat = process.env.DERIV_PAT;
   if (!pat) {
+    log("error", "env", { hasPAT: false, msg: "DERIV_PAT not set" });
     return NextResponse.json({ error: "DERIV_PAT not configured on the server." }, { status: 500 });
   }
+  log("info", "env", { hasPAT: true, patPrefix: pat.substring(0, 8) });
 
-  console.log("[deriv:history] fetching with PAT", { targetAccountId, limit, offset });
-
+  /* ── 3. Options API chain ─────────────────────────────────────── */
   try {
+    log("info", "ws_chain", { msg: "calling requestOptionsAccountWs with PAT" });
+    const t1 = Date.now();
+
     const { result, accountId, accountType } = await requestOptionsAccountWs<{
       profit_table?: { transactions?: Record<string, unknown>[]; count?: number };
     }>(
@@ -38,7 +62,15 @@ export async function GET(request: NextRequest) {
       "profit_table",
     );
 
-    console.log("[deriv:history] success", { accountId, count: result.profit_table?.count });
+    log("info", "ws_chain_ok", {
+      elapsed_ms: Date.now() - t1,
+      accountId,
+      accountType,
+      txCount: result.profit_table?.transactions?.length ?? 0,
+      totalCount: result.profit_table?.count,
+    });
+
+    /* ── 4. Map trades ───────────────────────────────────────────── */
     const source = result.profit_table?.transactions ?? [];
     const trades = source.map((item) => {
       const profit = Number(item.profit ?? 0);
@@ -59,6 +91,8 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    log("info", "done", { elapsed_ms: Date.now() - t0, tradesReturned: trades.length });
+
     return NextResponse.json({
       trades,
       total: result.profit_table?.count ?? trades.length,
@@ -66,10 +100,9 @@ export async function GET(request: NextRequest) {
       account: { id: accountId, type: accountType },
     });
   } catch (error) {
-    console.error("[deriv:history] failed:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unable to load trade history." },
-      { status: 500 },
-    );
+    const elapsed = Date.now() - t0;
+    const msg = error instanceof Error ? error.message : String(error);
+    log("error", "failed", { elapsed_ms: elapsed, error: msg });
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

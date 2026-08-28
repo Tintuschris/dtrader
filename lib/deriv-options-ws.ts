@@ -16,11 +16,13 @@ export async function getOptionsAccounts(accessToken: string): Promise<OptionsAc
     return res;
   };
 
+  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "getOptionsAccounts", msg: "trying token", tokenPrefix: accessToken.substring(0, 8) }));
   let response = await tryFetch(accessToken);
+  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "getOptionsAccounts", msg: "first attempt", status: response.status }));
   if (response.status === 401) {
     const pat = process.env.DERIV_PAT;
     if (pat) {
-      console.warn("[OptionsAPI] OAuth token rejected (401), retrying with PAT");
+      console.log(JSON.stringify({ ts: new Date().toISOString(), step: "getOptionsAccounts", msg: "401 retry with PAT" }));
       response = await tryFetch(pat);
     }
   }
@@ -71,11 +73,13 @@ export async function getOptionsSocketUrl(accountId: string, accessToken: string
     return res;
   };
 
+  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "getOptionsSocketUrl", msg: "trying token", accountId }));
   let response = await tryFetch(accessToken);
+  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "getOptionsSocketUrl", msg: "first attempt", status: response.status }));
   if (response.status === 401) {
     const pat = process.env.DERIV_PAT;
     if (pat) {
-      console.warn("[OptionsAPI] OAuth token rejected for OTP (401), retrying with PAT");
+      console.log(JSON.stringify({ ts: new Date().toISOString(), step: "getOptionsSocketUrl", msg: "401 retry with PAT" }));
       response = await tryFetch(pat);
     }
   }
@@ -95,7 +99,7 @@ export async function getOptionsSocketUrl(accountId: string, accessToken: string
 }
 
 export function requestOptionsWs<T>(url: string, request: Record<string, unknown>, messageType: string): Promise<T> {
-  return new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     let settled = false;
     let lastMessageType = "no response";
@@ -111,11 +115,15 @@ export function requestOptionsWs<T>(url: string, request: Record<string, unknown
       () => finish(new Error(`Deriv request timed out waiting for ${messageType}; last response: ${lastMessageType}`)),
       12_000,
     );
-    socket.on("open", () => socket.send(JSON.stringify(request)));
+    socket.on("open", () => {
+      console.log(JSON.stringify({ ts: new Date().toISOString(), step: "requestOptionsWs", msg: "OPEN", request: JSON.stringify(request).substring(0, 120) }));
+      socket.send(JSON.stringify(request));
+    });
     socket.on("message", (payload) => {
       try {
         const message = JSON.parse(String(payload)) as { msg_type?: string; error?: { message?: string } };
         lastMessageType = message.msg_type ?? "untyped response";
+        console.log(JSON.stringify({ ts: new Date().toISOString(), step: "requestOptionsWs", msg: "message", msg_type: message.msg_type, hasError: !!message.error, errorMsg: message.error?.message }));
         if (message.error) {
           finish(new Error(message.error.message ?? "Deriv request failed"));
           return;
@@ -126,8 +134,9 @@ export function requestOptionsWs<T>(url: string, request: Record<string, unknown
         lastMessageType = "unparseable response";
       }
     });
-    socket.on("error", (error) => finish(error));
+    socket.on("error", (error) => { console.log(JSON.stringify({ ts: new Date().toISOString(), step: "requestOptionsWs", msg: "WS_ERROR", error: error.message })); finish(error); });
     socket.on("close", (code, reason) => {
+      console.log(JSON.stringify({ ts: new Date().toISOString(), step: "requestOptionsWs", msg: "WS_CLOSE", code, reason: reason.toString(), lastMsgType: lastMessageType, settled }));
       if (!settled)
         finish(new Error(`Deriv WebSocket closed (${code}) before ${messageType}: ${reason.toString() || lastMessageType}`));
     });
@@ -144,9 +153,13 @@ export async function requestOptionsAccountWs<T>(
   request: Record<string, unknown>,
   messageType: string,
 ): Promise<{ result: T; accountId: string; accountType: "demo" | "real" }> {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "requestOptionsAccountWs", msg: "start", requestedAccountId, messageType }));
   const account = await resolveOptionsAccount(accessToken, requestedAccountId);
+  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "requestOptionsAccountWs", msg: "account_resolved", accountId: account.id, accountType: account.type }));
   const url = await getOptionsSocketUrl(account.id, accessToken);
+  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "requestOptionsAccountWs", msg: "otp_url_ok", urlPrefix: url.substring(0, 70) }));
   const result = await requestOptionsWs<T>(url, request, messageType);
+  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "requestOptionsAccountWs", msg: "result_received" }));
   return {
     result,
     accountId: account.id,
@@ -167,8 +180,7 @@ export async function requestOptionsAccountWs<T>(
 function resolveCoreAppId(): string {
   const explicit = process.env.DERIV_CORE_APP_ID;
   if (explicit && /^\d+$/.test(explicit) && explicit.length >= 3) {
-    console.log("[CoreAPI] Using explicit DERIV_CORE_APP_ID:", explicit);
-    return explicit;
+        return explicit;
   }
   console.warn("[CoreAPI] DERIV_CORE_APP_ID not set or invalid. Add a numeric app_id to .env.local and Vercel.");
   console.warn("[CoreAPI] Get one at https://developers.deriv.com/dashboard (Legacy API app). Falling back to 1001.");
@@ -182,8 +194,7 @@ export async function derivV3AuthRequest<T>(
   timeoutMs = 15_000,
 ): Promise<{ result: T; accountId: string; accountType: "demo" | "real" }> {
   const appId = resolveCoreAppId();
-  console.log("[CoreAPI] Using app_id:", appId);
-
+  
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${appId}`);
     let settled = false;
