@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "../../../../lib/deriv-session";
-import { requestOptionsAccountWs } from "../../../../lib/deriv-options-ws";
+import { derivV3AuthRequest, requestOptionsAccountWs } from "../../../../lib/deriv-options-ws";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,13 +20,13 @@ export async function GET(request: NextRequest) {
   const targetAccountId = searchParams.get("accountId") ?? session.loginId;
 
   try {
-    const { result, accountId, accountType } = await requestOptionsAccountWs<{
+    const { result, accountId, accountType } = await derivV3AuthRequest<{
       profit_table?: { transactions?: Record<string, unknown>[]; count?: number };
     }>(
       session.accessToken,
-      targetAccountId,
       { profit_table: 1, description: 1, limit, offset, sort: "DESC" },
       "profit_table",
+      targetAccountId ?? undefined
     );
 
     const source = result.profit_table?.transactions ?? [];

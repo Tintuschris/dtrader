@@ -132,6 +132,19 @@ export async function requestOptionsAccountWs<T>(
  * First authenticates with the OAuth token, then sends the requested payload (profit_table, portfolio, statement, etc.).
  * Handles account switching if a targetAccountId is specified and sub-account tokens are returned.
  */
+
+/**
+ * Resolve the numeric Core API WebSocket app_id.
+ * Priority: DERIV_CORE_APP_ID (numeric) > numeric prefix of DERIV_APP_ID > 1001.
+ */
+function resolveCoreAppId(): string {
+  const explicit = process.env.DERIV_CORE_APP_ID;
+  if (explicit && /^\d+$/.test(explicit)) return explicit;
+  const oauthId = process.env.DERIV_APP_ID ?? "";
+  const numeric = oauthId.match(/^(\d+)/)?.[1];
+  if (numeric) return numeric;
+  return "1001";
+}
 export async function derivV3AuthRequest<T>(
   accessToken: string,
   payload: Record<string, unknown>,
@@ -139,10 +152,8 @@ export async function derivV3AuthRequest<T>(
   targetAccountId?: string,
   timeoutMs = 15_000,
 ): Promise<{ result: T; accountId: string; accountType: "demo" | "real" }> {
-  const appId = process.env.DERIV_CORE_APP_ID;
-  if (!appId || !/^\d+$/.test(appId)) {
-    throw new Error("DERIV_CORE_APP_ID must be your numeric Deriv WebSocket App ID. It is different from the OAuth client ID used by DERIV_APP_ID.");
-  }
+  const appId = resolveCoreAppId();
+  console.log("[CoreAPI] Using app_id:", appId);
 
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${appId}`);
