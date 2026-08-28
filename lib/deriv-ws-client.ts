@@ -25,9 +25,10 @@ const OPTIONS_REST_URL = "https://api.derivws.com/trading/v1/options";
  */
 export async function derivPublicRequest<T = Record<string, unknown>>(
   payload: Record<string, unknown>,
-  expectedMsgType: string,
+  expectedMsgType: string | string[],
   timeoutMs = 15_000,
 ): Promise<T> {
+  const expectedTypes = Array.isArray(expectedMsgType) ? expectedMsgType : [expectedMsgType];
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${OPTIONS_WS_URL}/public`);
     const timer = setTimeout(() => {
@@ -42,15 +43,17 @@ export async function derivPublicRequest<T = Record<string, unknown>>(
     ws.on("message", (event) => {
       try {
         const msg = JSON.parse(String(event)) as Record<string, unknown>;
-        if (msg.msg_type === expectedMsgType) {
+        if (msg.error) {
           clearTimeout(timer);
           ws.close();
-          if (msg.error) {
-            const errMsg = (msg.error as Record<string, string>).message ?? JSON.stringify(msg.error);
-            reject(new Error(`Deriv API error: ${errMsg}`));
-          } else {
-            resolve(msg as T);
-          }
+          const errMsg = (msg.error as Record<string, string>).message ?? JSON.stringify(msg.error);
+          reject(new Error(`Deriv API error: ${errMsg}`));
+          return;
+        }
+        if (typeof msg.msg_type === "string" && expectedTypes.includes(msg.msg_type)) {
+          clearTimeout(timer);
+          ws.close();
+          resolve(msg as T);
         }
       } catch { /* ignore non-JSON */ }
     });
@@ -231,8 +234,8 @@ export async function getTicksHistory(
   count: number = 100,
 ): Promise<number[]> {
   const data = await derivPublicRequest<{
-    tick_history?: { prices?: (number | string)[] };
     history?: { prices?: (number | string)[] };
+    candles?: Array<{ close?: number | string }>;
   }>(
     {
       ticks_history: symbol,
@@ -241,8 +244,13 @@ export async function getTicksHistory(
       end: "latest",
       style: "ticks",
     },
-    "tick_history",
+    ["history", "candles"],
   );
-  const prices = data.tick_history?.prices ?? data.history?.prices ?? [];
-  return prices.map(Number);
+  if (data.history?.prices) {
+    return data.history.prices.map(Number);
+  }
+  if (Array.isArray(data.candles)) {
+    return data.candles.map((c) => Number(c.close ?? 0));
+  }
+  return [];
 }

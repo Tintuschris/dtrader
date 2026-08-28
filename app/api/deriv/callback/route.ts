@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
       console.error("Token exchange failed:", tokenResponse.status, errText);
       return NextResponse.redirect(
         new URL(
-          `/auth_error=Token+exchange+failed+(${tokenResponse.status})`,
+          `/?auth_error=Token+exchange+failed+(${tokenResponse.status})`,
           request.url,
         ),
       );

@@ -275,6 +275,31 @@ export function useBot(deps: BotWSDeps) {
       if (!b || b.status !== "running") return;
 
       const stake = b.currentStake;
+
+      if (result.status === "error") {
+        const trade: BotTrade = {
+          id: `btrade_${Date.now()}`,
+          contract_id: result.contract_id,
+          stake,
+          payout: 0,
+          profit: 0,
+          status: "error",
+          timestamp: Date.now(),
+          contract_type: b.config.contract_type,
+          error: result.error,
+        };
+
+        updateBot(id, {
+          trades: [...b.trades, trade].slice(-200),
+          error: result.error ?? "Trade execution error",
+        });
+
+        // Retry next trade after a short delay
+        const timer = setTimeout(() => executeTrade(id), Math.max(3000, tradeDelay()));
+        botTimers.current.set(id, timer);
+        return;
+      }
+
       const lastResult = result.status === "won" ? ("won" as const) : ("lost" as const);
       const newTotalProfit = b.totalProfit + result.profit;
       const nextStake = calculateNextStake(
@@ -378,7 +403,7 @@ export function useBot(deps: BotWSDeps) {
 
           if (!proposal) {
             finaliseTrade(id, {
-              profit: -stake,
+              profit: 0,
               payout: 0,
               status: "error",
               contract_id: "",
@@ -414,7 +439,7 @@ export function useBot(deps: BotWSDeps) {
 
               if (!openContract) {
                 finaliseTrade(id, {
-                  profit: -stake,
+                  profit: 0,
                   payout: 0,
                   status: "error",
                   contract_id: "",
