@@ -206,19 +206,46 @@ export async function executeCrossCurrencyTransfer(payload: {
   });
 }
 
-/** Execute a transfer between a wallet and a trading platform account. */
+/**
+ * Execute a transfer between a wallet and a trading platform account.
+ *
+ * Deriv /wallet/v1/transfers/platforms schema:
+ * {
+ *   source_type: "main" | "p2p" | "platform" | "payment_agent",
+ *   destination_type: "main" | "p2p" | "platform" | "payment_agent",
+ *   source_id: string,
+ *   destination_id: string,
+ *   amount: string (pattern: ^\\d+(\\.\\d+)?$),
+ *   balance: string (pattern: ^\\d+(\\.\\d+)?$),  // REQUIRED – source balance
+ *   source_currency: string,
+ *   destination_currency: string,
+ *   source_platform_name?: "mt5" | "ctrader" | "options" | "crypto-exchange" | "tradingview",
+ *   destination_platform_name?: "mt5" | "ctrader" | "options" | "crypto-exchange" | "tradingview",
+ *   rate?: string,
+ * }
+ */
+export type PlatformName = "mt5" | "ctrader" | "options" | "crypto-exchange" | "tradingview";
+
+export type WalletType = "main" | "p2p" | "platform" | "payment_agent";
+
 export async function executePlatformTransfer(payload: {
-  direction: "from_wallet" | "to_wallet";
-  account_id: string;
+  source_type: WalletType;
+  destination_type: WalletType;
+  source_id: string;
+  destination_id: string;
   amount: string;
-  currency: string;
-  wallet_currency?: string;
-  exchange_rate?: string;
-  rate_token?: string;
+  balance: string;
+  source_currency: string;
+  destination_currency: string;
+  source_platform_name?: PlatformName;
+  destination_platform_name?: PlatformName;
+  rate?: string;
   request_id: string;
 }): Promise<TransferResponse> {
-  return walletFetch<TransferResponse>("/transfers/platforms", {
+  const { request_id, ...body } = payload;
+  // request_id is passed as a query parameter for the platforms endpoint
+  return walletFetch<TransferResponse>(`/transfers/platforms?request_id=${encodeURIComponent(request_id)}`, {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
 }
