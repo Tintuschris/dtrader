@@ -19,16 +19,26 @@ export async function GET(request: NextRequest) {
   const offset = numberParam(searchParams.get("offset"), 0, Number.MAX_SAFE_INTEGER);
   const targetAccountId = searchParams.get("accountId") ?? session.loginId;
 
+  // The Options API requires a PAT, not an OAuth token.
+  // Use PAT directly for the account resolution + OTP + WebSocket chain.
+  const pat = process.env.DERIV_PAT;
+  if (!pat) {
+    return NextResponse.json({ error: "DERIV_PAT not configured on the server." }, { status: 500 });
+  }
+
+  console.log("[deriv:history] fetching with PAT", { targetAccountId, limit, offset });
+
   try {
     const { result, accountId, accountType } = await requestOptionsAccountWs<{
       profit_table?: { transactions?: Record<string, unknown>[]; count?: number };
     }>(
-      session.accessToken,
+      pat,
       targetAccountId,
       { profit_table: 1, description: 1, limit, offset, sort: "DESC" },
       "profit_table",
     );
 
+    console.log("[deriv:history] success", { accountId, count: result.profit_table?.count });
     const source = result.profit_table?.transactions ?? [];
     const trades = source.map((item) => {
       const profit = Number(item.profit ?? 0);
