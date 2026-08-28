@@ -5,30 +5,10 @@
  * and that transaction data is displayed properly.
  */
 
+import { timeAgo, fmtCurrency } from "../lib/format-utils";
+
 describe("Transaction Display", () => {
   describe("timeAgo function", () => {
-    // Replicate the timeAgo logic from wallet-panel.tsx
-    function timeAgo(dateStr: string): string {
-      if (!dateStr) return "—";
-      let timestamp: number;
-      if (/^\d+$/.test(dateStr.trim())) {
-        const num = Number(dateStr);
-        timestamp = num > 1e12 ? num : num * 1000;
-      } else {
-        timestamp = new Date(dateStr).getTime();
-      }
-      if (Number.isNaN(timestamp) || timestamp <= 0) return "—";
-      const now = Date.now();
-      const diffSec = Math.floor((now - timestamp) / 1000);
-      if (diffSec < 0) return "just now";
-      if (diffSec < 60) return "just now";
-      const diffMin = Math.floor(diffSec / 60);
-      if (diffMin < 60) return `${diffMin}m ago`;
-      const diffHr = Math.floor(diffMin / 60);
-      if (diffHr < 24) return `${diffHr}h ago`;
-      const diffDay = Math.floor(diffHr / 24);
-      return `${diffDay}d ago`;
-    }
 
     it("should return — for empty string", () => {
       expect(timeAgo("")).toBe("—");
@@ -114,12 +94,6 @@ describe("Transaction Display", () => {
   });
 
   describe("Currency formatting", () => {
-    function fmtCurrency(n: number | string | null | undefined, currency: string): string {
-      if (n === null || n === undefined || isNaN(Number(n))) return "—";
-      const val = Number(n);
-      if (currency === "USD" || currency === "USDT") return `$${val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-      return `${val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
-    }
 
     it("should format USD amounts", () => {
       expect(fmtCurrency("1.5", "USD")).toBe("$1.50");

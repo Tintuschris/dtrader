@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AccountInfo } from "./use-deriv-ws";
 import { useWallets, usePlatformAccounts, useTransactions, useTransfer, useExchangeRate } from "./use-deriv-data";
-import type { WalletBalance, AccountBalance, Transaction, TransferPreview } from "./use-deriv-data";
+import type { AccountBalance, TransferPreview } from "./use-deriv-data";
+import { fmt, fmtCurrency, timeAgo } from "../lib/format-utils";
 import {
   IconWallet,
   IconArrowRight,
@@ -26,47 +27,7 @@ type WalletPanelProps = {
   activeCurrency: string;
   onSelectAccount: (account: { id: string; type: "demo" | "real"; currency: string; balance?: number }) => void;
   onClose: () => void;
-};
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-function fmt(n: number | string | null | undefined) {
-  if (n === null || n === undefined || isNaN(Number(n))) return "—";
-  return Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function fmtCurrency(n: number | string | null | undefined, currency: string) {
-  if (n === null || n === undefined || isNaN(Number(n))) return "—";
-  const val = Number(n);
-  if (currency === "USD" || currency === "USDT") return `$${fmt(val)}`;
-  return `${fmt(val)} ${currency}`;
-}
-
-function timeAgo(dateStr: string) {
-  if (!dateStr) return "—";
-  let timestamp: number;
-  if (/^\d+$/.test(dateStr.trim())) {
-    const num = Number(dateStr);
-    timestamp = num > 1e12 ? num : num * 1000;
-  } else {
-    timestamp = new Date(dateStr).getTime();
-  }
-  if (Number.isNaN(timestamp) || timestamp <= 0) return "—";
-  const now = Date.now();
-  const diffSec = Math.floor((now - timestamp) / 1000);
-  if (diffSec < 0) return "just now";
-  if (diffSec < 60) return "just now";
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  return `${diffDay}d ago`;
-}
-
-type Tab = "balances" | "transactions";
+};type Tab = "balances" | "transactions";
 
 /* ------------------------------------------------------------------ */
 /*  Skeleton Components                                                */

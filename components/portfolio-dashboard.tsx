@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePortfolio, useTradeHistory } from "./use-deriv-data";
 import type { DerivContract } from "./use-deriv-data";
+import { formatContractType } from "../lib/format-utils";
 import {
   IconTrendingUp,
   IconTrendingDown,
@@ -189,7 +190,7 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
   const contractDist = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const t of completedTrades) {
-      const label = formatType(t.contract_type);
+      const label = formatContractType(t.contract_type);
       counts[label] = (counts[label] || 0) + 1;
     }
     return Object.entries(counts)
@@ -214,7 +215,7 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
   const typeWinRates = useMemo(() => {
     const groups: Record<string, { wins: number; total: number }> = {};
     for (const t of completedTrades) {
-      const label = formatType(t.contract_type);
+      const label = formatContractType(t.contract_type);
       if (!groups[label]) groups[label] = { wins: 0, total: 0 };
       groups[label].total++;
       if (t.status === "won") groups[label].wins++;
@@ -272,7 +273,7 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
           <h2>Open positions</h2>
           {openPositions.map((position) => (
             <div className="open-position" key={position.contract_id}>
-              <span>{formatType(position.contract_type)} · {position.symbol}</span>
+              <span>{formatContractType(position.contract_type)} · {position.symbol}</span>
               <span>Stake {position.buy_price.toFixed(2)} {balanceCurrency}</span>
               <strong className={position.profit >= 0 ? "positive" : "negative"}>
                 {position.profit >= 0 ? "+" : ""}{position.profit.toFixed(2)}
@@ -503,7 +504,7 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
               </div>
               {completedTrades.slice(0, 20).map((t) => (
                 <div key={t.id} className={`rt-row ${t.status}`}>
-                  <span className="rt-type">{formatType(t.contract_type)}</span>
+                  <span className="rt-type">{formatContractType(t.contract_type)}</span>
                   <span className="rt-digit">{t.digit_prediction ?? "—"}</span>
                   <span className="rt-stake">${Number((t as Record<string, unknown>).stake ?? t.buy_price).toFixed(2)}</span>
                   <span className="rt-payout">${t.payout.toFixed(2)}</span>
@@ -523,14 +524,4 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
 
-function formatType(type: string): string {
-  const map: Record<string, string> = {
-    DIGITOVER: "Over", DIGITUNDER: "Under", DIGITMATCH: "Match",
-    DIGITDIFF: "Differs", DIGITEVEN: "Even", DIGITODD: "Odd",
-  };
-  return map[type] ?? type;
-}

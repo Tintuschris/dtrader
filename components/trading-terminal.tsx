@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   IconSettings, IconMenu2, IconX, IconRefresh, IconChevronDown,
   IconArrowUp, IconArrowDown, IconArrowRight, IconChartLine,
@@ -22,6 +23,7 @@ import dynamic from "next/dynamic";
 const MarketAnalyzerPanel = dynamic(() => import("./market-analyzer"), { ssr: false, loading: () => <div className="workspace"><div className="workspace-heading"><div><p className="eyebrow">ANALYZER</p><h1>Market Analyzer</h1><p className="muted">Loading neural network engine…</p></div></div></div> });
 import { useBot } from "./use-bot";
 import WalletPanel from "./wallet-panel";
+import ErrorBoundary from "./error-boundary";
 import { ToastContainer, NotificationCenter, pushNotification } from "./notification-system";
 import PortfolioDashboard from "./portfolio-dashboard";
 import { getGlobalAnalyzer } from "../lib/market-analyzer";
@@ -175,6 +177,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
   const tickReconnectAttempts = useRef(0);
   const tickReconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSymbolRef = useRef(symbol);
+  const queryClient = useQueryClient();
 
   const {
     connectionStatus,
@@ -542,7 +545,10 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     });
     // Update risk state
     setRiskState((prev) => updateRiskState(prev, riskSettings, lastResult));
-  }, [lastResult, riskSettings]);
+    // Auto-refresh wallet balances after trade settles
+    queryClient.invalidateQueries({ queryKey: ["deriv", "wallets"] });
+    queryClient.invalidateQueries({ queryKey: ["deriv", "platformAccounts"] });
+  }, [lastResult, riskSettings, queryClient]);
 
   /* ---- daily risk reset ---- */
   useEffect(() => {
@@ -1295,7 +1301,9 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       {/* ===== PORTFOLIO TAB ===== */}
       {activeTab === "portfolio" && (
         <section className="workspace">
-          <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} />
+          <ErrorBoundary name="PortfolioDashboard">
+            <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} />
+          </ErrorBoundary>
         </section>
       )}
 
@@ -1352,6 +1360,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
 
       {/* ===== WALLET PANEL ===== */}
       {showWallet && (
+        <ErrorBoundary name="WalletPanel" fallback={<><div className="wallet-panel-overlay" onClick={() => setShowWallet(false)} /><div className="wallet-panel"><div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>Failed to load wallet. <button onClick={() => setShowWallet(false)} style={{ color: "var(--teal)", background: "none", border: "none", cursor: "pointer" }}>Close</button></div></div></>}>
         <WalletPanel
           activeAccountId={activeAccountId}
           accounts={wsAccounts}
@@ -1363,6 +1372,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
           }}
           onClose={() => setShowWallet(false)}
         />
+        </ErrorBoundary>
       )}
 
       {/* ===== NOTIFICATION CENTER ===== */}
