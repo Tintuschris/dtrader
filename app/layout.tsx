@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import Providers from "../components/providers";
 import TerminalShell from "../components/terminal-shell";
 
 export const metadata: Metadata = {
@@ -11,8 +12,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en">
       <body>
-        <TerminalShell />
-        {children}
+        <Providers>
+          <TerminalShell />
+          {children}
+        </Providers>
       </body>
     </html>
   );

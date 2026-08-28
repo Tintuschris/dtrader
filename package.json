@@ -6,10 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "jest",
+    "test:watch": "jest --watch",
     "postinstall": "cp node_modules/@tensorflow/tfjs/dist/tf.min.js public/tf.min.js"
   },
   "dependencies": {
     "@tabler/icons-react": "^3.46.0",
+    "@tanstack/react-query": "^5.102.8",
     "@tensorflow/tfjs": "^4.22.0",
     "blockly": "^13.2.1",
     "js-interpreter": "^6.0.2",
@@ -19,10 +22,13 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",
+    "jest": "^30.5.0",
+    "ts-jest": "^29.4.12",
     "typescript": "^5"
   }
 }
