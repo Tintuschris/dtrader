@@ -49,6 +49,15 @@ const DerivContext = createContext<DerivContextValue | null>(null);
 /*  Query Client                                                       */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Exponential backoff delay with full jitter.
+ * Attempt 0 → 0-1s, 1 → 0-2s, 2 → 0-4s, 3 → 0-8s (capped at 30s).
+ */
+function exponentialBackoff(attempt: number): number {
+  const base = Math.min(1000 * Math.pow(2, attempt), 30_000);
+  return Math.round(base * Math.random());
+}
+
 function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
@@ -56,6 +65,7 @@ function makeQueryClient() {
         staleTime: 30_000,       // 30s — data is fresh for 30s
         gcTime: 5 * 60_000,      // 5min — garbage collect after 5min
         retry: 2,
+        retryDelay: exponentialBackoff,
         refetchOnWindowFocus: false,
       },
     },

@@ -5,6 +5,20 @@ import { useCallback, useRef, useState } from "react";
 import { fetchDerivApi } from "./deriv-provider";
 
 /* ------------------------------------------------------------------ */
+/*  Retry with exponential backoff + jitter                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Exponential backoff delay with full jitter.
+ * Attempt 0 → 0-1s, 1 → 0-2s, 2 → 0-4s, 3 → 0-8s, 4 → 0-16s (capped at 30s).
+ * Full jitter prevents thundering herd when multiple queries retry together.
+ */
+export function exponentialBackoff(attempt: number): number {
+  const base = Math.min(1000 * Math.pow(2, attempt), 30_000);
+  return Math.round(base * Math.random());
+}
+
+/* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -98,6 +112,8 @@ export function useWallets() {
       return data.wallets ?? [];
     },
     staleTime: 20_000,
+    retry: 3,
+    retryDelay: exponentialBackoff,
   });
 }
 
@@ -113,6 +129,8 @@ export function usePlatformAccounts() {
       return data.accounts ?? [];
     },
     staleTime: 20_000,
+    retry: 3,
+    retryDelay: exponentialBackoff,
   });
 }
 
@@ -136,6 +154,8 @@ export function useTransactions(walletType: string, enabled = true) {
       return data;
     },
     enabled,
+    retry: 3,
+    retryDelay: exponentialBackoff,
   });
 
   const loadMore = useCallback(async () => {
@@ -178,7 +198,8 @@ export function usePortfolio(accountId: string) {
       return data.positions ?? [];
     },
     enabled: !!accountId,
-    retry: 3,
+    retry: 4,
+    retryDelay: exponentialBackoff,
     staleTime: 10_000,
   });
 }
@@ -198,7 +219,8 @@ export function useTradeHistory(accountId: string, limit = 500) {
       return { trades: data.trades ?? [], total: data.total ?? 0 };
     },
     enabled: !!accountId,
-    retry: 3,
+    retry: 4,
+    retryDelay: exponentialBackoff,
     staleTime: 10_000,
   });
 }
