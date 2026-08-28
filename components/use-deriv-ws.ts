@@ -444,6 +444,9 @@ export function useDerivTrading() {
                   buy_price: oc.buy_price ?? 0,
                 };
                 setLastResult(result);
+                // Clear proposal immediately so buy button state updates
+                proposalRef.current = null;
+                setCurrentProposal(null);
                 setTradeHistory((prev) => {
                   const record: TradeRecord = {
                     id: oc.contract_id,
@@ -461,6 +464,12 @@ export function useDerivTrading() {
                 });
                 const settleDelay = (oc.tick_count && oc.tick_count <= 1) ? 1500 : 3000;
                 setTimeout(() => setActiveContract(null), settleDelay);
+                // Pre-warm proposal re-subscription immediately from WS handler
+                // instead of waiting for React effect cycle (saves ~200-400ms)
+                if (proposalSubscriptionIdRef.current) {
+                  ws.send(JSON.stringify({ forget: proposalSubscriptionIdRef.current }));
+                  proposalSubscriptionIdRef.current = null;
+                }
               }
             }
             return;
@@ -626,8 +635,8 @@ export function useDerivTrading() {
     (proposalId: string, price: number): Promise<OpenContract | null> => {
       return new Promise((resolve) => {
         setLastError(null);
-        proposalRef.current = null;
-        setCurrentProposal(null);
+        // Don't clear proposal here — it wastes a re-render while waiting
+        // for WS response. Clear it only after buy succeeds (in the msg handler).
         const msg: Record<string, unknown> = {
           buy: proposalId,
           price,

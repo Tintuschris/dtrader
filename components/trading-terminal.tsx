@@ -617,7 +617,6 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     }
     setIsBuying(true);
     setTradeError(null);
-    clearLastResult();
     // For 1-tick trades, provide immediate visual feedback
     if (duration === 1) {
       pushNotification({ type: "trade", title: "Placing Trade", message: "1-tick trade submitting…", severity: "info" });
