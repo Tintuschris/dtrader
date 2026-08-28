@@ -1009,6 +1009,16 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                         {activeContract.barrier && (
                           <line x1={CHART_LEFT} y1={chartY(Number(activeContract.barrier))} x2={CHART_RIGHT} y2={chartY(Number(activeContract.barrier))} stroke="#f08080" strokeDasharray="4 4" strokeWidth="1.5" opacity=".6" />
                         )}
+                        {activeContract.exit_tick != null && (
+                          <g className="exit-tick-marker">
+                            <circle cx={CHART_RIGHT} cy={chartY(activeContract.exit_tick)} r="7" fill="none" stroke={activeContract.status === "won" ? "#22c55e" : "#ef4444"} strokeWidth="2" opacity="0.6">
+                              <animate attributeName="r" from="4" to="14" dur="1.5s" fill="freeze" />
+                              <animate attributeName="opacity" from="0.8" to="0" dur="1.5s" fill="freeze" />
+                            </circle>
+                            <circle cx={CHART_RIGHT} cy={chartY(activeContract.exit_tick)} r="5" fill={activeContract.status === "won" ? "#22c55e" : "#ef4444"} stroke="#0b1420" strokeWidth="2" />
+                            <text x={CHART_RIGHT - 8} y={chartY(activeContract.exit_tick) + (activeContract.entry_tick != null && activeContract.exit_tick > activeContract.entry_tick ? 18 : -10)} textAnchor="end" fill={activeContract.status === "won" ? "#22c55e" : "#ef4444"} fontSize="9" fontWeight="bold">{activeContract.status === "won" ? "WIN" : "LOSS"}</text>
+                          </g>
+                        )}
                       </>
                     )}
                   </svg>
@@ -1057,6 +1067,16 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                       <circle cx={CHART_RIGHT} cy={chartY(current.value)} r="4" fill="#b9a1ff" stroke="#0b1420" strokeWidth="2" />
                       <rect x={CHART_RIGHT + 6} y={chartY(current.value) - 10} width="58" height="20" rx="4" fill="#b9a1ff" />
                       <text x={CHART_RIGHT + 35} y={chartY(current.value) + 4} fill="#0b1420" fontSize="10" fontWeight="700" fontFamily="Space Grotesk, monospace" textAnchor="middle">{fmt(current.value)}</text>
+                      {activeContract && activeContract.exit_tick != null && (
+                        <g className="exit-tick-marker">
+                          <circle cx={CHART_RIGHT} cy={chartY(activeContract.exit_tick)} r="7" fill="none" stroke={activeContract.status === "won" ? "#22c55e" : "#ef4444"} strokeWidth="2" opacity="0.6">
+                            <animate attributeName="r" from="4" to="14" dur="1.5s" fill="freeze" />
+                            <animate attributeName="opacity" from="0.8" to="0" dur="1.5s" fill="freeze" />
+                          </circle>
+                          <circle cx={CHART_RIGHT} cy={chartY(activeContract.exit_tick)} r="5" fill={activeContract.status === "won" ? "#22c55e" : "#ef4444"} stroke="#0b1420" strokeWidth="2" />
+                          <text x={CHART_RIGHT - 8} y={chartY(activeContract.exit_tick) + 18} textAnchor="end" fill={activeContract.status === "won" ? "#22c55e" : "#ef4444"} fontSize="9" fontWeight="bold">{activeContract.status === "won" ? "WIN" : "LOSS"}</text>
+                        </g>
+                      )}
                     </svg>
                     <div className="crosshair-label" style={{ top: `${Math.max(5, Math.min(90, (chartY(current.value) / 310) * 100))}%` }}>{fmt(current.value)}</div>
                   </div>
