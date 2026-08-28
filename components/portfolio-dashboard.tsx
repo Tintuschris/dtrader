@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { usePortfolio, useTradeHistory } from "./use-deriv-data";
+import type { DerivContract } from "./use-deriv-data";
 import {
   IconTrendingUp,
   IconTrendingDown,
@@ -11,7 +14,7 @@ import {
   IconActivity,
   IconArrowUpRight,
   IconArrowDownRight,
-  IconFilter,
+  IconRefresh,
 } from "@tabler/icons-react";
 
 /* ------------------------------------------------------------------ */
@@ -34,46 +37,84 @@ type PortfolioProps = {
   accountId: string;
   balance: number | null;
   balanceCurrency: string;
-  fetchProfitTable?: (opts?: { limit?: number; offset?: number }) => Promise<{ transactions: unknown[]; count: number } | null>;
-  fetchPortfolio?: () => Promise<{ positions: unknown[] } | null>;
 };
 
-type DerivContract = { contract_id: string; contract_type: string; symbol: string; buy_price: number; payout: number; profit: number; status: string; barrier?: string; purchase_time: number };
-
 type TimeRange = "all" | "today" | "week" | "month";
+
+/* ------------------------------------------------------------------ */
+/*  Skeleton Components                                                */
+/* ------------------------------------------------------------------ */
+
+function MetricSkeleton() {
+  return (
+    <div className="portfolio-metrics">
+      {[1, 2, 3, 4].map((i) => (
+        <div key={i} className="metric-card" style={{ opacity: 0.6 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: "rgba(255,255,255,.06)" }} />
+          <div className="metric-body">
+            <div style={{ width: 60, height: 10, borderRadius: 4, background: "rgba(255,255,255,.06)", marginBottom: 6 }} />
+            <div style={{ width: 80, height: 20, borderRadius: 4, background: "rgba(255,255,255,.08)", marginBottom: 4 }} />
+            <div style={{ width: 50, height: 10, borderRadius: 4, background: "rgba(255,255,255,.04)" }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ChartSkeleton() {
+  return (
+    <div className="portfolio-charts">
+      <div className="chart-card">
+        <div className="chart-card-header">
+          <div style={{ width: 120, height: 16, borderRadius: 4, background: "rgba(255,255,255,.06)" }} />
+        </div>
+        <div style={{ height: 200, borderRadius: 8, background: "rgba(255,255,255,.03)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ width: "80%", height: 2, borderRadius: 2, background: "rgba(70,211,189,.12)" }} />
+        </div>
+      </div>
+      <div className="chart-card">
+        <div className="chart-card-header">
+          <div style={{ width: 140, height: 16, borderRadius: 4, background: "rgba(255,255,255,.06)" }} />
+        </div>
+        <div style={{ height: 200, borderRadius: 8, background: "rgba(255,255,255,.03)" }} />
+      </div>
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export default function PortfolioDashboard({ accountId, balance, balanceCurrency, fetchProfitTable, fetchPortfolio }: PortfolioProps) {
+export default function PortfolioDashboard({ accountId, balance, balanceCurrency }: PortfolioProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
-  const [closedTrades, setClosedTrades] = useState<DerivContract[]>([]);
-  const [openPositions, setOpenPositions] = useState<DerivContract[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    if (!accountId) return;
-    let cancelled = false;
-    void (async () => {
-      setLoading(true); setError(null);
-      try {
-        const query = new URLSearchParams({ accountId, limit: "500", offset: "0" });
-        const [historyResponse, portfolioResponse] = await Promise.all([fetch(`/api/deriv/trades?${query}`, { cache: "no-store" }), fetch(`/api/deriv/portfolio?accountId=${encodeURIComponent(accountId)}`, { cache: "no-store" })]);
-        const history = await historyResponse.json() as { trades?: DerivContract[]; error?: string };
-        const portfolio = await portfolioResponse.json() as { positions?: DerivContract[]; error?: string };
-        if (!historyResponse.ok) throw new Error(history.error ?? "Unable to load closed contracts");
-        if (!portfolioResponse.ok) throw new Error(portfolio.error ?? "Unable to load open positions");
-        if (!cancelled) { setClosedTrades(history.trades ?? []); setOpenPositions(portfolio.positions ?? []); }
-      } catch (cause) { if (!cancelled) setError(cause instanceof Error ? cause.message : "Unable to load portfolio"); }
-      finally { if (!cancelled) setLoading(false); }
-    })();
-    return () => { cancelled = true; };
-  }, [accountId, refreshKey, fetchProfitTable, fetchPortfolio]);
+  // React Query hooks
+  const { data: openPositions = [], isLoading: positionsLoading, error: positionsError } = usePortfolio(accountId);
+  const { data: tradeData, isLoading: tradesLoading, error: tradesError } = useTradeHistory(accountId, 500);
 
-  const normalizedTrades: Trade[] = useMemo(() => closedTrades.map((trade) => ({ id: trade.contract_id, contract_type: trade.contract_type, buy_price: trade.buy_price, payout: trade.payout, profit: trade.profit, status: trade.profit > 0 ? "won" : trade.profit < 0 ? "lost" : "break_even", symbol: trade.symbol, digit_prediction: trade.barrier === undefined ? undefined : Number(trade.barrier), timestamp: trade.purchase_time * 1000 })), [closedTrades]);
+  const closedTrades = tradeData?.trades ?? [];
+  const loading = positionsLoading || tradesLoading;
+  const error = positionsError?.message ?? tradesError?.message ?? null;
+
+  const handleRefresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["deriv", "portfolio", accountId] });
+    void queryClient.invalidateQueries({ queryKey: ["deriv", "trades", accountId] });
+  };
+
+  const normalizedTrades: Trade[] = useMemo(() => closedTrades.map((trade) => ({
+    id: trade.contract_id,
+    contract_type: trade.contract_type,
+    buy_price: trade.buy_price,
+    payout: trade.payout,
+    profit: trade.profit,
+    status: trade.profit > 0 ? "won" : trade.profit < 0 ? "lost" : "break_even",
+    symbol: trade.symbol,
+    digit_prediction: trade.barrier === undefined ? undefined : Number(trade.barrier),
+    timestamp: trade.purchase_time * 1000,
+  })), [closedTrades]);
 
   const completedTrades = useMemo(() => {
     const now = Date.now();
@@ -108,7 +149,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
     const grossWins = wins.reduce((s, t) => s + t.profit, 0);
     const grossLosses = Math.abs(losses.reduce((s, t) => s + t.profit, 0));
 
-    // Calculate streaks
     let currentStreak = 0, bestStreak = 0, worstStreak = 0;
     let streakType: "won" | "lost" | null = null;
     for (const t of completedTrades) {
@@ -123,12 +163,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
     }
     if (streakType === "won") bestStreak = Math.max(bestStreak, currentStreak);
     if (streakType === "lost") worstStreak = Math.max(worstStreak, currentStreak);
-    // Last streak direction
-    if (completedTrades.length > 0) {
-      const last = completedTrades[completedTrades.length - 1].status;
-      if (last === "won" && currentStreak > 0 && streakType === "won") bestStreak = Math.max(bestStreak, currentStreak);
-      if (last === "lost" && currentStreak > 0 && streakType === "lost") worstStreak = Math.max(worstStreak, currentStreak);
-    }
 
     return {
       totalTrades: completedTrades.length,
@@ -152,7 +186,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
     };
   }, [completedTrades]);
 
-  // Contract type distribution
   const contractDist = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const t of completedTrades) {
@@ -164,16 +197,11 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
       .map(([type, count]) => ({ type, count, pct: (count / completedTrades.length) * 100 }));
   }, [completedTrades]);
 
-  // Cumulative P&L curve
   const pnlCurve = useMemo(() => {
     let cum = 0;
-    return completedTrades.map((t) => {
-      cum += t.profit;
-      return cum;
-    });
+    return completedTrades.map((t) => { cum += t.profit; return cum; });
   }, [completedTrades]);
 
-  // Digit distribution
   const digitDist = useMemo(() => {
     const counts = new Array(10).fill(0) as number[];
     for (const t of completedTrades) {
@@ -183,7 +211,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
     return counts.map((c, d) => ({ digit: d, count: c, height: (c / max) * 100 }));
   }, [completedTrades]);
 
-  // Win/loss by contract type
   const typeWinRates = useMemo(() => {
     const groups: Record<string, { wins: number; total: number }> = {};
     for (const t of completedTrades) {
@@ -197,7 +224,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
     }));
   }, [completedTrades]);
 
-  // Hourly performance (trades grouped by hour of day)
   const hourlyPerf = useMemo(() => {
     const hours = new Array(24).fill(0) as number[];
     for (const t of completedTrades) {
@@ -234,12 +260,34 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
         <div><span className="summary-label">Selected account</span><strong>{accountId || "—"}</strong></div>
         <div><span className="summary-label">Available balance</span><strong>{balance === null ? "—" : `${balance.toFixed(2)} ${balanceCurrency}`}</strong></div>
         <div><span className="summary-label">Open positions</span><strong>{openPositions.length}</strong></div>
-        <button className="filter-btn refresh-btn" onClick={() => setRefreshKey((key) => key + 1)} disabled={loading}>{loading ? "Refreshing…" : "Refresh data"}</button>
+        <button className="filter-btn refresh-btn" onClick={handleRefresh} disabled={loading}>
+          <IconRefresh size={14} className={loading ? "spin" : ""} /> {loading ? "Refreshing…" : "Refresh data"}
+        </button>
       </div>
-      {error && <div className="portfolio-empty"><p>{error}</p></div>}
-      {!error && openPositions.length > 0 && <div className="open-positions"><h2>Open positions</h2>{openPositions.map((position) => <div className="open-position" key={position.contract_id}><span>{formatType(position.contract_type)} · {position.symbol}</span><span>Stake {position.buy_price.toFixed(2)} {balanceCurrency}</span><strong className={position.profit >= 0 ? "positive" : "negative"}>{position.profit >= 0 ? "+" : ""}{position.profit.toFixed(2)}</strong></div>)}</div>}
 
-      {!error && completedTrades.length === 0 ? (
+      {error && <div className="portfolio-empty"><p>{error}</p></div>}
+
+      {!error && openPositions.length > 0 && (
+        <div className="open-positions">
+          <h2>Open positions</h2>
+          {openPositions.map((position) => (
+            <div className="open-position" key={position.contract_id}>
+              <span>{formatType(position.contract_type)} · {position.symbol}</span>
+              <span>Stake {position.buy_price.toFixed(2)} {balanceCurrency}</span>
+              <strong className={position.profit >= 0 ? "positive" : "negative"}>
+                {position.profit >= 0 ? "+" : ""}{position.profit.toFixed(2)}
+              </strong>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {loading && completedTrades.length === 0 ? (
+        <>
+          <MetricSkeleton />
+          <ChartSkeleton />
+        </>
+      ) : !error && completedTrades.length === 0 ? (
         <div className="portfolio-empty">
           <IconChartBar size={48} />
           <h2>No trades yet</h2>
@@ -317,7 +365,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
 
           {/* ===== CHARTS ROW ===== */}
           <div className="portfolio-charts">
-            {/* Cumulative P&L */}
             <div className="chart-card">
               <div className="chart-card-header">
                 <h3>Cumulative P&L</h3>
@@ -325,14 +372,11 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
               </div>
               <div className="pnl-chart">
                 <svg viewBox={`0 0 ${Math.max(pnlCurve.length * 20, 100)} 200`} preserveAspectRatio="none">
-                  {/* Zero line */}
                   <line x1="0" y1="100" x2={Math.max(pnlCurve.length * 20, 100)} y2="100" stroke="rgba(157,179,203,.2)" strokeDasharray="4 4" />
-                  {/* Area fill */}
                   <path
                     d={`M 0 100 ${pnlCurve.map((v, i) => `L ${i * 20 + 10} ${100 - (v / maxPnl) * 80}`).join(" ")} L ${pnlCurve.length * 20} 100 Z`}
                     fill={stats.totalPnL >= 0 ? "rgba(70,211,189,.15)" : "rgba(240,80,80,.15)"}
                   />
-                  {/* Line */}
                   <polyline
                     points={pnlCurve.map((v, i) => `${i * 20 + 10},${100 - (v / maxPnl) * 80}`).join(" ")}
                     fill="none"
@@ -354,7 +398,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
               </div>
             </div>
 
-            {/* Contract Type Distribution */}
             <div className="chart-card">
               <div className="chart-card-header">
                 <h3>Contract Distribution</h3>
@@ -375,7 +418,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
 
           {/* ===== SECOND ROW ===== */}
           <div className="portfolio-charts">
-            {/* Win Rate by Type */}
             <div className="chart-card">
               <div className="chart-card-header">
                 <h3>Win Rate by Contract</h3>
@@ -399,7 +441,6 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
               </div>
             </div>
 
-            {/* Digit Prediction Distribution */}
             <div className="chart-card">
               <div className="chart-card-header">
                 <h3>Digit Predictions</h3>
