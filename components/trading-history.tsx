@@ -70,7 +70,6 @@ export default function TradingHistory({ accountId, balanceCurrency, fetchProfit
       setTotal(typeof data.total === "number" ? data.total : null);
       setHasMore(Boolean(data.hasMore));
     } catch (cause) {
-      setTrades([]);
       setError(cause instanceof Error ? cause.message : "Unable to load trade history");
     } finally {
       setLoading(false);

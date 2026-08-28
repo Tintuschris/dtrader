@@ -34,6 +34,8 @@ type PortfolioProps = {
   accountId: string;
   balance: number | null;
   balanceCurrency: string;
+  fetchProfitTable?: (opts?: { limit?: number; offset?: number }) => Promise<{ transactions: unknown[]; count: number } | null>;
+  fetchPortfolio?: () => Promise<{ positions: unknown[] } | null>;
 };
 
 type DerivContract = { contract_id: string; contract_type: string; symbol: string; buy_price: number; payout: number; profit: number; status: string; barrier?: string; purchase_time: number };
@@ -44,7 +46,7 @@ type TimeRange = "all" | "today" | "week" | "month";
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export default function PortfolioDashboard({ accountId, balance, balanceCurrency }: PortfolioProps) {
+export default function PortfolioDashboard({ accountId, balance, balanceCurrency, fetchProfitTable, fetchPortfolio }: PortfolioProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [closedTrades, setClosedTrades] = useState<DerivContract[]>([]);
   const [openPositions, setOpenPositions] = useState<DerivContract[]>([]);
@@ -69,7 +71,7 @@ export default function PortfolioDashboard({ accountId, balance, balanceCurrency
       finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [accountId, refreshKey]);
+  }, [accountId, refreshKey, fetchProfitTable, fetchPortfolio]);
 
   const normalizedTrades: Trade[] = useMemo(() => closedTrades.map((trade) => ({ id: trade.contract_id, contract_type: trade.contract_type, buy_price: trade.buy_price, payout: trade.payout, profit: trade.profit, status: trade.profit > 0 ? "won" : trade.profit < 0 ? "lost" : "break_even", symbol: trade.symbol, digit_prediction: trade.barrier === undefined ? undefined : Number(trade.barrier), timestamp: trade.purchase_time * 1000 })), [closedTrades]);
 

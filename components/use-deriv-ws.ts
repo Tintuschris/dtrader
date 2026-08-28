@@ -94,7 +94,7 @@ let nextReqId = 1;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const BASE_DELAY = 1000;
 const MAX_DELAY = 30000;
-const PING_INTERVAL_MS = 25000; // Keep WebSocket alive
+const PING_INTERVAL_MS = 15_000; // Keep WebSocket alive
 
 function jitteredDelay(attempt: number): number {
   const base = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY);
@@ -114,6 +114,7 @@ export function useDerivTrading() {
   const pendingProposals = useRef<Map<string, (p: Proposal | null) => void>>(new Map());
   const proposalRef = useRef<Proposal | null>(null);
   const pendingBuys = useRef<Map<string, (c: OpenContract | null) => void>>(new Map());
+  const pendingPortfolio = useRef<(data: { positions: unknown[] } | null) => void>(null);
   const pendingProfitTable = useRef<(data: { transactions: unknown[]; count: number } | null) => void>(null);
   const contractSubscribers = useRef<Map<string, (c: OpenContract) => void>>(new Map());
   const skipAutoSubscribe = useRef(false);
@@ -241,6 +242,16 @@ export function useDerivTrading() {
           }
 
           // proposal
+          if (msg.msg_type === "portfolio") {
+            const pf = msg.portfolio as { contracts?: unknown[] } | undefined;
+            const resolve = pendingPortfolio.current;
+            if (resolve) {
+              pendingPortfolio.current = null;
+              resolve(pf ? { positions: pf.contracts ?? [] } : null);
+            }
+            return;
+          }
+
           if (msg.msg_type === "profit_table") {
             const pt = msg.profit_table as { transactions?: unknown[]; count?: number } | undefined;
             const resolve = pendingProfitTable.current;
@@ -746,6 +757,34 @@ export function useDerivTrading() {
     [send],
   );
 
+
+  /* ---- fetchPortfolio ---- */
+  const fetchPortfolio = useCallback(
+    (): Promise<{ positions: unknown[] } | null> => {
+      return new Promise((resolve) => {
+        setLastError(null);
+        if (pendingPortfolio.current) {
+          pendingPortfolio.current(null);
+        }
+        const id = send({ portfolio: 1 });
+        if (!id) {
+          setLastError('WebSocket not connected — cannot fetch portfolio');
+          resolve(null);
+          return;
+        }
+        pendingPortfolio.current = resolve;
+        setTimeout(() => {
+          if (pendingPortfolio.current) {
+            pendingPortfolio.current = null;
+            setLastError('Portfolio request timed out');
+            resolve(null);
+          }
+        }, 15000);
+      });
+    },
+    [send],
+  );
+
   const clearLastResult = useCallback(() => setLastResult(null), []);
   const clearError = useCallback(() => setLastError(null), []);
 
@@ -770,6 +809,7 @@ export function useDerivTrading() {
     unsubscribeFromContract,
     refreshBalance,
     fetchProfitTable,
+    fetchPortfolio,
     refreshAccounts,
     clearProposal: () => {
       if (proposalSubscriptionIdRef.current) {

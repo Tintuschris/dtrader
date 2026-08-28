@@ -199,6 +199,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     refreshAccounts,
     accounts: wsAccounts,
     fetchProfitTable,
+    fetchPortfolio,
     clearLastResult,
     clearError,
   } = useDerivTrading();
@@ -1280,7 +1281,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       {/* ===== PORTFOLIO TAB ===== */}
       {activeTab === "portfolio" && (
         <section className="workspace">
-          <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} />
+          <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} fetchProfitTable={fetchProfitTable} fetchPortfolio={fetchPortfolio} />
         </section>
       )}
 
