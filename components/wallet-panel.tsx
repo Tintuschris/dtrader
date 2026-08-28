@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AccountInfo } from "./use-deriv-ws";
+import { useWallets, usePlatformAccounts, useTransactions, useTransfer, useExchangeRate } from "./use-deriv-data";
+import type { WalletBalance, AccountBalance, Transaction, TransferPreview } from "./use-deriv-data";
 import {
   IconWallet,
   IconArrowRight,
@@ -10,65 +12,12 @@ import {
   IconSwitch2,
   IconCheck,
   IconAlertCircle,
-  IconHistory,
   IconReceipt,
-  IconChevronDown,
 } from "@tabler/icons-react";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
-
-export type AccountBalance = {
-  id: string;
-  loginid: string;
-  type: "demo" | "real";
-  currency: string;
-  balance?: number | null;
-  account_type?: string;
-  account_subtype?: string;
-  is_wallet?: boolean;
-};
-
-export type WalletBalance = {
-  id: string;
-  walletType: string;
-  currency: string;
-  balance: number | null;
-};
-
-type TransferPreview = {
-  mode: "preview";
-  is_valid: boolean;
-  source_currency: string;
-  destination_currency: string;
-  amount: string;
-  fee: string;
-  net_amount: string;
-  estimated_destination_amount: string;
-  exchange_rate?: string;
-  rate_token?: string;
-  error?: string;
-};
-
-type TransferResult = {
-  mode: "executed";
-  success: boolean;
-  request_id: string;
-  status: string;
-};
-
-type Transaction = {
-  transaction_id: string;
-  amount: string;
-  currency: string;
-  balance_after: string;
-  description: string;
-  category: string;
-  channel: string;
-  created_at: string;
-  request_id?: string;
-};
 
 type WalletPanelProps = {
   activeAccountId: string;
@@ -96,9 +45,18 @@ function fmtCurrency(n: number | string | null | undefined, currency: string) {
 }
 
 function timeAgo(dateStr: string) {
+  if (!dateStr) return "—";
+  let timestamp: number;
+  if (/^\d+$/.test(dateStr.trim())) {
+    const num = Number(dateStr);
+    timestamp = num > 1e12 ? num : num * 1000;
+  } else {
+    timestamp = new Date(dateStr).getTime();
+  }
+  if (Number.isNaN(timestamp) || timestamp <= 0) return "—";
   const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diffSec = Math.floor((now - then) / 1000);
+  const diffSec = Math.floor((now - timestamp) / 1000);
+  if (diffSec < 0) return "just now";
   if (diffSec < 60) return "just now";
   const diffMin = Math.floor(diffSec / 60);
   if (diffMin < 60) return `${diffMin}m ago`;
@@ -109,6 +67,52 @@ function timeAgo(dateStr: string) {
 }
 
 type Tab = "balances" | "transactions";
+
+/* ------------------------------------------------------------------ */
+/*  Skeleton Components                                                */
+/* ------------------------------------------------------------------ */
+
+function WalletSkeleton() {
+  return (
+    <div className="wallet-skeleton">
+      {[1, 2].map((i) => (
+        <div key={i} className="wallet-skeleton-row" style={{
+          display: "flex", alignItems: "center", gap: 10, padding: "10px 0",
+          borderBottom: "1px solid var(--border, #222)",
+        }}>
+          <div style={{ width: 50, height: 16, borderRadius: 4, background: "rgba(255,255,255,.06)" }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ width: "60%", height: 14, borderRadius: 4, background: "rgba(255,255,255,.06)", marginBottom: 4 }} />
+            <div style={{ width: "30%", height: 10, borderRadius: 4, background: "rgba(255,255,255,.04)" }} />
+          </div>
+          <div style={{ width: 60, height: 16, borderRadius: 4, background: "rgba(255,255,255,.06)" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TransactionSkeleton() {
+  return (
+    <div>
+      {[1, 2, 3, 4].map((i) => (
+        <div key={i} style={{
+          display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+          padding: "10px 0", borderBottom: "1px solid var(--border, #222)", fontSize: 13,
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ width: "70%", height: 14, borderRadius: 4, background: "rgba(255,255,255,.06)", marginBottom: 6 }} />
+            <div style={{ width: "40%", height: 10, borderRadius: 4, background: "rgba(255,255,255,.04)" }} />
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ width: 50, height: 14, borderRadius: 4, background: "rgba(255,255,255,.06)", marginBottom: 6 }} />
+            <div style={{ width: 40, height: 10, borderRadius: 4, background: "rgba(255,255,255,.04)" }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
@@ -123,136 +127,28 @@ export default function WalletPanel({
   onClose,
 }: WalletPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("balances");
-  const [refreshing, setRefreshing] = useState(false);
 
-  // Balances state
-  const [wallets, setWallets] = useState<WalletBalance[]>([]);
-  const [platformAccounts, setPlatformAccounts] = useState<AccountBalance[]>([]);
-  const [walletError, setWalletError] = useState<string | null>(null);
+  // React Query hooks for data
+  const { data: wallets = [], isLoading: walletsLoading, error: walletsError, refetch: refetchWallets } = useWallets();
+  const { data: platformAccounts = [], isLoading: accountsLoading } = usePlatformAccounts();
 
-  // Transfer state
+  // Transfer state (local UI)
   const [showTransfer, setShowTransfer] = useState(false);
   const [transferFrom, setTransferFrom] = useState("");
   const [transferTo, setTransferTo] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
-  const [transferLoading, setTransferLoading] = useState(false);
-  const [transferError, setTransferError] = useState<string | null>(null);
-  const [transferSuccess, setTransferSuccess] = useState(false);
   const [transferPreview, setTransferPreview] = useState<TransferPreview | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [transferSuccess, setTransferSuccess] = useState(false);
 
-  // Exchange rate state
-  const [exchangeRate, setExchangeRate] = useState<string | null>(null);
-  const [rateLoading, setRateLoading] = useState(false);
-  const rateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Transfer mutations
+  const { validate: validateMutation, execute: executeMutation } = useTransfer();
 
-  // Transactions state
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [txLoading, setTxLoading] = useState(false);
-  const [txError, setTxError] = useState<string | null>(null);
+  // Transactions
   const [txWalletType, setTxWalletType] = useState("main");
-  const [txHasMore, setTxHasMore] = useState(false);
+  const { transactions, isLoading: txLoading, error: txError, hasMore, loadMore, refetch: refetchTx } = useTransactions(txWalletType, activeTab === "transactions");
 
-  /* ── Fetch balances ──────────────────────────────────────────── */
-
-  const fetchBalances = useCallback(async () => {
-    setRefreshing(true);
-    setWalletError(null);
-    try {
-      const [walletRes, balancesRes] = await Promise.all([
-        fetch("/api/deriv/wallets", { cache: "no-store" }).catch(() => null),
-        fetch("/api/deriv/balances", { cache: "no-store" }).catch(() => null),
-      ]);
-      const errors: string[] = [];
-
-      if (walletRes) {
-        const data = (await walletRes.json().catch(() => ({}))) as { wallets?: WalletBalance[]; error?: string };
-        if (walletRes.ok) setWallets(data.wallets ?? []);
-        else errors.push(data.error ?? "Unable to load wallets");
-      } else {
-        errors.push("Unable to reach the wallet service");
-      }
-
-      if (balancesRes) {
-        const data = (await balancesRes.json().catch(() => ({}))) as { accounts?: AccountBalance[]; error?: string };
-        if (balancesRes.ok) setPlatformAccounts(data.accounts ?? []);
-        else errors.push(data.error ?? "Unable to load Options trading accounts");
-      } else {
-        errors.push("Unable to reach the trading-account service");
-      }
-
-      if (errors.length > 0) setWalletError(errors.join(". "));
-    } catch (error) {
-      setWalletError(error instanceof Error ? error.message : "Unable to load balances");
-    } finally {
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => { void fetchBalances(); }, [fetchBalances]);
-
-  /* ── Fetch transactions ──────────────────────────────────────── */
-
-  const fetchTransactions = useCallback(async (walletType: string, append = false) => {
-    setTxLoading(true);
-    setTxError(null);
-    try {
-      const res = await fetch(`/api/deriv/transactions?walletType=${encodeURIComponent(walletType)}&limit=50`, { cache: "no-store" });
-      const data = (await res.json().catch(() => ({}))) as { transactions?: Transaction[]; error?: string; links?: { next?: string } };
-      if (!res.ok) {
-        setTxError(data.error ?? "Unable to load transactions");
-        return;
-      }
-      if (append) {
-        setTransactions((prev) => [...prev, ...(data.transactions ?? [])]);
-      } else {
-        setTransactions(data.transactions ?? []);
-      }
-      setTxHasMore(!!data.links?.next);
-    } catch {
-      setTxError("Unable to load transactions");
-    } finally {
-      setTxLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (activeTab === "transactions") void fetchTransactions(txWalletType);
-  }, [activeTab, txWalletType, fetchTransactions]);
-
-  /* ── Live exchange rate ──────────────────────────────────────── */
-
-  useEffect(() => {
-    if (rateTimerRef.current) clearTimeout(rateTimerRef.current);
-
-    const fromAcct = allTransferrable.find((a) => a.id === transferFrom);
-    const toAcct = allTransferrable.find((a) => a.id === transferTo);
-
-    if (!fromAcct || !toAcct || fromAcct.currency === toAcct.currency) {
-      setExchangeRate(null);
-      return;
-    }
-
-    if (!transferAmount || parseFloat(transferAmount) <= 0) {
-      setExchangeRate(null);
-      return;
-    }
-
-    rateTimerRef.current = setTimeout(() => {
-      setRateLoading(true);
-      fetch(`/api/deriv/exchange-rate?from=${fromAcct.currency}&to=${toAcct.currency}`)
-        .then((r) => r.json())
-        .then((data: { exchange_rate?: string }) => {
-          setExchangeRate(data.exchange_rate ?? null);
-        })
-        .catch(() => setExchangeRate(null))
-        .finally(() => setRateLoading(false));
-    }, 500);
-
-    return () => { if (rateTimerRef.current) clearTimeout(rateTimerRef.current); };
-  }, [transferFrom, transferTo, transferAmount]);
-
-  /* ── Derived state ───────────────────────────────────────────── */
+  /* ── Derived state ──────────────────────────────────────────── */
 
   const tradingAccounts: AccountBalance[] = useMemo(() => {
     const map = new Map<string, AccountBalance>();
@@ -282,7 +178,9 @@ export default function WalletPanel({
       list.push({ id: walletId, label: `Wallet (${w.walletType}) · ${w.currency}`, currency: w.currency, balance: w.balance });
     }
     for (const a of tradingAccounts) {
-      list.push({ id: a.id || a.loginid, label: `${a.type === "real" ? "Real" : "Demo"} (${a.account_type || "Options"}) · ${a.id}`, currency: a.currency, balance: a.balance ?? null });
+      if (a.type === "real") {
+        list.push({ id: a.id || a.loginid, label: `${a.account_type || "Options"} · ${a.id}`, currency: a.currency, balance: a.balance ?? null });
+      }
     }
     return list;
   }, [wallets, tradingAccounts]);
@@ -296,86 +194,63 @@ export default function WalletPanel({
 
   const selectedFromAccount = useMemo(() => allTransferrable.find((a) => a.id === transferFrom), [allTransferrable, transferFrom]);
   const selectedToAccount = useMemo(() => allTransferrable.find((a) => a.id === transferTo), [allTransferrable, transferTo]);
+
+  // Exchange rate (must be after allTransferrable is defined)
   const isCrossCurrency = selectedFromAccount && selectedToAccount && selectedFromAccount.currency !== selectedToAccount.currency;
+  const { data: exchangeRate, isLoading: rateLoading } = useExchangeRate(
+    selectedFromAccount?.currency ?? "",
+    selectedToAccount?.currency ?? "",
+    isCrossCurrency && !!transferAmount && parseFloat(transferAmount) > 0,
+  );
 
   const walletBalance = wallets.reduce((sum, w) => sum + (w.balance ?? 0), 0);
   const tradingBalance = tradingAccounts.reduce((sum, a) => sum + (a.balance ?? 0), 0);
   const visibleBalance = walletBalance + tradingBalance;
 
-  /* ── Transfer: validate (preview) ────────────────────────────── */
+  /* ── Transfer handlers ──────────────────────────────────────── */
 
   const handleValidate = useCallback(async () => {
     if (!transferFrom || !transferTo || !transferAmount) return;
     const amount = parseFloat(transferAmount);
-    if (isNaN(amount) || amount <= 0) { setTransferError("Enter a valid transfer amount"); return; }
+    if (isNaN(amount) || amount <= 0) return;
 
-    setTransferLoading(true);
-    setTransferError(null);
-    setTransferPreview(null);
-    setShowConfirm(false);
     try {
-      const res = await fetch("/api/deriv/transfer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from: transferFrom, to: transferTo, amount }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setTransferError(data.error ?? "Transfer validation failed");
-        return;
-      }
-      setTransferPreview(data as TransferPreview);
+      const result = await validateMutation.mutateAsync({ from: transferFrom, to: transferTo, amount });
+      setTransferPreview(result);
       setShowConfirm(true);
-    } catch (e) {
-      setTransferError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setTransferLoading(false);
+    } catch {
+      // Error is in validateMutation.error
     }
-  }, [transferFrom, transferTo, transferAmount]);
-
-  /* ── Transfer: confirm (execute) ─────────────────────────────── */
+  }, [transferFrom, transferTo, transferAmount, validateMutation]);
 
   const handleConfirm = useCallback(async () => {
     if (!transferFrom || !transferTo || !transferAmount) return;
     const amount = parseFloat(transferAmount);
-    setTransferLoading(true);
-    setTransferError(null);
+
     try {
-      const res = await fetch("/api/deriv/transfer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ from: transferFrom, to: transferTo, amount, confirm: true }),
-      });
-      const data = (await res.json()) as TransferResult | { error?: string };
-      if (!res.ok) {
-        setTransferError((data as { error?: string }).error ?? "Transfer failed");
-        setShowConfirm(false);
-        return;
-      }
+      await executeMutation.mutateAsync({ from: transferFrom, to: transferTo, amount });
       setTransferSuccess(true);
       setShowConfirm(false);
       setTransferPreview(null);
       setTransferAmount("");
-      await fetchBalances();
       setTimeout(() => setTransferSuccess(false), 4000);
-    } catch (e) {
-      setTransferError(e instanceof Error ? e.message : String(e));
+    } catch {
+      // Error is in executeMutation.error
       setShowConfirm(false);
-    } finally {
-      setTransferLoading(false);
     }
-  }, [transferFrom, transferTo, transferAmount, fetchBalances]);
-
-  /* ── Reset transfer state ────────────────────────────────────── */
+  }, [transferFrom, transferTo, transferAmount, executeMutation]);
 
   const resetTransfer = useCallback(() => {
     setShowConfirm(false);
     setTransferPreview(null);
-    setTransferError(null);
     setTransferSuccess(false);
     setTransferAmount("");
-    setExchangeRate(null);
-  }, []);
+    validateMutation.reset();
+    executeMutation.reset();
+  }, [validateMutation, executeMutation]);
+
+  const transferError = validateMutation.error?.message ?? executeMutation.error?.message ?? null;
+  const transferLoading = validateMutation.isPending || executeMutation.isPending;
 
   /* ── Render ──────────────────────────────────────────────────── */
 
@@ -390,8 +265,8 @@ export default function WalletPanel({
             <span>Wallet & Accounts</span>
           </div>
           <div className="wallet-panel-actions">
-            <button className="wallet-icon-btn" onClick={() => void fetchBalances()} disabled={refreshing} title="Refresh balances">
-              <IconRefresh size={16} className={refreshing ? "spin" : ""} />
+            <button className="wallet-icon-btn" onClick={() => { void refetchWallets(); }} disabled={walletsLoading} title="Refresh balances">
+              <IconRefresh size={16} className={walletsLoading ? "spin" : ""} />
             </button>
             <button className="wallet-icon-btn" onClick={onClose}><IconX size={16} /></button>
           </div>
@@ -425,10 +300,10 @@ export default function WalletPanel({
             {/* Main Wallets */}
             <div className="wallet-section">
               <div className="wallet-section-title">Main Wallets</div>
-              {walletError ? (
-                <div className="wallet-empty">{walletError}</div>
-              ) : wallets.length === 0 && refreshing ? (
-                <div className="wallet-loading">Loading wallet balances…</div>
+              {walletsError ? (
+                <div className="wallet-empty">{walletsError.message}</div>
+              ) : walletsLoading ? (
+                <WalletSkeleton />
               ) : wallets.length === 0 ? (
                 <div className="wallet-empty">No active wallets found.</div>
               ) : (
@@ -453,8 +328,8 @@ export default function WalletPanel({
             <div className="wallet-section">
               <div className="wallet-section-title">Options Trading Accounts</div>
               <div className="wallet-accounts">
-                {tradingAccounts.length === 0 && refreshing ? (
-                  <div className="wallet-loading">Loading platform accounts…</div>
+                {accountsLoading ? (
+                  <WalletSkeleton />
                 ) : tradingAccounts.length === 0 ? (
                   <div className="wallet-empty">No trading accounts found.</div>
                 ) : (
@@ -588,7 +463,7 @@ export default function WalletPanel({
                     )}
 
                     <label>From</label>
-                    <select value={transferFrom} onChange={(e) => { setTransferFrom(e.target.value); setExchangeRate(null); }}>
+                    <select value={transferFrom} onChange={(e) => { setTransferFrom(e.target.value); }}>
                       {allTransferrable.map((a) => (
                         <option key={a.id} value={a.id}>{a.label} (${fmt(a.balance)})</option>
                       ))}
@@ -597,7 +472,7 @@ export default function WalletPanel({
                     <div className="wallet-transfer-arrow"><IconArrowRight size={16} /></div>
 
                     <label>To</label>
-                    <select value={transferTo} onChange={(e) => { setTransferTo(e.target.value); setExchangeRate(null); }}>
+                    <select value={transferTo} onChange={(e) => { setTransferTo(e.target.value); }}>
                       {allTransferrable.map((a) => (
                         <option key={a.id} value={a.id} disabled={a.id === transferFrom}>{a.label} (${fmt(a.balance)})</option>
                       ))}
@@ -648,17 +523,17 @@ export default function WalletPanel({
                   ))
                 )}
               </select>
-              <button className="wallet-icon-btn" onClick={() => void fetchTransactions(txWalletType)} disabled={txLoading} title="Refresh">
+              <button className="wallet-icon-btn" onClick={() => void refetchTx()} disabled={txLoading} title="Refresh">
                 <IconRefresh size={14} className={txLoading ? "spin" : ""} />
               </button>
             </div>
 
             {txError && (
-              <div className="wallet-transfer-error" style={{ marginBottom: 8 }}><IconAlertCircle size={14} /> {txError}</div>
+              <div className="wallet-transfer-error" style={{ marginBottom: 8 }}><IconAlertCircle size={14} /> {txError.message}</div>
             )}
 
             {txLoading && transactions.length === 0 && (
-              <div className="wallet-loading">Loading transactions…</div>
+              <TransactionSkeleton />
             )}
 
             {!txLoading && transactions.length === 0 && !txError && (
@@ -668,6 +543,8 @@ export default function WalletPanel({
             {transactions.map((tx) => {
               const amountNum = Number(tx.amount);
               const isPositive = amountNum >= 0;
+              const displayLabel = tx.description
+                || (tx.category ? tx.category.charAt(0).toUpperCase() + tx.category.slice(1).replace(/_/g, " ") : "Transaction");
               return (
                 <div key={tx.transaction_id} style={{
                   display: "flex", justifyContent: "space-between", alignItems: "flex-start",
@@ -675,11 +552,11 @@ export default function WalletPanel({
                 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 220 }}>
-                      {tx.description || tx.category}
+                      {displayLabel}
                     </div>
                     <div style={{ fontSize: 11, color: "var(--text-secondary, #666)", marginTop: 2 }}>
-                      {tx.category} · {timeAgo(tx.created_at)}
-                      {tx.request_id && <span> · <code style={{ fontSize: 10 }}>{tx.request_id.slice(0, 16)}</code></span>}
+                      {tx.category && <span>{tx.category.replace(/_/g, " ")} · </span>}
+                      {timeAgo(tx.created_at)}
                     </div>
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 12 }}>
@@ -694,10 +571,10 @@ export default function WalletPanel({
               );
             })}
 
-            {txHasMore && !txLoading && (
+            {hasMore && !txLoading && (
               <button
                 style={{ width: "100%", padding: "8px 0", marginTop: 8, background: "none", border: "1px solid var(--border, #333)", borderRadius: 4, color: "var(--text-secondary, #888)", cursor: "pointer", fontSize: 12 }}
-                onClick={() => void fetchTransactions(txWalletType, true)}>
+                onClick={() => void loadMore()}>
                 Load more
               </button>
             )}
