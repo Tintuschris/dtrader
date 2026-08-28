@@ -195,28 +195,20 @@ async function validateOnly(resolved: ResolvedTransfer, amountStr: string, walle
     };
   }
 
-  // For platform transfers, we build the same payload as execute and pass it
-  // to the validate endpoint. The validate endpoint for platform transfers
-  // expects the same schema as the platforms transfer endpoint.
+  // Platform transfers use /transfers/platforms which validates server-side.
+  // The /transfers/validate endpoint only supports wallet-to-wallet, so we
+  // construct the preview locally. The actual validation happens on execute.
   if (transferType === "wallet_to_platform") {
     const platformName = detectPlatformName(resolved.destAccountId!);
-    const validated = await validateTransfer({
-      source_wallet_id: resolved.sourceWalletId!,
-      destination_wallet_id: resolved.sourceWalletId!,
-      amount: amountStr,
-      currency: resolved.sourceCurrency,
-      direction: "from_wallet",
-      account_id: resolved.destAccountId,
-    });
     return {
       mode: "preview" as const,
-      is_valid: validated.is_valid,
+      is_valid: true,
       source_currency: resolved.sourceCurrency,
       destination_currency: resolved.destCurrency,
       amount: amountStr,
-      fee: validated.fee ?? "0",
-      net_amount: validated.net_amount ?? amountStr,
-      estimated_destination_amount: validated.estimated_destination_amount ?? amountStr,
+      fee: "0",
+      net_amount: amountStr,
+      estimated_destination_amount: amountStr,
       exchange_rate: undefined,
       rate_token: undefined,
       platform_name: platformName,
@@ -225,23 +217,15 @@ async function validateOnly(resolved: ResolvedTransfer, amountStr: string, walle
 
   // platform_to_wallet
   const platformName = detectPlatformName(resolved.sourceAccountId!);
-  const validated = await validateTransfer({
-    source_wallet_id: resolved.destWalletId!,
-    destination_wallet_id: resolved.destWalletId!,
-    amount: amountStr,
-    currency: resolved.destCurrency,
-    direction: "to_wallet",
-    account_id: resolved.sourceAccountId,
-  });
   return {
     mode: "preview" as const,
-    is_valid: validated.is_valid,
+    is_valid: true,
     source_currency: resolved.sourceCurrency,
     destination_currency: resolved.destCurrency,
     amount: amountStr,
-    fee: validated.fee ?? "0",
-    net_amount: validated.net_amount ?? amountStr,
-    estimated_destination_amount: validated.estimated_destination_amount ?? amountStr,
+    fee: "0",
+    net_amount: amountStr,
+    estimated_destination_amount: amountStr,
     exchange_rate: undefined,
     rate_token: undefined,
     platform_name: platformName,

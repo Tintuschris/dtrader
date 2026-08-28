@@ -160,7 +160,7 @@ export async function getExchangeRate(
   return walletFetch<ExchangeRateResponse>(`/exchange-rate?${params}`);
 }
 
-/** Validate a transfer without executing it. */
+/** Validate a wallet-to-wallet transfer without executing it. */
 export async function validateTransfer(payload: {
   source_wallet_id: string;
   destination_wallet_id: string;
@@ -168,8 +168,6 @@ export async function validateTransfer(payload: {
   currency?: string;
   exchange_rate?: string;
   rate_token?: string;
-  direction?: string;
-  account_id?: string;
 }): Promise<ValidateResponse> {
   return walletFetch<ValidateResponse>("/transfers/validate", {
     method: "POST",
