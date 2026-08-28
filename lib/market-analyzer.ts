@@ -204,6 +204,9 @@ export class MarketAnalyzer {
   private weights: AnalysisWeights;
   private wsConnections: Map<string, WebSocket> = new Map();
   private wsReconnectAttempts: Map<string, number> = new Map();
+  private static readonly WS_MAX_RECONNECT = 10;
+  private static readonly WS_BASE_DELAY = 1000;
+  private static readonly WS_MAX_DELAY = 30000;
   private updateCallbacks: Set<() => void> = new Set();
   private analysisTimer: ReturnType<typeof setInterval> | null = null;
   private predictor: DigitPredictor;
@@ -286,6 +289,12 @@ export class MarketAnalyzer {
   }
 
   stopStreaming(): void {
+    // Cancel all pending reconnect timers
+    for (const [, timer] of this.wsReconnectTimers) {
+      clearTimeout(timer);
+    }
+    this.wsReconnectTimers.clear();
+    this.wsReconnectAttempts.clear();
     for (const [, ws] of this.wsConnections) {
       ws.close();
     }
@@ -297,34 +306,61 @@ export class MarketAnalyzer {
     this.predictor.stopOnlineLearning();
   }
 
+  private wsReconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+  private static jitteredDelay(attempt: number): number {
+    const base = Math.min(
+      MarketAnalyzer.WS_BASE_DELAY * Math.pow(2, attempt),
+      MarketAnalyzer.WS_MAX_DELAY,
+    );
+    return Math.round(base * (0.8 + Math.random() * 0.4));
+  }
+
   private connectSymbol(symbol: string): void {
+    // Clean up any pending reconnect timer for this symbol
+    const existingTimer = this.wsReconnectTimers.get(symbol);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.wsReconnectTimers.delete(symbol);
+    }
+
     const ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
 
     ws.onopen = () => {
+      // Reset reconnect attempts on successful connection
+      this.wsReconnectAttempts.delete(symbol);
       ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
     };
 
     ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.tick) {
-        this.addTick(symbol, {
-          quote: Number(msg.tick.quote),
-          epoch: msg.tick.epoch,
-        });
-        this.notifyUpdate();
-      }
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.tick) {
+          this.addTick(symbol, {
+            quote: Number(msg.tick.quote),
+            epoch: msg.tick.epoch,
+          });
+          this.notifyUpdate();
+        }
+      } catch { /* ignore parse errors */ }
     };
 
     ws.onerror = () => {
-      // Retry after delay
-      setTimeout(() => {
-        this.wsConnections.delete(symbol);
-        this.connectSymbol(symbol);
-      }, 3000);
+      // onerror is always followed by onclose — reconnection handled there
     };
 
     ws.onclose = () => {
       this.wsConnections.delete(symbol);
+      const attempt = this.wsReconnectAttempts.get(symbol) ?? 0;
+      if (attempt < MarketAnalyzer.WS_MAX_RECONNECT) {
+        this.wsReconnectAttempts.set(symbol, attempt + 1);
+        const delay = MarketAnalyzer.jitteredDelay(attempt);
+        const timer = setTimeout(() => {
+          this.wsReconnectTimers.delete(symbol);
+          this.connectSymbol(symbol);
+        }, delay);
+        this.wsReconnectTimers.set(symbol, timer);
+      }
     };
 
     this.wsConnections.set(symbol, ws);
