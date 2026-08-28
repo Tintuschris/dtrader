@@ -139,10 +139,12 @@ export async function requestOptionsAccountWs<T>(
  */
 function resolveCoreAppId(): string {
   const explicit = process.env.DERIV_CORE_APP_ID;
-  if (explicit && /^\d+$/.test(explicit)) return explicit;
-  const oauthId = process.env.DERIV_APP_ID ?? "";
-  const numeric = oauthId.match(/^(\d+)/)?.[1];
-  if (numeric) return numeric;
+  if (explicit && /^\d+$/.test(explicit) && explicit.length >= 3) {
+    console.log("[CoreAPI] Using explicit DERIV_CORE_APP_ID:", explicit);
+    return explicit;
+  }
+  console.warn("[CoreAPI] DERIV_CORE_APP_ID not set or invalid. Add a numeric app_id to .env.local and Vercel.");
+  console.warn("[CoreAPI] Get one at https://developers.deriv.com/dashboard (Legacy API app). Falling back to 1001.");
   return "1001";
 }
 export async function derivV3AuthRequest<T>(
