@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "../../../../lib/deriv-session";
 import { derivV3AuthRequest } from "../../../../lib/deriv-options-ws";
+import { pooledV3Request } from "../../../../lib/deriv-ws-pool";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,14 +18,22 @@ export async function GET(request: NextRequest) {
   const token = process.env.DERIV_PAT || session.accessToken;
 
   try {
-    const { result, accountId, accountType } = await derivV3AuthRequest<{
-      portfolio?: { contracts?: Record<string, unknown>[] };
-    }>(
-      token,
-      { portfolio: 1 },
-      "portfolio",
-      targetAccountId,
-    );
+    // Try pooled connection first (reuses existing WS), fall back to per-request
+    let result: { portfolio?: { contracts?: Record<string, unknown>[] } };
+    let accountId: string;
+    let accountType: "demo" | "real";
+    try {
+      const pooled = await pooledV3Request<typeof result>(token, { portfolio: 1 }, "portfolio", targetAccountId, 25_000);
+      result = pooled.result;
+      accountId = pooled.accountId;
+      accountType = pooled.accountType;
+    } catch {
+      // Pooled connection failed, fall back to per-request with longer timeout
+      const fallback = await derivV3AuthRequest<typeof result>(token, { portfolio: 1 }, "portfolio", targetAccountId, 30_000);
+      result = fallback.result;
+      accountId = fallback.accountId;
+      accountType = fallback.accountType;
+    }
 
     const positions = (result.portfolio?.contracts ?? []).map((item) => ({
       contract_id: String(item.contract_id ?? ""),

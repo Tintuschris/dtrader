@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "../../../../lib/deriv-session";
 import { derivV3AuthRequest } from "../../../../lib/deriv-options-ws";
+import { pooledV3Request } from "../../../../lib/deriv-ws-pool";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,17 +52,41 @@ export async function GET(request: NextRequest) {
 
   /* ── 3. Core API v3 chain ─────────────────────────────────────── */
   try {
-    log("info", "ws_chain", { msg: "calling derivV3AuthRequest (Core API v3)" });
+    log("info", "ws_chain", { msg: "calling pooledV3Request (Core API v3)" });
     const t1 = Date.now();
 
-    const { result, accountId, accountType } = await derivV3AuthRequest<{
-      profit_table?: { transactions?: Record<string, unknown>[]; count?: number };
-    }>(
-      token,
-      { profit_table: 1, description: 1, limit, offset, sort: "DESC" },
-      "profit_table",
-      targetAccountId,
-    );
+    type ProfitTableResult = { profit_table?: { transactions?: Record<string, unknown>[]; count?: number } };
+    let result: ProfitTableResult;
+    let accountId: string;
+    let accountType: "demo" | "real";
+    try {
+      // Try pooled connection first (reuses existing WS)
+      const pooled = await pooledV3Request<ProfitTableResult>(
+        token,
+        { profit_table: 1, description: 1, limit, offset, sort: "DESC" },
+        "profit_table",
+        targetAccountId,
+        25_000,
+      );
+      result = pooled.result;
+      accountId = pooled.accountId;
+      accountType = pooled.accountType;
+      log("info", "ws_chain_ok", { elapsed_ms: Date.now() - t1, source: "pooled" });
+    } catch {
+      // Pooled connection failed, fall back to per-request
+      log("info", "ws_chain", { msg: "pooled failed, falling back to derivV3AuthRequest" });
+      const fallback = await derivV3AuthRequest<ProfitTableResult>(
+        token,
+        { profit_table: 1, description: 1, limit, offset, sort: "DESC" },
+        "profit_table",
+        targetAccountId,
+        30_000,
+      );
+      result = fallback.result;
+      accountId = fallback.accountId;
+      accountType = fallback.accountType;
+      log("info", "ws_chain_ok", { elapsed_ms: Date.now() - t1, source: "fallback" });
+    }
 
     log("info", "ws_chain_ok", {
       elapsed_ms: Date.now() - t1,
