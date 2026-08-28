@@ -114,6 +114,7 @@ export function useDerivTrading() {
   const pendingProposals = useRef<Map<string, (p: Proposal | null) => void>>(new Map());
   const proposalRef = useRef<Proposal | null>(null);
   const pendingBuys = useRef<Map<string, (c: OpenContract | null) => void>>(new Map());
+  const pendingProfitTable = useRef<(data: { transactions: unknown[]; count: number } | null) => void>(null);
   const contractSubscribers = useRef<Map<string, (c: OpenContract) => void>>(new Map());
   const skipAutoSubscribe = useRef(false);
   const proposalSubscriptionIdRef = useRef<string | null>(null);
@@ -235,6 +236,17 @@ export function useDerivTrading() {
             if (b) {
               setBalance(typeof b.balance === "number" ? b.balance : Number(b.balance) || null);
               setBalanceCurrency(b.currency ?? "USD");
+            }
+            return;
+          }
+
+          // proposal
+          if (msg.msg_type === "profit_table") {
+            const pt = msg.profit_table as { transactions?: unknown[]; count?: number } | undefined;
+            const resolve = pendingProfitTable.current;
+            if (resolve) {
+              pendingProfitTable.current = null;
+              resolve(pt ? { transactions: pt.transactions ?? [], count: pt.count ?? 0 } : null);
             }
             return;
           }
@@ -700,6 +712,40 @@ export function useDerivTrading() {
     }
   }, []);
 
+
+  /* ---- fetchProfitTable ---- */
+  const fetchProfitTable = useCallback(
+    (opts?: { limit?: number; offset?: number }): Promise<{ transactions: unknown[]; count: number } | null> => {
+      return new Promise((resolve) => {
+        setLastError(null);
+        if (pendingProfitTable.current) {
+          pendingProfitTable.current(null);
+        }
+        const id = send({
+          profit_table: 1,
+          description: 1,
+          limit: opts?.limit ?? 50,
+          offset: opts?.offset ?? 0,
+          sort: "DESC",
+        });
+        if (!id) {
+          setLastError("WebSocket not connected — cannot fetch profit table");
+          resolve(null);
+          return;
+        }
+        pendingProfitTable.current = resolve;
+        setTimeout(() => {
+          if (pendingProfitTable.current) {
+            pendingProfitTable.current = null;
+            setLastError("Profit table request timed out");
+            resolve(null);
+          }
+        }, 15000);
+      });
+    },
+    [send],
+  );
+
   const clearLastResult = useCallback(() => setLastResult(null), []);
   const clearError = useCallback(() => setLastError(null), []);
 
@@ -723,6 +769,7 @@ export function useDerivTrading() {
     subscribeToContract,
     unsubscribeFromContract,
     refreshBalance,
+    fetchProfitTable,
     refreshAccounts,
     clearProposal: () => {
       if (proposalSubscriptionIdRef.current) {
