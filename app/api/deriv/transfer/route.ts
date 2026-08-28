@@ -7,7 +7,6 @@ import {
   executeWalletTransfer,
   executeCrossCurrencyTransfer,
   executePlatformTransfer,
-  type WalletType,
   type PlatformName,
 } from "../../../../lib/deriv-wallet-api";
 
@@ -116,20 +115,6 @@ function resolveTransfer(
 /* ------------------------------------------------------------------ */
 /*  Validate step — returns preview without executing                  */
 /* ------------------------------------------------------------------ */
-
-/**
- * Resolve the wallet balance for a given wallet_id + currency.
- * Returns the balance as a string suitable for the "balance" field.
- */
-function resolveWalletBalance(wallets: WalletInfo[], walletId: string, currency: string): string {
-  const wallet = wallets.find((w) => w.wallet_id === walletId);
-  if (!wallet) return "0.00";
-  // The balances field is fetched via fetchWallets which returns WalletBalance[]
-  // but here we have WalletInfo from the route. We need to get the actual balance.
-  // Since we already fetched wallets earlier, let's just return 0 and the caller
-  // will need to fetch balances separately.
-  return "0.00";
-}
 
 /**
  * Determine the Deriv platform name from account identifiers.
@@ -264,42 +249,27 @@ async function executeTransfer(resolved: ResolvedTransfer, amountStr: string, wa
   }
 
   if (transferType === "wallet_to_platform") {
-    // Fetch wallet balance for the required "balance" field
-    const walletBalances = await fetchWallets();
-    const walletBalance = walletBalances
-      .filter((w) => w.wallet_id === resolved.sourceWalletId)
-      .reduce((sum, w) => sum + w.balance, 0);
     const platformName = detectPlatformName(resolved.destAccountId!);
-
     return executePlatformTransfer({
-      source_type: "main" as WalletType,
-      destination_type: "platform" as WalletType,
-      source_id: resolved.sourceWalletId!,
-      destination_id: resolved.destAccountId!,
+      wallet_id: resolved.sourceWalletId!,
       amount: amountStr,
-      balance: walletBalance.toFixed(2),
-      source_currency: resolved.sourceCurrency,
-      destination_currency: resolved.destCurrency,
-      destination_platform_name: platformName,
+      currency: resolved.sourceCurrency,
+      direction: "from_wallet",
+      platform_name: platformName,
+      platform_account_id: resolved.destAccountId!,
       request_id: requestId,
     });
   }
 
   // platform_to_wallet
-  // For platform→wallet, the balance field should be the platform account balance.
-  // We don't have the platform balance readily available, so we pass 0.
-  // The Deriv API will validate against the actual balance server-side.
   const platformName = detectPlatformName(resolved.sourceAccountId!);
   return executePlatformTransfer({
-    source_type: "platform" as WalletType,
-    destination_type: "main" as WalletType,
-    source_id: resolved.sourceAccountId!,
-    destination_id: resolved.destWalletId!,
+    wallet_id: resolved.destWalletId!,
     amount: amountStr,
-    balance: "0.00",
-    source_currency: resolved.sourceCurrency,
-    destination_currency: resolved.destCurrency,
-    source_platform_name: platformName,
+    currency: resolved.destCurrency,
+    direction: "to_wallet",
+    platform_name: platformName,
+    platform_account_id: resolved.sourceAccountId!,
     request_id: requestId,
   });
 }

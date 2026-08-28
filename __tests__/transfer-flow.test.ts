@@ -104,48 +104,48 @@ describe("Transfer Flow Integration", () => {
       const destAccount = mockAccounts.accounts[0]; // CR12345 (real)
 
       const payload = {
-        source_type: "main",
-        destination_type: "platform",
-        source_id: sourceWallet.wallet_id,
-        destination_id: destAccount.id,
+        wallet_id: sourceWallet.wallet_id,
         amount: "10.00",
-        balance: "150.00",
-        source_currency: "USD",
-        destination_currency: "USD",
-        destination_platform_name: "options",
+        currency: "USD",
+        direction: "from_wallet",
+        platform_name: "options",
+        platform_account_id: destAccount.id,
+        request_id: "tx_1234567890_abc12345",
       };
 
-      // Verify required fields
-      expect(payload.source_type).toBe("main");
-      expect(payload.destination_type).toBe("platform");
-      expect(payload.source_id).toBe("5f86030f-695d-4545-86bf-42d224d65fe0");
-      expect(payload.destination_id).toBe("CR12345");
+      // Verify required fields match actual Deriv schema
+      expect(payload.wallet_id).toBe("5f86030f-695d-4545-86bf-42d224d65fe0");
       expect(payload.amount).toBe("10.00");
-      expect(payload.balance).toBe("150.00");
+      expect(payload.currency).toBe("USD");
+      expect(payload.direction).toBe("from_wallet");
+      expect(payload.platform_name).toBe("options");
+      expect(payload.platform_account_id).toBe("CR12345");
+      expect(payload.request_id).toBeDefined();
 
-      // Verify NO old fields
+      // Verify NO old/wrong fields
       expect(payload).not.toHaveProperty("account_id");
-      expect(payload).not.toHaveProperty("currency");
-      expect(payload).not.toHaveProperty("direction");
+      expect(payload).not.toHaveProperty("balance");
+      expect(payload).not.toHaveProperty("source_type");
+      expect(payload).not.toHaveProperty("destination_type");
     });
 
-    it("should handle cross-currency transfer with exchange rate", () => {
+    it("should handle cross-currency transfer with wallet_currency", () => {
       const payload = {
-        source_type: "main",
-        destination_type: "platform",
-        source_id: "wallet-uuid",
-        destination_id: "CR12345",
+        wallet_id: "wallet-uuid",
         amount: "10.00",
-        balance: "150.00",
-        source_currency: "USD",
-        destination_currency: "EUR",
-        destination_platform_name: "options",
-        rate: "0.92",
+        currency: "USD",
+        direction: "from_wallet",
+        platform_name: "options",
+        platform_account_id: "CR12345",
+        request_id: "tx_123",
+        wallet_currency: "EUR",
+        exchange_rate: "0.92",
+        rate_token: "some-token",
       };
 
-      expect(payload.source_currency).toBe("USD");
-      expect(payload.destination_currency).toBe("EUR");
-      expect(payload.rate).toBe("0.92");
+      expect(payload.currency).toBe("USD");
+      expect(payload.wallet_currency).toBe("EUR");
+      expect(payload.exchange_rate).toBe("0.92");
     });
   });
 

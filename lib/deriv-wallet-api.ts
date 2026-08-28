@@ -207,43 +207,40 @@ export async function executeCrossCurrencyTransfer(payload: {
 /**
  * Execute a transfer between a wallet and a trading platform account.
  *
- * Deriv /wallet/v1/transfers/platforms schema:
- * {
- *   source_type: "main" | "p2p" | "platform" | "payment_agent",
- *   destination_type: "main" | "p2p" | "platform" | "payment_agent",
- *   source_id: string,
- *   destination_id: string,
- *   amount: string (pattern: ^\\d+(\\.\\d+)?$),
- *   balance: string (pattern: ^\\d+(\\.\\d+)?$),  // REQUIRED – source balance
- *   source_currency: string,
- *   destination_currency: string,
- *   source_platform_name?: "mt5" | "ctrader" | "options" | "crypto-exchange" | "tradingview",
- *   destination_platform_name?: "mt5" | "ctrader" | "options" | "crypto-exchange" | "tradingview",
- *   rate?: string,
- * }
+ * Deriv POST /wallet/v1/transfers/platforms — required fields:
+ *   wallet_id        (UUID)     – the wallet to debit/credit
+ *   amount           (string)   – amount in wallet currency
+ *   currency         (string)   – wallet currency code
+ *   direction        (enum)     – "from_wallet" (wallet→platform) or "to_wallet" (platform→wallet)
+ *   platform_name    (enum)     – "options" | "mt5" | "ctrader" | "crypto-exchange" | "tradingview"
+ *   platform_account_id (string) – the trading account login ID (e.g. "ROT90921902")
+ *   request_id       (UUID)     – unique idempotency key
+ *
+ * Optional (for cross-currency):
+ *   wallet_currency  (string)   – if the platform account uses a different currency
+ *   exchange_rate    (string)   – quoted exchange rate
+ *   rate_token       (string)   – token from /exchange-rate endpoint
+ *   description      (string)   – optional note
  */
 export type PlatformName = "mt5" | "ctrader" | "options" | "crypto-exchange" | "tradingview";
 
 export type WalletType = "main" | "p2p" | "platform" | "payment_agent";
 
 export async function executePlatformTransfer(payload: {
-  source_type: WalletType;
-  destination_type: WalletType;
-  source_id: string;
-  destination_id: string;
+  wallet_id: string;
   amount: string;
-  balance: string;
-  source_currency: string;
-  destination_currency: string;
-  source_platform_name?: PlatformName;
-  destination_platform_name?: PlatformName;
-  rate?: string;
+  currency: string;
+  direction: "from_wallet" | "to_wallet";
+  platform_name: PlatformName;
+  platform_account_id: string;
   request_id: string;
+  wallet_currency?: string;
+  exchange_rate?: string;
+  rate_token?: string;
+  description?: string;
 }): Promise<TransferResponse> {
-  const { request_id, ...body } = payload;
-  // request_id is passed as a query parameter for the platforms endpoint
-  return walletFetch<TransferResponse>(`/transfers/platforms?request_id=${encodeURIComponent(request_id)}`, {
+  return walletFetch<TransferResponse>("/transfers/platforms", {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 }

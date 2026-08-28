@@ -2,72 +2,53 @@
  * Tests for the Deriv transfer API payload generation.
  *
  * Verifies that wallet-to-platform and platform-to-wallet transfers
- * send the correct payload format matching the Deriv /transfers/platforms
- * endpoint schema.
+ * send the correct payload format matching the actual Deriv
+ * POST /wallet/v1/transfers/platforms endpoint schema.
+ *
+ * Required: wallet_id, amount, currency, direction, platform_name,
+ *           platform_account_id, request_id
+ * Optional: wallet_currency, exchange_rate, rate_token, description
  */
 
 describe("Transfer API Payload", () => {
-  // The Deriv /wallet/v1/transfers/platforms endpoint expects:
-  // {
-  //   source_type: "main" | "p2p" | "platform" | "payment_agent",
-  //   destination_type: "main" | "p2p" | "platform" | "payment_agent",
-  //   source_id: string,
-  //   destination_id: string,
-  //   amount: string (pattern: ^\d+(\.\d+)?$),
-  //   balance: string (pattern: ^\d+(\.\d+)?$),
-  //   source_currency: string (pattern: ^[A-Z0-9_]{1,18}$),
-  //   destination_currency: string (pattern: ^[A-Z0-9_]{1,18}$),
-  //   source_platform_name?: "mt5" | "ctrader" | "options" | "crypto-exchange" | "tradingview",
-  //   destination_platform_name?: "mt5" | "ctrader" | "options" | "crypto-exchange" | "tradingview",
-  //   rate?: string,
-  // }
-
   describe("executePlatformTransfer payload shape", () => {
     it("should have all required fields for wallet-to-platform transfer", () => {
       const payload = {
-        source_type: "main" as const,
-        destination_type: "platform" as const,
-        source_id: "5f86030f-695d-4545-86bf-42d224d65fe0",
-        destination_id: "ROT90921902",
+        wallet_id: "5f86030f-695d-4545-86bf-42d224d65fe0",
         amount: "1.00",
-        balance: "2.00",
-        source_currency: "USD",
-        destination_currency: "USD",
-        destination_platform_name: "options" as const,
+        currency: "USD",
+        direction: "from_wallet" as const,
+        platform_name: "options" as const,
+        platform_account_id: "ROT90921902",
         request_id: "tx_1234567890_abc12345",
       };
 
-      // Verify required fields exist
-      expect(payload.source_type).toBeDefined();
-      expect(payload.destination_type).toBeDefined();
-      expect(payload.source_id).toBeDefined();
-      expect(payload.destination_id).toBeDefined();
+      // All 7 required fields
+      expect(payload.wallet_id).toBeDefined();
       expect(payload.amount).toBeDefined();
-      expect(payload.balance).toBeDefined();
-      expect(payload.source_currency).toBeDefined();
-      expect(payload.destination_currency).toBeDefined();
+      expect(payload.currency).toBeDefined();
+      expect(payload.direction).toBe("from_wallet");
+      expect(payload.platform_name).toBe("options");
+      expect(payload.platform_account_id).toBeDefined();
+      expect(payload.request_id).toBeDefined();
 
-      // Verify NO old fields exist
+      // Verify NO old/wrong fields exist
       expect(payload).not.toHaveProperty("account_id");
-      expect(payload).not.toHaveProperty("currency");
-      expect(payload).not.toHaveProperty("direction");
-      expect(payload).not.toHaveProperty("wallet_currency");
+      expect(payload).not.toHaveProperty("balance");
+      expect(payload).not.toHaveProperty("source_type");
+      expect(payload).not.toHaveProperty("destination_type");
+      expect(payload).not.toHaveProperty("source_id");
+      expect(payload).not.toHaveProperty("destination_id");
     });
 
-    it("should use correct source/destination types for wallet→platform", () => {
-      const sourceType = "main";
-      const destinationType = "platform";
-
-      expect(["main", "p2p", "platform", "payment_agent"]).toContain(sourceType);
-      expect(["main", "p2p", "platform", "payment_agent"]).toContain(destinationType);
+    it("should use direction=from_wallet for wallet→platform", () => {
+      const direction = "from_wallet";
+      expect(["from_wallet", "to_wallet"]).toContain(direction);
     });
 
-    it("should use correct source/destination types for platform→wallet", () => {
-      const sourceType = "platform";
-      const destinationType = "main";
-
-      expect(["main", "p2p", "platform", "payment_agent"]).toContain(sourceType);
-      expect(["main", "p2p", "platform", "payment_agent"]).toContain(destinationType);
+    it("should use direction=to_wallet for platform→wallet", () => {
+      const direction = "to_wallet";
+      expect(["from_wallet", "to_wallet"]).toContain(direction);
     });
 
     it("should have amount as string with decimal pattern", () => {
@@ -76,15 +57,6 @@ describe("Transfer API Payload", () => {
 
       for (const amount of amounts) {
         expect(amount).toMatch(pattern);
-      }
-    });
-
-    it("should have balance as string with decimal pattern", () => {
-      const balances = ["0.00", "2.00", "100.50"];
-      const pattern = /^\d+(\.\d+)?$/;
-
-      for (const balance of balances) {
-        expect(balance).toMatch(pattern);
       }
     });
 
@@ -103,6 +75,17 @@ describe("Transfer API Payload", () => {
       for (const currency of currencies) {
         expect(currency).toMatch(pattern);
       }
+    });
+
+    it("should have wallet_id as UUID format", () => {
+      const walletId = "5f86030f-695d-4545-86bf-42d224d65fe0";
+      expect(walletId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    });
+
+    it("should include platform_account_id for the trading account", () => {
+      const platformAccountId = "ROT90921902";
+      expect(platformAccountId.length).toBeGreaterThan(0);
+      expect(platformAccountId).not.toContain("-"); // Not a UUID
     });
   });
 
