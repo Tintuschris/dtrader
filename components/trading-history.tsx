@@ -15,7 +15,9 @@ export default function TradingHistory({ accountId, balanceCurrency, fetchProfit
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all"); const [trades, setTrades] = useState<DerivTrade[]>([]); const [loading, setLoading] = useState(false); const [error, setError] = useState<string | null>(null); const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(20); const [total, setTotal] = useState<number | null>(null); const [hasMore, setHasMore] = useState(false);
 
   const mapTrade = (item: Record<string, unknown>, accountType: "demo" | "real", accountIdVal: string): DerivTrade => {
-    const profit = Number(item.profit ?? 0);
+    const sellPrice = Number(item.sell_price ?? 0);
+    const buyPrice = Number(item.buy_price ?? 0);
+    const profit = sellPrice - buyPrice;
     const receivedStatus = String(item.status ?? "").toLowerCase();
     return {
       contract_id: String(item.contract_id ?? item.transaction_id ?? ""),

@@ -73,7 +73,9 @@ export async function GET(request: NextRequest) {
     /* ── 4. Map trades ───────────────────────────────────────────── */
     const source = result.profit_table?.transactions ?? [];
     const trades = source.map((item) => {
-      const profit = Number(item.profit ?? 0);
+      const sellPrice = Number(item.sell_price ?? 0);
+      const buyPrice = Number(item.buy_price ?? 0);
+      const profit = sellPrice - buyPrice;
       const receivedStatus = String(item.status ?? "").toLowerCase();
       return {
         contract_id: String(item.contract_id ?? item.transaction_id ?? ""),
