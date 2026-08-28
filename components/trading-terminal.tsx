@@ -733,16 +733,28 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
             <span className="brand-text">DTrader</span>
           </div>
           <nav className="main-nav" aria-label="Main navigation">
-            <Link className={`nav-link ${activeTab === "workspace" ? "active" : ""}`} href={tabRoutes.workspace}>Workspace</Link>
+            <Link className={`nav-link ${activeTab === "workspace" ? "active" : ""}`} href={tabRoutes.workspace}>
+              <IconChartLine size={15} /><span className="nav-label">Trade</span>
+            </Link>
             <Link className={`nav-link ${activeTab === "history" ? "active" : ""}`} href={tabRoutes.history}>
-              History
+              <IconChartBar size={15} /><span className="nav-label">History</span>
               {tradeHistory.length > 0 && <span className="nav-badge">{tradeHistory.length}</span>}
             </Link>
-            <Link className={`nav-link ${activeTab === "bots" ? "active" : ""}`} href={tabRoutes.bots}>Bots</Link>
-            <Link className={`nav-link ${activeTab === "analyzer" ? "active" : ""}`} href={tabRoutes.analyzer}>Analyzer</Link>
-            <Link className={`nav-link ${activeTab === "portfolio" ? "active" : ""}`} href={tabRoutes.portfolio}>Portfolio</Link>
-            <Link className={`nav-link ${activeTab === "risk" ? "active" : ""}`} href={tabRoutes.risk}>Risk</Link>
-            <Link className={`nav-link ${activeTab === "settings" ? "active" : ""}`} href={tabRoutes.settings}>Settings</Link>
+            <Link className={`nav-link ${activeTab === "analyzer" ? "active" : ""}`} href={tabRoutes.analyzer}>
+              <IconBrain size={15} /><span className="nav-label">Analyze</span>
+            </Link>
+            <Link className={`nav-link ${activeTab === "bots" ? "active" : ""}`} href={tabRoutes.bots}>
+              <IconRobot size={15} /><span className="nav-label">Bots</span>
+            </Link>
+            <Link className={`nav-link ${activeTab === "portfolio" ? "active" : ""}`} href={tabRoutes.portfolio}>
+              <IconChartPie size={15} /><span className="nav-label">Portfolio</span>
+            </Link>
+            <Link className={`nav-link ${activeTab === "risk" ? "active" : ""}`} href={tabRoutes.risk}>
+              <IconShield size={15} /><span className="nav-label">Risk</span>
+            </Link>
+            <Link className={`nav-link ${activeTab === "settings" ? "active" : ""}`} href={tabRoutes.settings}>
+              <IconSettings size={15} /><span className="nav-label">Settings</span>
+            </Link>
           </nav>
         </div>
         <div className="topbar-right">
@@ -832,10 +844,12 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
               </select>
             )}
             <div className="mobile-menu-links">
-              <Link className={activeTab === "workspace" ? "active" : ""} href={tabRoutes.workspace} onClick={() => setShowMobileMenu(false)}><IconChartLine size={16} /> Workspace</Link>
+              <Link className={activeTab === "workspace" ? "active" : ""} href={tabRoutes.workspace} onClick={() => setShowMobileMenu(false)}><IconChartLine size={16} /> Trade</Link>
               <Link className={activeTab === "history" ? "active" : ""} href={tabRoutes.history} onClick={() => setShowMobileMenu(false)}><IconChartBar size={16} /> History</Link>
-              <Link className={activeTab === "bots" ? "active" : ""} href={tabRoutes.bots} onClick={() => setShowMobileMenu(false)}><IconRobot size={16} /> Bots</Link>
               <Link className={activeTab === "analyzer" ? "active" : ""} href={tabRoutes.analyzer} onClick={() => setShowMobileMenu(false)}><IconBrain size={16} /> Analyzer</Link>
+              <Link className={activeTab === "bots" ? "active" : ""} href={tabRoutes.bots} onClick={() => setShowMobileMenu(false)}><IconRobot size={16} /> Bots</Link>
+              <Link className={activeTab === "portfolio" ? "active" : ""} href={tabRoutes.portfolio} onClick={() => setShowMobileMenu(false)}><IconChartPie size={16} /> Portfolio</Link>
+              <Link className={activeTab === "risk" ? "active" : ""} href={tabRoutes.risk} onClick={() => setShowMobileMenu(false)}><IconShield size={16} /> Risk</Link>
               <Link className={activeTab === "settings" ? "active" : ""} href={tabRoutes.settings} onClick={() => setShowMobileMenu(false)}><IconSettings size={16} /> Settings</Link>
             </div>
             <div className="mobile-menu-footer">
@@ -1281,7 +1295,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       {/* ===== PORTFOLIO TAB ===== */}
       {activeTab === "portfolio" && (
         <section className="workspace">
-          <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} fetchProfitTable={fetchProfitTable} fetchPortfolio={fetchPortfolio} />
+          <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} />
         </section>
       )}
 

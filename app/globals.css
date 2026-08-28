@@ -32,6 +32,7 @@
 .buy-button{width:100%;border:0;border-radius:10px;padding:14px;background:linear-gradient(135deg,#2dd4a8,#36cbb4);color:#061613;font-weight:700;font-size:14px;cursor:pointer;transition:.15s;box-shadow:0 4px 16px rgba(70,211,189,.2)}.buy-button:hover:not(:disabled){box-shadow:0 6px 24px rgba(70,211,189,.3);transform:translateY(-1px)}.buy-button:disabled{opacity:.4;cursor:not-allowed}.buy-button span{float:right;font-size:16px;line-height:15px}
 .sell-button-lg{width:100%;border:0;border-radius:10px;padding:14px;background:linear-gradient(135deg,#e05555,#c94040);color:#fff;font-weight:700;font-size:14px;cursor:pointer;transition:.15s;box-shadow:0 4px 16px rgba(224,85,85,.15)}.sell-button-lg:hover:not(:disabled){box-shadow:0 6px 24px rgba(224,85,85,.25);transform:translateY(-1px)}.sell-button-lg:disabled{opacity:.3;cursor:not-allowed;background:#3a2020;color:#666;box-shadow:none}.sell-button-lg.active{background:linear-gradient(135deg,#e05555,#c94040);animation:sell-pulse 2s ease-in-out infinite}.sell-button-lg span{float:right;font-size:16px;line-height:15px}
 @keyframes sell-pulse{0%,100%{box-shadow:0 4px 16px rgba(224,85,85,.15)}50%{box-shadow:0 4px 24px rgba(224,85,85,.35)}}.risk-copy{color:#657487;font-size:10px;line-height:1.5;text-align:center;margin:13px 12px 0}.footer{max-width:1480px;margin:auto;padding:25px 4.2vw 35px;color:#566477;font-size:10px;display:flex;justify-content:space-between}
+@media(max-width:1100px){.nav-label{display:none}.nav-link{padding:7px 8px}.main-nav{gap:1px}}
 @media(max-width:900px){.topbar{padding:0 20px;gap:18px}.main-nav{gap:15px}.workspace{padding:35px 20px}.terminal-grid{grid-template-columns:1fr}.digit-ring strong{font-size:15px}.digit-ring span{font-size:9px}.footer{padding:20px;gap:12px;flex-wrap:wrap}.menu-button{display:block}.nav-link:nth-child(3){display:none}}
 @media(max-width:560px){.brand span:last-child,.demo-pill{display:none}.workspace-heading{align-items:start;gap:18px;flex-direction:column}.workspace h1{font-size:29px}.market-card,.trade-panel{padding:16px}.timeframes{display:none}.price-row{padding-top:22px}.price{font-size:24px}.price-change{display:block;margin:5px 0 0}.last-digit{gap:7px}.last-digit span{font-size:8px}.digit-strip{gap:4px;grid-template-columns:repeat(5,1fr);justify-items:center;max-width:280px;margin:0 auto}.digit-ring{border-width:3px}.digit-ring strong{font-size:13px}.digit-ring span{font-size:8px}.cursor-note{font-size:10px}.footer{font-size:9px}}
 .terminal-loading{display:grid;place-items:center;color:#aebccb;font-size:14px;letter-spacing:.04em}
@@ -110,11 +111,13 @@
 .brand{display:flex;align-items:center;gap:8px;font-family:'Space Grotesk';font-size:17px;font-weight:700;letter-spacing:-.03em}
 .brand-mark{display:grid;place-items:center;width:28px;height:28px;color:#0b1420;background:linear-gradient(135deg,var(--teal),#53aaf8);border-radius:8px;font-size:17px}
 .brand-text{display:inline}
-.main-nav{display:flex;gap:4px}
-.nav-link{background:transparent;border:0;color:var(--muted);font-size:13px;padding:8px 14px;border-radius:7px;cursor:pointer;transition:.15s;position:relative}
-.nav-link:hover{color:var(--text);background:rgba(255,255,255,.04)}
-.nav-link.active{color:var(--text);background:rgba(70,211,189,.1)}
-.nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;background:var(--purple);color:#fff;border-radius:99px;font-size:9px;font-weight:700;margin-left:5px;padding:0 4px}
+.main-nav{display:flex;gap:2px}
+.nav-link{display:flex;align-items:center;gap:6px;background:transparent;border:0;color:var(--muted);font-size:12px;font-weight:500;padding:7px 12px;border-radius:7px;cursor:pointer;transition:.15s;position:relative;text-decoration:none;white-space:nowrap}
+.nav-link:hover{color:var(--text);background:rgba(255,255,255,.05)}
+.nav-link.active{color:var(--teal);background:rgba(70,211,189,.1)}
+.nav-link.active svg{color:var(--teal)}
+.nav-label{display:inline}
+.nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;background:var(--purple);color:#fff;border-radius:99px;font-size:9px;font-weight:700;margin-left:2px;padding:0 4px}
 .balance-pill{display:flex;align-items:center;gap:6px;background:#0d191c;border:1px solid rgba(70,211,189,.2);border-radius:99px;padding:5px 12px;font-family:'Space Grotesk';font-size:13px;font-weight:600;color:#8de7d9}
 .balance-amount{color:#8de7d9}
 .balance-currency{color:#5d8a7f;font-size:10px;font-weight:500}
