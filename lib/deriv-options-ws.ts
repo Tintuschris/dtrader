@@ -6,10 +6,24 @@ export type OptionsAccount = { id: string; type: "demo" | "real"; currency: stri
 export async function getOptionsAccounts(accessToken: string): Promise<OptionsAccount[]> {
   const appId = process.env.DERIV_APP_ID;
   if (!appId) throw new Error("DERIV_APP_ID is not configured");
-  const response = await fetch(`${OPTIONS_API}/accounts`, {
-    headers: { "Deriv-App-ID": appId, Authorization: `Bearer ${accessToken}` },
-    cache: "no-store",
-  });
+
+  // Try with provided token first; if 401, retry with PAT fallback
+  const tryFetch = async (token: string) => {
+    const res = await fetch(`${OPTIONS_API}/accounts`, {
+      headers: { "Deriv-App-ID": appId, Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    return res;
+  };
+
+  let response = await tryFetch(accessToken);
+  if (response.status === 401) {
+    const pat = process.env.DERIV_PAT;
+    if (pat) {
+      console.warn("[OptionsAPI] OAuth token rejected (401), retrying with PAT");
+      response = await tryFetch(pat);
+    }
+  }
   if (!response.ok) {
     const failure = (await response.json().catch(() => null)) as {
       errors?: Array<{ message?: string }>;
@@ -47,11 +61,24 @@ export async function getOptionsAccounts(accessToken: string): Promise<OptionsAc
 export async function getOptionsSocketUrl(accountId: string, accessToken: string): Promise<string> {
   const appId = process.env.DERIV_APP_ID;
   if (!appId) throw new Error("DERIV_APP_ID is not configured");
-  const response = await fetch(`${OPTIONS_API}/accounts/${encodeURIComponent(accountId)}/otp`, {
-    method: "POST",
-    headers: { "Deriv-App-ID": appId, Authorization: `Bearer ${accessToken}` },
-    cache: "no-store",
-  });
+
+  const tryFetch = async (token: string) => {
+    const res = await fetch(`${OPTIONS_API}/accounts/${encodeURIComponent(accountId)}/otp`, {
+      method: "POST",
+      headers: { "Deriv-App-ID": appId, Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    return res;
+  };
+
+  let response = await tryFetch(accessToken);
+  if (response.status === 401) {
+    const pat = process.env.DERIV_PAT;
+    if (pat) {
+      console.warn("[OptionsAPI] OAuth token rejected for OTP (401), retrying with PAT");
+      response = await tryFetch(pat);
+    }
+  }
   if (!response.ok) {
     const failure = (await response.json().catch(() => null)) as {
       errors?: Array<{ message?: string }>;
