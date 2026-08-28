@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "../../../../lib/deriv-session";
-import { getOptionsAccounts, getOptionsSocketUrl, requestOptionsWs } from "../../../../lib/deriv-options-ws";
+import { derivV3AuthRequest, getOptionsAccounts, getOptionsSocketUrl, requestOptionsWs } from "../../../../lib/deriv-options-ws";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,69 +33,91 @@ export async function GET() {
     scopes: session.scopes,
   }, t1);
 
-  // 2. PAT
+  // 2. Token
   const t2 = Date.now();
   const pat = process.env.DERIV_PAT;
-  if (!pat) {
-    snap("PAT", "error", { msg: "DERIV_PAT not set in environment" }, t2);
+  const token = pat || session.accessToken;
+  if (!token) {
+    snap("token", "error", { msg: "No token available" }, t2);
     return NextResponse.json({ steps, total_ms: Date.now() - t0 });
   }
-  snap("PAT", "ok", { prefix: pat.substring(0, 10), length: pat.length }, t2);
+  snap("token", "ok", { hasPAT: !!pat, tokenPrefix: token.substring(0, 10) }, t2);
 
-  // 3. getOptionsAccounts
+  // 3. Core API v3 — profit_table
   const t3 = Date.now();
-  let accounts;
   try {
-    accounts = await getOptionsAccounts(pat);
-    snap("getOptionsAccounts", "ok", { count: accounts.length, accounts: accounts.map(a => ({ id: a.id, type: a.type, balance: a.balance })) }, t3);
-  } catch (err) {
-    snap("getOptionsAccounts", "error", { msg: err instanceof Error ? err.message : String(err) }, t3);
-    return NextResponse.json({ steps, total_ms: Date.now() - t0 });
-  }
-
-  if (!accounts.length) {
-    snap("account_select", "error", { msg: "No accounts returned from Deriv" }, t3);
-    return NextResponse.json({ steps, total_ms: Date.now() - t0 });
-  }
-
-  const account = accounts[0]; // default to first account
-  snap("account_select", "ok", { selected: account.id, type: account.type }, t3);
-
-  // 4. getOptionsSocketUrl (OTP)
-  const t4 = Date.now();
-  let wsUrl: string;
-  try {
-    wsUrl = await getOptionsSocketUrl(account.id, pat);
-    snap("getOptionsSocketUrl", "ok", { urlPrefix: wsUrl.substring(0, 70) }, t4);
-  } catch (err) {
-    snap("getOptionsSocketUrl", "error", { msg: err instanceof Error ? err.message : String(err) }, t4);
-    return NextResponse.json({ steps, total_ms: Date.now() - t0 });
-  }
-
-  // 5. requestOptionsWs (profit_table)
-  const t5 = Date.now();
-  try {
-    const result = await requestOptionsWs<{
+    const { result, accountId, accountType } = await derivV3AuthRequest<{
       profit_table?: { transactions?: unknown[]; count?: number };
-    }>(wsUrl, { profit_table: 1, description: 1, limit: 5, offset: 0, sort: "DESC" }, "profit_table");
-    snap("requestOptionsWs(profit_table)", "ok", {
+    }>(
+      token,
+      { profit_table: 1, description: 1, limit: 5, offset: 0, sort: "DESC" },
+      "profit_table",
+      session.loginId,
+    );
+    snap("derivV3AuthRequest(profit_table)", "ok", {
+      accountId,
+      accountType,
       count: result.profit_table?.count,
       txReturned: result.profit_table?.transactions?.length,
       firstTx: result.profit_table?.transactions?.[0],
-    }, t5);
+    }, t3);
   } catch (err) {
-    snap("requestOptionsWs(profit_table)", "error", { msg: err instanceof Error ? err.message : String(err) }, t5);
+    snap("derivV3AuthRequest(profit_table)", "error", { msg: err instanceof Error ? err.message : String(err) }, t3);
   }
 
-  // 6. Also test balance on the same WS
-  const t6 = Date.now();
+  // 4. Core API v3 — portfolio
+  const t4 = Date.now();
   try {
-    const result = await requestOptionsWs<{
-      balance?: { balance?: string; currency?: string };
-    }>(wsUrl, { balance: 1 }, "balance");
-    snap("requestOptionsWs(balance)", "ok", { balance: result.balance }, t6);
+    const { result, accountId, accountType } = await derivV3AuthRequest<{
+      portfolio?: { contracts?: unknown[] };
+    }>(
+      token,
+      { portfolio: 1 },
+      "portfolio",
+      session.loginId,
+    );
+    snap("derivV3AuthRequest(portfolio)", "ok", {
+      accountId,
+      accountType,
+      contractCount: result.portfolio?.contracts?.length,
+      firstContract: result.portfolio?.contracts?.[0],
+    }, t4);
   } catch (err) {
-    snap("requestOptionsWs(balance)", "error", { msg: err instanceof Error ? err.message : String(err) }, t6);
+    snap("derivV3AuthRequest(portfolio)", "error", { msg: err instanceof Error ? err.message : String(err) }, t4);
+  }
+
+  // 5. Options API — accounts (sanity check)
+  if (pat) {
+    const t5 = Date.now();
+    try {
+      const accounts = await getOptionsAccounts(pat);
+      snap("getOptionsAccounts", "ok", { count: accounts.length, accounts: accounts.map(a => ({ id: a.id, type: a.type, balance: a.balance })) }, t5);
+    } catch (err) {
+      snap("getOptionsAccounts", "error", { msg: err instanceof Error ? err.message : String(err) }, t5);
+    }
+  } else {
+    snap("getOptionsAccounts", "skip", { msg: "No PAT set" }, t0);
+  }
+
+  // 6. Options API — balance on WS (sanity check)
+  if (pat) {
+    const t6 = Date.now();
+    try {
+      const accounts = await getOptionsAccounts(pat);
+      if (accounts.length > 0) {
+        const wsUrl = await getOptionsSocketUrl(accounts[0].id, pat);
+        const result = await requestOptionsWs<{
+          balance?: { balance?: string; currency?: string };
+        }>(wsUrl, { balance: 1 }, "balance");
+        snap("requestOptionsWs(balance)", "ok", { balance: result.balance }, t6);
+      } else {
+        snap("requestOptionsWs(balance)", "skip", { msg: "No accounts" }, t6);
+      }
+    } catch (err) {
+      snap("requestOptionsWs(balance)", "error", { msg: err instanceof Error ? err.message : String(err) }, t6);
+    }
+  } else {
+    snap("requestOptionsWs(balance)", "skip", { msg: "No PAT set" }, t0);
   }
 
   return NextResponse.json({ steps, total_ms: Date.now() - t0 });

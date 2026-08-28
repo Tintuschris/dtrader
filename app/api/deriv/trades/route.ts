@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "../../../../lib/deriv-session";
-import { requestOptionsAccountWs } from "../../../../lib/deriv-options-ws";
+import { derivV3AuthRequest } from "../../../../lib/deriv-options-ws";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,26 +40,27 @@ export async function GET(request: NextRequest) {
     offset,
   });
 
-  /* ── 2. PAT check ─────────────────────────────────────────────── */
-  const pat = process.env.DERIV_PAT;
-  if (!pat) {
-    log("error", "env", { hasPAT: false, msg: "DERIV_PAT not set" });
-    return NextResponse.json({ error: "DERIV_PAT not configured on the server." }, { status: 500 });
+  /* ── 2. Token selection ────────────────────────────────────────── */
+  // Core API v3 WS supports profit_table; Options API WS does not.
+  const token = process.env.DERIV_PAT || session.accessToken;
+  if (!token) {
+    log("error", "env", { msg: "No token available (neither DERIV_PAT nor session token)" });
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
-  log("info", "env", { hasPAT: true, patPrefix: pat.substring(0, 8) });
+  log("info", "env", { hasPAT: !!process.env.DERIV_PAT, tokenPrefix: token.substring(0, 8) });
 
-  /* ── 3. Options API chain ─────────────────────────────────────── */
+  /* ── 3. Core API v3 chain ─────────────────────────────────────── */
   try {
-    log("info", "ws_chain", { msg: "calling requestOptionsAccountWs with PAT" });
+    log("info", "ws_chain", { msg: "calling derivV3AuthRequest (Core API v3)" });
     const t1 = Date.now();
 
-    const { result, accountId, accountType } = await requestOptionsAccountWs<{
+    const { result, accountId, accountType } = await derivV3AuthRequest<{
       profit_table?: { transactions?: Record<string, unknown>[]; count?: number };
     }>(
-      pat,
-      targetAccountId,
+      token,
       { profit_table: 1, description: 1, limit, offset, sort: "DESC" },
       "profit_table",
+      targetAccountId,
     );
 
     log("info", "ws_chain_ok", {

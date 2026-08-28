@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "../../../../lib/deriv-session";
-import { requestOptionsAccountWs } from "../../../../lib/deriv-options-ws";
+import { derivV3AuthRequest } from "../../../../lib/deriv-options-ws";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,14 +13,17 @@ export async function GET(request: NextRequest) {
 
   const targetAccountId = new URL(request.url).searchParams.get("accountId") ?? session.loginId;
 
+  // Core API v3 WS supports portfolio; Options API WS does not.
+  const token = process.env.DERIV_PAT || session.accessToken;
+
   try {
-    const { result, accountId, accountType } = await requestOptionsAccountWs<{
+    const { result, accountId, accountType } = await derivV3AuthRequest<{
       portfolio?: { contracts?: Record<string, unknown>[] };
     }>(
-      session.accessToken,
-      targetAccountId,
+      token,
       { portfolio: 1 },
       "portfolio",
+      targetAccountId,
     );
 
     const positions = (result.portfolio?.contracts ?? []).map((item) => ({
