@@ -32,6 +32,44 @@
 .buy-button{width:100%;border:0;border-radius:10px;padding:14px;background:linear-gradient(135deg,#2dd4a8,#36cbb4);color:#061613;font-weight:700;font-size:14px;cursor:pointer;transition:.15s;box-shadow:0 4px 16px rgba(70,211,189,.2)}.buy-button:hover:not(:disabled){box-shadow:0 6px 24px rgba(70,211,189,.3);transform:translateY(-1px)}.buy-button:disabled{opacity:.4;cursor:not-allowed}.buy-button span{float:right;font-size:16px;line-height:15px}
 .sell-button-lg{width:100%;border:0;border-radius:10px;padding:14px;background:linear-gradient(135deg,#e05555,#c94040);color:#fff;font-weight:700;font-size:14px;cursor:pointer;transition:.15s;box-shadow:0 4px 16px rgba(224,85,85,.15)}.sell-button-lg:hover:not(:disabled){box-shadow:0 6px 24px rgba(224,85,85,.25);transform:translateY(-1px)}.sell-button-lg:disabled{opacity:.3;cursor:not-allowed;background:#3a2020;color:#666;box-shadow:none}.sell-button-lg.active{background:linear-gradient(135deg,#e05555,#c94040);animation:sell-pulse 2s ease-in-out infinite}.sell-button-lg span{float:right;font-size:16px;line-height:15px}
 @keyframes sell-pulse{0%,100%{box-shadow:0 4px 16px rgba(224,85,85,.15)}50%{box-shadow:0 4px 24px rgba(224,85,85,.35)}}.risk-copy{color:#657487;font-size:10px;line-height:1.5;text-align:center;margin:13px 12px 0}.footer{max-width:1480px;margin:auto;padding:25px 4.2vw 35px;color:#566477;font-size:10px;display:flex;justify-content:space-between}
+
+/* ================================================================= */
+/*  Trade ticket improvements                                        */
+/* ================================================================= */
+
+/* Stake preset buttons */
+.stake-presets{display:flex;gap:6px;margin-bottom:8px}
+.stake-preset{flex:1;background:#0e1621;border:1px solid var(--border);border-radius:7px;padding:6px 4px;color:var(--muted);font-size:11px;font-family:"Space Grotesk";font-weight:600;transition:.15s}
+.stake-preset:hover{border-color:rgba(70,211,189,.3);color:var(--text)}
+.stake-preset.active{background:rgba(70,211,189,.12);border-color:var(--teal);color:var(--teal)}
+
+/* Duration quick-select buttons */
+.duration-quick-select{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.duration-btn{background:#0e1621;border:1px solid var(--border);border-radius:7px;padding:8px 4px;color:var(--muted);font-size:11px;transition:.15s}
+.duration-btn:hover{border-color:rgba(174,155,255,.3);color:var(--text)}
+.duration-btn.active{background:rgba(174,155,255,.12);border-color:var(--purple);color:var(--purple);font-weight:600}
+
+/* Contract preview */
+.contract-preview{background:rgba(157,179,203,.04);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px}
+.contract-preview-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:11px}
+.contract-preview-row+.contract-preview-row{border-top:1px solid rgba(157,179,203,.06)}
+.contract-preview-label{color:var(--muted)}
+.contract-preview-value{color:var(--text);font-family:"Space Grotesk";font-weight:600}
+.contract-preview-row.highlight{margin-top:4px;padding-top:8px;border-top:1px solid rgba(70,211,189,.15)!important}
+.contract-preview-row.highlight .contract-preview-value{color:var(--teal);font-size:13px}
+
+/* Win/loss streak badge */
+.streak-badge{font-size:10px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:99px;margin-left:8px}
+.streak-badge.win{background:rgba(70,211,189,.12);color:#8de7d9}
+.streak-badge.loss{background:rgba(224,80,80,.12);color:#f08080}
+
+/* Buy button pressed state */
+.buy-button.buy-pressed{transform:scale(.96)!important;box-shadow:0 2px 8px rgba(70,211,189,.3)!important}
+
+/* Keyboard shortcut hint */
+.kb-hint{display:inline-flex;align-items:center;gap:4px;margin-left:8px;font-size:9px;color:var(--muted);opacity:.6}
+.kb-hint kbd{background:#1a2636;border:1px solid var(--border);border-radius:3px;padding:1px 5px;font-family:"Space Grotesk";font-size:9px}
+
 @media(max-width:1100px){.nav-label{display:none}.nav-link{padding:7px 8px}.main-nav{gap:1px}}
 @media(max-width:900px){.topbar{padding:0 20px;gap:18px}.main-nav{gap:15px}.workspace{padding:35px 20px}.terminal-grid{grid-template-columns:1fr}.digit-ring strong{font-size:15px}.digit-ring span{font-size:9px}.footer{padding:20px;gap:12px;flex-wrap:wrap}.menu-button{display:block}.nav-link:nth-child(3){display:none}}
 @media(max-width:560px){.brand span:last-child,.demo-pill{display:none}.workspace-heading{align-items:start;gap:18px;flex-direction:column}.workspace h1{font-size:29px}.market-card,.trade-panel{padding:16px}.timeframes{display:none}.price-row{padding-top:22px}.price{font-size:24px}.price-change{display:block;margin:5px 0 0}.last-digit{gap:7px}.last-digit span{font-size:8px}.digit-strip{gap:4px;grid-template-columns:repeat(5,1fr);justify-items:center;max-width:280px;margin:0 auto}.digit-ring{border-width:3px}.digit-ring strong{font-size:13px}.digit-ring span{font-size:8px}.cursor-note{font-size:10px}.footer{font-size:9px}}

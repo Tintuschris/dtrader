@@ -646,6 +646,20 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     }
   }, [isBuying, currentProposal, stake, activeContract, buy, clearLastResult, balance, balanceCurrency]);
 
+  /* ---- keyboard shortcuts ---- */
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+        e.preventDefault();
+        void handlePlaceTrade();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handlePlaceTrade]);
+
   /* ---- derived ---- */
   const current = ticks.at(-1) ?? { value: 644.52, digit: 2 };
   const previous = ticks.at(-2)?.value ?? current.value;
@@ -676,6 +690,22 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     const padding = range * 0.15;
     return { min: min - padding, max: max + padding, padding };
   }, [ticks]);
+
+  /* ---- win/loss streak ---- */
+  const streak = useMemo(() => {
+    let wins = 0;
+    let losses = 0;
+    for (let i = tradeHistory.length - 1; i >= 0; i--) {
+      if (tradeHistory[i].status === "won") {
+        if (losses > 0) break;
+        wins++;
+      } else if (tradeHistory[i].status === "lost") {
+        if (wins > 0) break;
+        losses++;
+      } else break;
+    }
+    return wins > 0 ? { type: "win" as const, count: wins } : losses > 0 ? { type: "loss" as const, count: losses } : null;
+  }, [tradeHistory]);
 
   const chartX = useCallback((index: number) => {
     const total = Math.max(ticks.length - 1, 1);
@@ -1055,6 +1085,11 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                 <span className={`account-badge ${isDemo ? "demo" : "real"}`}>
                   {isDemo ? "DEMO" : "REAL"}
                 </span>
+                {streak && (
+                  <span className={"streak-badge " + streak.type}>
+                    {streak.type === "win" ? "🔥" : "❄️"} {streak.count} {streak.type === "win" ? "Win" : "Loss"}{streak.count > 1 ? "s" : ""}
+                  </span>
+                )}
               </div>
 
               {/* Contract group tabs */}
@@ -1095,22 +1130,19 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
               <div className="two-fields">
                 <div className="field-group">
                   <label>Duration</label>
-                  <div className="duration-picker-wrap">
-                    <button className="input-button" onClick={() => setShowDurationPicker((v) => !v)}>
-                      {durationOptions.find((d) => d.value === duration)?.label ?? `${duration} ticks`}
-                      <span><IconChevronDown size={14} /></span>
-                    </button>
-                    {showDurationPicker && (
-                      <div className="duration-dropdown">
-                        {durationOptions.map((opt) => (
-                          <button key={opt.value} className={duration === opt.value ? "active" : ""} onClick={() => { setDuration(opt.value); setShowDurationPicker(false); }}>{opt.label}</button>
-                        ))}
-                      </div>
-                    )}
+                  <div className="duration-quick-select">
+                    {durationOptions.map((opt) => (
+                      <button key={opt.value} className={"duration-btn" + (duration === opt.value ? " active" : "")} onClick={() => setDuration(opt.value)}>{opt.label}</button>
+                    ))}
                   </div>
                 </div>
                 <div className="field-group">
                   <label>Stake ({balanceCurrency})</label>
+                  <div className="stake-presets">
+                    {["1", "5", "10", "25", "50"].map((amt) => (
+                      <button key={amt} className={"stake-preset" + (stake === amt ? " active" : "")} onClick={() => setStake(amt)}>{"$" + amt}</button>
+                    ))}
+                  </div>
                   <div className="money-input">
                     <span>$</span>
                     <input value={stake} onChange={(e) => setStake(e.target.value)} inputMode="decimal" />
@@ -1143,6 +1175,34 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                 </div>
               )}
 
+              {/* Contract preview */}
+              {!activeContract && (currentProposal ?? proposalRef.current) && (
+                <div className="contract-preview">
+                  <div className="contract-preview-row">
+                    <span className="contract-preview-label">Contract</span>
+                    <span className="contract-preview-value">{subContract.charAt(0).toUpperCase() + subContract.slice(1)} {symbolLabel.split(" ")[0]}</span>
+                  </div>
+                  <div className="contract-preview-row">
+                    <span className="contract-preview-label">Duration</span>
+                    <span className="contract-preview-value">{duration} tick{duration !== 1 ? "s" : ""}</span>
+                  </div>
+                  <div className="contract-preview-row">
+                    <span className="contract-preview-label">Stake</span>
+                    <span className="contract-preview-value">${fmt(stakeNum)}</span>
+                  </div>
+                  {needsBarrier && (
+                    <div className="contract-preview-row">
+                      <span className="contract-preview-label">Prediction</span>
+                      <span className="contract-preview-value">Last digit {selectedDigit}</span>
+                    </div>
+                  )}
+                  <div className="contract-preview-row highlight">
+                    <span className="contract-preview-label">Potential payout</span>
+                    <span className="contract-preview-value">${fmt(potentialPayout)}</span>
+                  </div>
+                </div>
+              )}
+
               {/* Error */}
               {(tradeError || lastError) && (
                 <div className="trade-error" onClick={() => { setTradeError(null); clearError(); }}>
@@ -1158,6 +1218,9 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                     <button
                       className="buy-button"
                       onClick={() => void handlePlaceTrade()}
+                      onPointerDown={(e) => { (e.currentTarget as HTMLElement).classList.add("buy-pressed"); }}
+                      onPointerUp={(e) => { (e.currentTarget as HTMLElement).classList.remove("buy-pressed"); }}
+                      onPointerLeave={(e) => { (e.currentTarget as HTMLElement).classList.remove("buy-pressed"); }}
                       disabled={isBuying || (!currentProposal && !proposalRef.current)}
                     >
                       {isBuying ? "Placing…" : "Buy"}
