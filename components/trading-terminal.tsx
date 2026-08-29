@@ -409,7 +409,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
               if (prices.length) {
                 setTicks(prices.slice(-100).map((quote) => ({ value: Number(quote), digit: digitFromQuote(quote, pipSize) })));
                 prices.slice(-2000).forEach((quote) => getGlobalAnalyzer().addTick(sym, { quote: Number(quote), epoch: 0 }));
-                tickReceived = true; setChartLoading(false); setTimeout(() => setChartSkeletonMounted(false), 500);
+                tickReceived = true; setChartLoading(false); setStreamMode("live"); setTimeout(() => setChartSkeletonMounted(false), 500);
               }
               return;
             }
@@ -441,8 +441,10 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
           if (!alive) return;
           // Normal closure codes — don't reconnect
           if (event.code === 1000 || event.code === 1001) {
-            setTickStreamStatus("simulated");
-            setStreamMode("simulated");
+            if (!tickReceived) {
+              setTickStreamStatus("simulated");
+              setStreamMode("simulated");
+            }
             return;
           }
           // Abnormal closure — attempt reconnect with exponential backoff
