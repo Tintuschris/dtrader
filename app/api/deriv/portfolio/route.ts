@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "../../../../lib/deriv-session";
-import { derivV3AuthRequest } from "../../../../lib/deriv-options-ws";
+import { requestOptionsAccountWs } from "../../../../lib/deriv-options-ws";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,10 +8,9 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/deriv/portfolio?accountId=...
  *
- * Fetches open positions via the Core API v3 WebSocket.
- * portfolio is a Core API v3 endpoint — it is NOT supported on the
- * Options API WebSocket (OTP-authenticated). Using the Options API WS
- * for this causes "UnrecognisedRequest" errors.
+ * Fetches open positions via the Options API WebSocket (OTP-authenticated).
+ * Per the Deriv Complete Trading Workflow docs, `portfolio` is called on the
+ * same OTP-authenticated WebSocket used for trading — NOT the Core API v3 WS.
  */
 export async function GET(request: NextRequest) {
   const t0 = Date.now();
@@ -26,7 +25,7 @@ export async function GET(request: NextRequest) {
 
   log("start", { hasToken: !!session.accessToken, hasPAT: !!process.env.DERIV_PAT });
 
-  // Try PAT first (most reliable for Core API v3), then OAuth token
+  // Try PAT first (most reliable), then OAuth token
   const tokens: Array<{ label: string; token: string }> = [];
   if (process.env.DERIV_PAT) {
     tokens.push({ label: "PAT", token: process.env.DERIV_PAT });
@@ -39,14 +38,16 @@ export async function GET(request: NextRequest) {
     try {
       log("trying_auth", { method: label });
 
-      const result = await derivV3AuthRequest<{ portfolio?: { contracts?: Record<string, unknown>[] } }>(
+      const { result, accountId, accountType } = await requestOptionsAccountWs<{
+        portfolio?: { contracts?: Record<string, unknown>[] };
+      }>(
         token,
+        targetAccountId ?? undefined,
         { portfolio: 1 },
         "portfolio",
-        targetAccountId ?? undefined,
       );
 
-      const positions = (result.result.portfolio?.contracts ?? []).map((item) => ({
+      const positions = (result.portfolio?.contracts ?? []).map((item) => ({
         contract_id: String(item.contract_id ?? ""),
         contract_type: String(item.contract_type ?? ""),
         symbol: String(item.underlying_symbol ?? item.underlying ?? item.symbol ?? ""),
@@ -58,23 +59,22 @@ export async function GET(request: NextRequest) {
         purchase_time: Number(item.purchase_time ?? 0),
       }));
 
-      log("done", { positions: positions.length, accountId: result.accountId, accountType: result.accountType, authMethod: label });
+      log("done", { positions: positions.length, accountId, accountType, authMethod: label });
 
       return NextResponse.json({
         positions,
-        account: { id: result.accountId, type: result.accountType },
+        account: { id: accountId, type: accountType },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log("auth_failed", { method: label, error: msg });
       lastError = msg;
-      // If PAT failed, try OAuth. If OAuth failed, that's the last attempt.
     }
   }
 
   log("all_auth_failed", { lastError });
   return NextResponse.json(
-    { error: lastError || "Unable to load open positions. Make sure DERIV_PAT is set in .env.local." },
+    { error: lastError || "Unable to load open positions." },
     { status: 500 },
   );
 }

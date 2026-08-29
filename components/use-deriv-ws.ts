@@ -469,7 +469,8 @@ export function useDerivTrading() {
                   };
                   return [record, ...prev].slice(0, 20);
                 });
-                const settleDelay = (oc.tick_count && oc.tick_count <= 1) ? 1500 : 3000;
+                // Reduced settle delay: 800ms for 1-tick trades (just enough to see result), 2s for multi-tick
+                const settleDelay = (oc.tick_count && oc.tick_count <= 1) ? 800 : 2000;
                 setTimeout(() => setActiveContract(null), settleDelay);
                 // Pre-warm proposal re-subscription immediately from WS handler
                 // instead of waiting for React effect cycle (saves ~200-400ms)
