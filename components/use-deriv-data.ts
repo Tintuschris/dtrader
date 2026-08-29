@@ -187,17 +187,43 @@ export function useTransactions(walletType: string, enabled = true) {
 /*  Portfolio Hook (Open Positions)                                    */
 /* ------------------------------------------------------------------ */
 
-export function usePortfolio(accountId: string) {
+/**
+ * Fetches open positions via the trading WebSocket (client-side).
+ * The Options API WS supports `portfolio` — confirmed by Deriv docs.
+ * Server-side fetch fails in Vercel because the `ws` npm package crashes
+ * in serverless environments (TypeError: b.mask is not a function).
+ */
+export function usePortfolio(
+  accountId: string,
+  fetchFn?: () => Promise<{ positions: unknown[] } | null>,
+) {
   return useQuery({
     queryKey: queryKeys.portfolio(accountId),
     queryFn: async () => {
+      // Prefer client-side WS fetch (works in browser, not Vercel serverless)
+      if (fetchFn) {
+        const result = await fetchFn();
+        const raw = result?.positions ?? [];
+        return raw.map((item: any) => ({
+          contract_id: String(item.contract_id ?? ""),
+          contract_type: String(item.contract_type ?? ""),
+          symbol: String(item.underlying_symbol ?? item.underlying ?? item.symbol ?? ""),
+          buy_price: Number(item.buy_price ?? 0),
+          payout: Number(item.payout ?? 0),
+          profit: Number(item.profit ?? 0),
+          status: String(item.status ?? "open"),
+          barrier: item.barrier == null ? undefined : String(item.barrier),
+          purchase_time: Number(item.purchase_time ?? 0),
+        })) as DerivContract[];
+      }
+      // Fallback: server-side route (may fail in Vercel)
       const data = await fetchDerivApi<{ positions?: DerivContract[]; error?: string }>(
         `/api/deriv/portfolio?accountId=${encodeURIComponent(accountId)}`,
       );
       if (data.error) throw new Error(data.error);
       return data.positions ?? [];
     },
-    enabled: !!accountId,
+    enabled: !!accountId && !!fetchFn,
     retry: 4,
     retryDelay: exponentialBackoff,
     staleTime: 10_000,
@@ -208,17 +234,50 @@ export function usePortfolio(accountId: string) {
 /*  Trade History Hook (Profit Table)                                  */
 /* ------------------------------------------------------------------ */
 
-export function useTradeHistory(accountId: string, limit = 500) {
+/**
+ * Fetches closed trade history via the trading WebSocket (client-side).
+ * If the Options WS returns UnrecognisedRequest for profit_table,
+ * falls back to server-side Core API v3 route.
+ */
+export function useTradeHistory(
+  accountId: string,
+  limit = 500,
+  fetchFn?: (opts?: { limit?: number; offset?: number }) => Promise<{ transactions: unknown[]; count: number } | null>,
+) {
   return useQuery({
     queryKey: [...queryKeys.tradeHistory(accountId), limit],
     queryFn: async () => {
+      // Prefer client-side WS fetch
+      if (fetchFn) {
+        const result = await fetchFn({ limit, offset: 0 });
+        if (!result) return { trades: [] as DerivContract[], total: 0 };
+        const trades = (result.transactions ?? []).map((item: any) => {
+          const sellPrice = Number(item.sell_price ?? 0);
+          const buyPrice = Number(item.buy_price ?? 0);
+          const profit = sellPrice - buyPrice;
+          return {
+            contract_id: String(item.contract_id ?? item.transaction_id ?? ""),
+            contract_type: String(item.contract_type ?? ""),
+            symbol: String(item.underlying_symbol ?? item.underlying ?? item.symbol ?? ""),
+            buy_price: buyPrice,
+            payout: Number(item.payout ?? item.sell_price ?? 0),
+            profit,
+            status: (String(item.status ?? "") || (profit > 0 ? "won" : profit < 0 ? "lost" : "break_even")) as string,
+            barrier: item.barrier == null ? undefined : String(item.barrier),
+            purchase_time: Number(item.purchase_time ?? item.transaction_time ?? 0),
+            sell_time: Number(item.sell_time ?? 0) || undefined,
+          } as DerivContract;
+        });
+        return { trades, total: result.count ?? trades.length };
+      }
+      // Fallback: server-side route
       const data = await fetchDerivApi<{ trades?: DerivContract[]; total?: number; error?: string }>(
         `/api/deriv/trades?accountId=${encodeURIComponent(accountId)}&limit=${limit}&offset=0`,
       );
       if (data.error) throw new Error(data.error);
       return { trades: data.trades ?? [], total: data.total ?? 0 };
     },
-    enabled: !!accountId,
+    enabled: !!accountId && !!fetchFn,
     retry: 4,
     retryDelay: exponentialBackoff,
     staleTime: 10_000,

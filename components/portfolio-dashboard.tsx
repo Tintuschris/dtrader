@@ -39,6 +39,8 @@ type PortfolioProps = {
   accountId: string;
   balance: number | null;
   balanceCurrency: string;
+  fetchPositions?: () => Promise<{ positions: unknown[] } | null>;
+  fetchTrades?: (opts?: { limit?: number; offset?: number }) => Promise<{ transactions: unknown[]; count: number } | null>;
 };
 
 type TimeRange = "all" | "today" | "week" | "month";
@@ -89,13 +91,13 @@ function ChartSkeleton() {
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
-export default function PortfolioDashboard({ accountId, balance, balanceCurrency }: PortfolioProps) {
+export default function PortfolioDashboard({ accountId, balance, balanceCurrency, fetchPositions, fetchTrades }: PortfolioProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const queryClient = useQueryClient();
 
-  // React Query hooks
-  const { data: openPositions = [], isLoading: positionsLoading, error: positionsError } = usePortfolio(accountId);
-  const { data: tradeData, isLoading: tradesLoading, error: tradesError } = useTradeHistory(accountId, 500);
+  // React Query hooks — use client-side WS fetch when available
+  const { data: openPositions = [], isLoading: positionsLoading, error: positionsError } = usePortfolio(accountId, fetchPositions);
+  const { data: tradeData, isLoading: tradesLoading, error: tradesError } = useTradeHistory(accountId, 500, fetchTrades);
 
   const closedTrades = tradeData?.trades ?? [];
   const loading = positionsLoading || tradesLoading;

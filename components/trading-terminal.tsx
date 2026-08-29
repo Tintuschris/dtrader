@@ -199,6 +199,8 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     subscribeToContract,
     unsubscribeFromContract,
     refreshBalance,
+    fetchProfitTable,
+    fetchPortfolio,
     refreshAccounts,
     accounts: wsAccounts,
     clearLastResult,
@@ -1299,7 +1301,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
             </div>
             <Link className="stream-button" href="/">← Back to Workspace</Link>
           </div>
-          <TradingHistory accountId={activeAccountId} balanceCurrency={balanceCurrency} />
+          <TradingHistory accountId={activeAccountId} balanceCurrency={balanceCurrency} fetchTrades={fetchProfitTable ? (opts) => fetchProfitTable(opts) : undefined} />
         </section>
       )}
 
@@ -1338,7 +1340,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       {activeTab === "portfolio" && (
         <section className="workspace">
           <ErrorBoundary name="PortfolioDashboard">
-            <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} />
+            <PortfolioDashboard accountId={activeAccountId} balance={balance} balanceCurrency={balanceCurrency} fetchPositions={fetchPortfolio} />
           </ErrorBoundary>
         </section>
       )}

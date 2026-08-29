@@ -9,16 +9,17 @@ type DerivTrade = { contract_id: string; contract_type: string; symbol: string; 
 type Props = {
   accountId: string;
   balanceCurrency: string;
+  fetchTrades?: (opts?: { limit?: number; offset?: number }) => Promise<{ transactions: unknown[]; count: number } | null>;
 };
 type StatusFilter = "all" | "won" | "lost" | "break_even";
 
-export default function TradingHistory({ accountId, balanceCurrency }: Props) {
+export default function TradingHistory({ accountId, balanceCurrency, fetchTrades }: Props) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  // Use the same React Query hook as the portfolio dashboard
-  const { data: tradeData, isLoading: loading, error: queryError, refetch } = useTradeHistory(accountId, 500);
+  // Use client-side WS fetch when available (avoids Vercel serverless ws crash)
+  const { data: tradeData, isLoading: loading, error: queryError, refetch } = useTradeHistory(accountId, 500, fetchTrades);
 
   const allTrades: DerivTrade[] = useMemo(() => {
     const raw = tradeData?.trades ?? [];
