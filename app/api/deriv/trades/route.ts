@@ -8,21 +8,19 @@ export const dynamic = "force-dynamic";
 const numberParam = (value: string | null, fallback: number, maximum: number) =>
   Math.min(Math.max(Number.parseInt(value ?? "", 10) || fallback, 0), maximum);
 
-function log(level: "info" | "warn" | "error", step: string, data: Record<string, unknown>) {
-  const entry = JSON.stringify({ ts: new Date().toISOString(), level, step, ...data });
-  if (level === "error") console.error(entry);
-  else if (level === "warn") console.warn(entry);
-  else console.log(entry);
-}
-
-type ProfitTableResult = { profit_table?: { transactions?: Record<string, unknown>[]; count?: number } };
-
+/**
+ * GET /api/deriv/trades?accountId=...&limit=...&offset=...
+ *
+ * Fetches the profit table via the Core API v3 WebSocket.
+ * profit_table is a Core API v3 endpoint — it is NOT supported on the
+ * Options API WebSocket (OTP-authenticated). Using the Options API WS
+ * for this causes "UnrecognisedRequest" errors.
+ */
 export async function GET(request: NextRequest) {
   const t0 = Date.now();
 
   const session = await getSession();
   if (!session?.accessToken) {
-    log("warn", "session", { status: "missing" });
     return NextResponse.json({ error: "Please log in to load trade history." }, { status: 401 });
   }
 
@@ -31,31 +29,37 @@ export async function GET(request: NextRequest) {
   const offset = numberParam(searchParams.get("offset"), 0, Number.MAX_SAFE_INTEGER);
   const targetAccountId = searchParams.get("accountId") ?? session.loginId;
 
-  log("info", "start", {
-    targetAccountId: targetAccountId ?? "(none)",
-    loginId: session.loginId ?? "(none)",
-    limit,
-    offset,
-    hasPAT: !!process.env.DERIV_PAT,
-  });
+  const log = (step: string, data: Record<string, unknown> = {}) =>
+    console.log(JSON.stringify({ ts: new Date().toISOString(), step, targetAccountId, limit, offset, elapsed_ms: Date.now() - t0, ...data }));
 
-  // Try PAT first (long-lived), then session token
-  const tokens = [process.env.DERIV_PAT, session.accessToken].filter(Boolean) as string[];
-  if (tokens.length === 0) {
-    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  log("start", { hasToken: !!session.accessToken, hasPAT: !!process.env.DERIV_PAT });
+
+  // Try PAT first (most reliable for Core API v3), then OAuth token
+  const tokens: Array<{ label: string; token: string }> = [];
+  if (process.env.DERIV_PAT) {
+    tokens.push({ label: "PAT", token: process.env.DERIV_PAT });
   }
+  tokens.push({ label: "OAuth", token: session.accessToken });
 
-  let lastError: Error | null = null;
+  let lastError: string | null = null;
 
-  for (const token of tokens) {
+  for (const { label, token } of tokens) {
     try {
-      log("info", "trying", { tokenPrefix: token.substring(0, 8) });
-      const result = await derivV3AuthRequest<ProfitTableResult>(
+      log("trying_auth", { method: label });
+
+      const result = await derivV3AuthRequest<{
+        profit_table?: { transactions?: Record<string, unknown>[]; count?: number };
+      }>(
         token,
-        { profit_table: 1, description: 1, limit, offset, sort: "DESC" },
+        {
+          profit_table: 1,
+          description: 1,
+          limit,
+          offset,
+          sort: "DESC",
+        },
         "profit_table",
-        targetAccountId,
-        30_000,
+        targetAccountId ?? undefined,
       );
 
       const source = result.result.profit_table?.transactions ?? [];
@@ -67,8 +71,8 @@ export async function GET(request: NextRequest) {
         return {
           contract_id: String(item.contract_id ?? item.transaction_id ?? ""),
           contract_type: String(item.contract_type ?? ""),
-          symbol: String(item.underlying ?? item.symbol ?? ""),
-          buy_price: Number(item.buy_price ?? 0),
+          symbol: String(item.underlying_symbol ?? item.underlying ?? item.symbol ?? ""),
+          buy_price: buyPrice,
           payout: Number(item.payout ?? item.sell_price ?? 0),
           profit,
           status: receivedStatus || (profit > 0 ? "won" : profit < 0 ? "lost" : "break_even"),
@@ -80,7 +84,7 @@ export async function GET(request: NextRequest) {
         };
       });
 
-      log("info", "done", { elapsed_ms: Date.now() - t0, tradesReturned: trades.length, accountId: result.accountId });
+      log("done", { tradesReturned: trades.length, accountId: result.accountId, authMethod: label });
 
       return NextResponse.json({
         trades,
@@ -89,15 +93,15 @@ export async function GET(request: NextRequest) {
         account: { id: result.accountId, type: result.accountType },
       });
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      log("info", "token_failed", { tokenPrefix: token.substring(0, 8), error: lastError.message });
+      const msg = err instanceof Error ? err.message : String(err);
+      log("auth_failed", { method: label, error: msg });
+      lastError = msg;
     }
   }
 
-  const elapsed = Date.now() - t0;
-  log("error", "all_failed", { elapsed_ms: elapsed, error: lastError?.message });
+  log("all_auth_failed", { lastError });
   return NextResponse.json(
-    { error: lastError?.message ?? "Unable to load trade history." },
+    { error: lastError || "Unable to load trade history. Make sure DERIV_PAT is set in .env.local." },
     { status: 500 },
   );
 }

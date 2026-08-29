@@ -5,6 +5,14 @@ import { derivV3AuthRequest } from "../../../../lib/deriv-options-ws";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * GET /api/deriv/portfolio?accountId=...
+ *
+ * Fetches open positions via the Core API v3 WebSocket.
+ * portfolio is a Core API v3 endpoint — it is NOT supported on the
+ * Options API WebSocket (OTP-authenticated). Using the Options API WS
+ * for this causes "UnrecognisedRequest" errors.
+ */
 export async function GET(request: NextRequest) {
   const t0 = Date.now();
   const session = await getSession();
@@ -13,32 +21,35 @@ export async function GET(request: NextRequest) {
   }
 
   const targetAccountId = new URL(request.url).searchParams.get("accountId") ?? session.loginId;
-  console.log(JSON.stringify({ ts: new Date().toISOString(), step: "start", targetAccountId, hasToken: !!session.accessToken, hasPAT: !!process.env.DERIV_PAT }));
+  const log = (step: string, data: Record<string, unknown> = {}) =>
+    console.log(JSON.stringify({ ts: new Date().toISOString(), step, targetAccountId, elapsed_ms: Date.now() - t0, ...data }));
 
-  // Core API v3 WS supports portfolio; Options API WS does not.
-  // Try PAT first (long-lived, full permissions), then session token.
-  const tokens = [process.env.DERIV_PAT, session.accessToken].filter(Boolean) as string[];
-  if (tokens.length === 0) {
-    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  log("start", { hasToken: !!session.accessToken, hasPAT: !!process.env.DERIV_PAT });
+
+  // Try PAT first (most reliable for Core API v3), then OAuth token
+  const tokens: Array<{ label: string; token: string }> = [];
+  if (process.env.DERIV_PAT) {
+    tokens.push({ label: "PAT", token: process.env.DERIV_PAT });
   }
+  tokens.push({ label: "OAuth", token: session.accessToken });
 
-  let lastError: Error | null = null;
+  let lastError: string | null = null;
 
-  for (const token of tokens) {
+  for (const { label, token } of tokens) {
     try {
-      console.log(JSON.stringify({ ts: new Date().toISOString(), step: "trying", tokenPrefix: token.substring(0, 8) }));
+      log("trying_auth", { method: label });
+
       const result = await derivV3AuthRequest<{ portfolio?: { contracts?: Record<string, unknown>[] } }>(
         token,
         { portfolio: 1 },
         "portfolio",
-        targetAccountId,
-        30_000,
+        targetAccountId ?? undefined,
       );
 
       const positions = (result.result.portfolio?.contracts ?? []).map((item) => ({
         contract_id: String(item.contract_id ?? ""),
         contract_type: String(item.contract_type ?? ""),
-        symbol: String(item.underlying ?? item.symbol ?? ""),
+        symbol: String(item.underlying_symbol ?? item.underlying ?? item.symbol ?? ""),
         buy_price: Number(item.buy_price ?? 0),
         payout: Number(item.payout ?? 0),
         profit: Number(item.profit ?? 0),
@@ -47,23 +58,23 @@ export async function GET(request: NextRequest) {
         purchase_time: Number(item.purchase_time ?? 0),
       }));
 
-      console.log(JSON.stringify({ ts: new Date().toISOString(), step: "done", elapsed_ms: Date.now() - t0, positions: positions.length, accountId: result.accountId }));
+      log("done", { positions: positions.length, accountId: result.accountId, accountType: result.accountType, authMethod: label });
 
       return NextResponse.json({
         positions,
         account: { id: result.accountId, type: result.accountType },
       });
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      console.log(JSON.stringify({ ts: new Date().toISOString(), step: "token_failed", tokenPrefix: token.substring(0, 8), error: lastError.message }));
-      // If this was the PAT and it failed, try session token next
-      // If this was the session token and it failed, we're done
+      const msg = err instanceof Error ? err.message : String(err);
+      log("auth_failed", { method: label, error: msg });
+      lastError = msg;
+      // If PAT failed, try OAuth. If OAuth failed, that's the last attempt.
     }
   }
 
-  console.error(JSON.stringify({ ts: new Date().toISOString(), step: "all_failed", elapsed_ms: Date.now() - t0, error: lastError?.message }));
+  log("all_auth_failed", { lastError });
   return NextResponse.json(
-    { error: lastError?.message ?? "Unable to load open positions." },
+    { error: lastError || "Unable to load open positions. Make sure DERIV_PAT is set in .env.local." },
     { status: 500 },
   );
 }
