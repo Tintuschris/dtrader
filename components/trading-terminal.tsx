@@ -637,8 +637,10 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       pushNotification({ type: "trade", title: "Placing Trade", message: "1-tick trade submitting…", severity: "info" });
     }
     try {
+      console.log("[Trade] Buying proposal:", proposal.id, "price:", proposal.ask_price, "stake:", stakeNum);
       const result = await buy(proposal.id, proposal.ask_price);
-      if (!result) setTradeError("Buy request failed. Try again.");
+      console.log("[Trade] Buy result:", result ? "contract_id=" + result.contract_id : "null", "status:", result?.status);
+      if (!result) setTradeError("Buy request failed — check console for details.");
     } catch (e) {
       setTradeError(`Trade failed: ${String(e)}`);
     } finally {
@@ -1085,11 +1087,6 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                 <span className={`account-badge ${isDemo ? "demo" : "real"}`}>
                   {isDemo ? "DEMO" : "REAL"}
                 </span>
-                {streak && (
-                  <span className={"streak-badge " + streak.type}>
-                    {streak.type === "win" ? "🔥" : "❄️"} {streak.count} {streak.type === "win" ? "Win" : "Loss"}{streak.count > 1 ? "s" : ""}
-                  </span>
-                )}
               </div>
 
               {/* Contract group tabs */}
@@ -1175,34 +1172,6 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                 </div>
               )}
 
-              {/* Contract preview */}
-              {!activeContract && (currentProposal ?? proposalRef.current) && (
-                <div className="contract-preview">
-                  <div className="contract-preview-row">
-                    <span className="contract-preview-label">Contract</span>
-                    <span className="contract-preview-value">{subContract.charAt(0).toUpperCase() + subContract.slice(1)} {symbolLabel.split(" ")[0]}</span>
-                  </div>
-                  <div className="contract-preview-row">
-                    <span className="contract-preview-label">Duration</span>
-                    <span className="contract-preview-value">{duration} tick{duration !== 1 ? "s" : ""}</span>
-                  </div>
-                  <div className="contract-preview-row">
-                    <span className="contract-preview-label">Stake</span>
-                    <span className="contract-preview-value">${fmt(stakeNum)}</span>
-                  </div>
-                  {needsBarrier && (
-                    <div className="contract-preview-row">
-                      <span className="contract-preview-label">Prediction</span>
-                      <span className="contract-preview-value">Last digit {selectedDigit}</span>
-                    </div>
-                  )}
-                  <div className="contract-preview-row highlight">
-                    <span className="contract-preview-label">Potential payout</span>
-                    <span className="contract-preview-value">${fmt(potentialPayout)}</span>
-                  </div>
-                </div>
-              )}
-
               {/* Error */}
               {(tradeError || lastError) && (
                 <div className="trade-error" onClick={() => { setTradeError(null); clearError(); }}>
@@ -1218,9 +1187,6 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                     <button
                       className="buy-button"
                       onClick={() => void handlePlaceTrade()}
-                      onPointerDown={(e) => { (e.currentTarget as HTMLElement).classList.add("buy-pressed"); }}
-                      onPointerUp={(e) => { (e.currentTarget as HTMLElement).classList.remove("buy-pressed"); }}
-                      onPointerLeave={(e) => { (e.currentTarget as HTMLElement).classList.remove("buy-pressed"); }}
                       disabled={isBuying || (!currentProposal && !proposalRef.current)}
                     >
                       {isBuying ? "Placing…" : "Buy"}

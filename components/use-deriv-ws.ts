@@ -344,6 +344,7 @@ export function useDerivTrading() {
 
           // buy
           if (msg.msg_type === "buy") {
+            console.log("[WS] Buy response received:", JSON.stringify(msg.buy).substring(0, 200));
             const reqId = msg.req_id as string | undefined;
             const b = msg.buy as
               | {
@@ -353,6 +354,7 @@ export function useDerivTrading() {
               | undefined;
 
             if (b?.contract_id) {
+              console.log("[WS] Buy SUCCESS — contract_id:", b.contract_id, "Setting active contract");
               const contract: OpenContract = {
                 contract_id: b.contract_id,
                 status: "open",
@@ -380,6 +382,7 @@ export function useDerivTrading() {
                 lastResolve(contract);
               }
             } else {
+              console.error("[WS] Buy FAILED — no contract_id. Full response:", JSON.stringify(msg).substring(0, 300));
               const err = msg.error as Record<string, unknown> | undefined;
               const code = err && typeof err.code === "string" ? err.code : undefined;
               const message = err && typeof err.message === "string" ? err.message : undefined;
@@ -397,6 +400,7 @@ export function useDerivTrading() {
 
           // proposal_open_contract
           if (msg.msg_type === "proposal_open_contract") {
+            console.log("[WS] Contract update:", msg.proposal_open_contract ? "status=" + (msg.proposal_open_contract as any).status + " is_sold=" + (msg.proposal_open_contract as any).is_sold : "null");
             const c = msg.proposal_open_contract as
               | {
                   contract_id?: string;
