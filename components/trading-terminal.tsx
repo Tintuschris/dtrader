@@ -546,6 +546,26 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     return () => clearTimeout(timer);
   }, [lastError, clearError]);
 
+  /* ---- trade result sound/vibration ---- */
+  useEffect(() => {
+    if (!lastResult) return;
+    try {
+      if (navigator.vibrate) {
+        navigator.vibrate(lastResult.status === "won" ? 100 : [50, 30, 50]);
+      }
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.value = 0.12;
+      osc.frequency.value = lastResult.status === "won" ? 880 : 220;
+      osc.type = "sine";
+      osc.start();
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+      osc.stop(ctx.currentTime + 0.25);
+    } catch { /* audio not available */ }
+  }, [lastResult]);
   /* ---- notifications for trade results ---- */
   useEffect(() => {
     if (!lastResult) return;
@@ -629,6 +649,10 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     if (stakeNum > 0 && balance !== null && stakeNum > balance * 0.5) {
       // Warning for large stakes but allow it
       console.warn(`Large stake: $${fmt(stakeNum)} is >50% of balance $${fmt(balance)}`);
+    }
+    if (balance !== null && stakeNum > balance * 0.5) {
+      const confirmed = window.confirm("You are staking $" + fmt(stakeNum) + " which is >50% of your balance ($" + fmt(balance) + "). Continue?");
+      if (!confirmed) return;
     }
     setIsBuying(true);
     setTradeError(null);
@@ -1148,18 +1172,18 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
               </div>
 
               {/* Payout card */}
+              {/* Payout card */}
               <div className={`payout-card ${lastError && !proposalLoading && !currentProposal && !proposalRef.current ? "payout-error" : ""}`}>
                 <div>
                   <span>Potential payout</span>
-                  <strong>
-                    {proposalLoading && !proposalRef.current ? "Loading…" : (currentProposal ?? proposalRef.current) ? `$${fmt(potentialPayout)}` : lastError ? "Error" : "—"}
+                  <strong className={proposalLoading && !proposalRef.current ? "payout-skeleton" : ""}>
+                    {currentProposal ? "$" + fmt(currentProposal.payout) : proposalRef.current ? "$" + fmt(proposalRef.current.payout) : proposalLoading ? "   " : lastError ? "Error" : "—"}
                   </strong>
                 </div>
                 <div className="payout-rate">
-                  {proposalLoading ? "…" : currentProposal ? `+${payoutRate}%` : "—"}
+                  {currentProposal ? "+" + ((currentProposal.payout - currentProposal.ask_price) / currentProposal.ask_price * 100).toFixed(1) + "%" : proposalRef.current ? "+" + ((proposalRef.current.payout - proposalRef.current.ask_price) / proposalRef.current.ask_price * 100).toFixed(1) + "%" : proposalLoading ? " " : "—"}
                 </div>
               </div>
-
               {/* Active contract status */}
               {activeContract && (
                 <div className="active-contract-banner">
@@ -1192,7 +1216,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                       {isBuying ? "Placing…" : "Buy"}
                       <span><IconArrowUp size={16} /></span>
                     </button>
-                    <button className="sell-button-lg" disabled>SELL</button>
+                    <button className="sell-button-lg sell-inactive" disabled>SELL</button>
                   </div>
                 ) : (
                   <div className="trade-actions">
