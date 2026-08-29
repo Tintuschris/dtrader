@@ -392,9 +392,11 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
 
         ws.onopen = () => {
           tickReconnectAttempts.current = 0;
-          // Load the same real tick context used by the digit distribution,
-          // then keep the feed subscribed for subsequent live ticks.
-          ws.send(JSON.stringify({ ticks_history: sym, style: "ticks", count: 2000, end: "latest", subscribe: 1 }));
+          console.log("[TickStream] Connected, requesting history + live ticks for", sym);
+          // Step 1: Fetch initial tick history (one-shot)
+          ws.send(JSON.stringify({ ticks_history: sym, style: "ticks", count: 2000, end: "latest" }));
+          // Step 2: Subscribe to live tick stream (persistent feed)
+          ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
         };
 
         ws.onmessage = (event) => {
@@ -430,6 +432,15 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                 try { getGlobalAnalyzer().addTick(sym, { quote: Number(tick.quote), epoch: 0 }); } catch { /* analyzer may not be mounted */ }
               }
             }
+
+            // Subscription confirmation from ticks subscribe
+            if (msgType === "tickstream") {
+              console.log("[TickStream] Live subscription confirmed for", sym);
+            }
+            // Handle error responses
+            if (message.error) {
+              console.warn("[TickStream] API error:", (message.error as any).message || (message.error as any).code);
+            }
           } catch { /* ignore parse errors */ }
         };
 
@@ -439,6 +450,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
 
         ws.onclose = (event) => {
           if (!alive) return;
+          console.log("[TickStream] WS closed, code=" + event.code + ", reason=" + (event.reason || "none"));
           // Normal closure codes — don't reconnect
           if (event.code === 1000 || event.code === 1001) {
             if (!tickReceived) {
