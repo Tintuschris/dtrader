@@ -16,6 +16,7 @@
     "@tensorflow/tfjs": "^4.22.0",
     "blockly": "^13.2.1",
     "js-interpreter": "^6.0.2",
+    "lightweight-charts": "^5.2.1",
     "next": "^15.5.23",
     "react": "19.1.1",
     "react-dom": "19.1.1",

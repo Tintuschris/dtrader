@@ -23,6 +23,7 @@ import dynamic from "next/dynamic";
 const MarketAnalyzerPanel = dynamic(() => import("./market-analyzer"), { ssr: false, loading: () => <div className="workspace"><div className="workspace-heading"><div><p className="eyebrow">ANALYZER</p><h1>Market Analyzer</h1><p className="muted">Loading neural network engine…</p></div></div></div> });
 import { useBot } from "./use-bot";
 import WalletPanel from "./wallet-panel";
+import TickChart from "./tick-chart";
 import ErrorBoundary from "./error-boundary";
 import { ToastContainer, NotificationCenter, pushNotification } from "./notification-system";
 import PortfolioDashboard from "./portfolio-dashboard";
@@ -972,66 +973,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                       <div className="chart-skeleton-shimmer" />
                     </div>
                   )}
-                  <svg className="chart" viewBox="0 0 920 360" preserveAspectRatio="none" aria-label="Live price chart" role="img">
-                    <defs>
-                      <linearGradient id="area" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0%" stopColor="#37d4bd" stopOpacity=".18" />
-                        <stop offset="100%" stopColor="#37d4bd" stopOpacity="0" />
-                      </linearGradient>
-                    </defs>
-                    {priceAxisTicks.map((pt, i) => (
-                      <line key={`hg${i}`} x1={CHART_LEFT} y1={pt.y} x2={CHART_RIGHT} y2={pt.y} stroke="rgba(157,179,203,0.08)" strokeWidth="1" />
-                    ))}
-                    {timeAxisTicks.map((tt, i) => (
-                      <line key={`vg${i}`} x1={tt.x} y1={CHART_TOP} x2={tt.x} y2={CHART_BOTTOM} stroke="rgba(157,179,203,0.06)" strokeWidth="1" />
-                    ))}
-                    <path d={`M ${chartX(0)} ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${chartX(i)} ${chartY(t.value)}`).join(" ")} L ${chartX(ticks.length - 1)} ${CHART_BOTTOM} L ${chartX(0)} ${CHART_BOTTOM} Z`} fill="url(#area)" />
-                    <path d={`M ${chartX(0)} ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${chartX(i)} ${chartY(t.value)}`).join(" ")}`} fill="none" stroke="#43d6c1" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-                    {priceAxisTicks.map((pt, i) => (
-                      <text key={`pa${i}`} x={CHART_RIGHT + 8} y={pt.y + 4} fill="#617085" fontSize="10" fontFamily="Space Grotesk, monospace">{pt.value.toFixed(2)}</text>
-                    ))}
-                    {timeAxisTicks.map((tt, i) => (
-                      <text key={`ta${i}`} x={tt.x} y={CHART_BOTTOM + 18} fill="#617085" fontSize="9" fontFamily="Space Grotesk, monospace" textAnchor="middle">{tt.label}</text>
-                    ))}
-                    <line x1={CHART_LEFT} y1={chartY(current.value)} x2={CHART_RIGHT} y2={chartY(current.value)} stroke="#b9a1ff" strokeDasharray="4 3" opacity=".6" strokeWidth="1" />
-                    <line x1={CHART_RIGHT} y1={chartY(current.value)} x2={CHART_RIGHT + 6} y2={chartY(current.value)} stroke="#b9a1ff" strokeWidth="2" />
-                    <rect x={CHART_RIGHT + 6} y={chartY(current.value) - 10} width="58" height="20" rx="4" fill="#b9a1ff" />
-                    <text x={CHART_RIGHT + 35} y={chartY(current.value) + 4} fill="#0b1420" fontSize="10" fontWeight="700" fontFamily="Space Grotesk, monospace" textAnchor="middle">{fmt(current.value)}</text>
-                    <circle cx={CHART_RIGHT} cy={chartY(current.value)} r="4" fill="#b9a1ff" stroke="#0b1420" strokeWidth="2" />
-                    {activeContract && (
-                      <>
-                        {activeContract.entry_tick != null && (
-                          <g>
-                            <circle cx={CHART_RIGHT} cy={chartY(activeContract.entry_tick)} r="5" fill="#f0c040" stroke="#0b1420" strokeWidth="2" />
-                            <text x={CHART_RIGHT - 8} y={chartY(activeContract.entry_tick) - 10} textAnchor="end" fill="#f0c040" fontSize="9" fontWeight="bold">ENTRY</text>
-                          </g>
-                        )}
-                        {activeContract.barrier && (
-                          <line x1={CHART_LEFT} y1={chartY(Number(activeContract.barrier))} x2={CHART_RIGHT} y2={chartY(Number(activeContract.barrier))} stroke="#f08080" strokeDasharray="4 4" strokeWidth="1.5" opacity=".6" />
-                        )}
-                        {activeContract.exit_tick != null && (() => {
-                          const exitDigit = Number(Number(activeContract.exit_tick).toFixed(2).replace(".", "").slice(-1));
-                          const aboveEntry = activeContract.entry_tick != null && activeContract.exit_tick > activeContract.entry_tick;
-                          const isWin = activeContract.status === "won";
-                          const color = isWin ? "#22c55e" : "#ef4444";
-                          return (
-                            <g className="exit-tick-marker">
-                              <circle cx={CHART_RIGHT} cy={chartY(activeContract.exit_tick)} r="7" fill="none" stroke={color} strokeWidth="2" opacity="0.6">
-                                <animate attributeName="r" from="4" to="14" dur="1.5s" fill="freeze" />
-                                <animate attributeName="opacity" from="0.8" to="0" dur="1.5s" fill="freeze" />
-                              </circle>
-                              <circle cx={CHART_RIGHT} cy={chartY(activeContract.exit_tick)} r="5" fill={color} stroke="#0b1420" strokeWidth="2" />
-                              {/* Digit badge — shows which digit the exit tick landed on */}
-                              <rect x={CHART_RIGHT + 10} y={chartY(activeContract.exit_tick) - 12} width="36" height="24" rx="6" fill={color} />
-                              <text x={CHART_RIGHT + 28} y={chartY(activeContract.exit_tick) + 4} fill="#0b1420" fontSize="13" fontWeight="800" fontFamily="Space Grotesk, monospace" textAnchor="middle">{exitDigit}</text>
-                              {/* WIN/LOSS label */}
-                              <text x={CHART_RIGHT + 50} y={chartY(activeContract.exit_tick) + 4} fill={color} fontSize="9" fontWeight="bold">{isWin ? "WIN" : "LOSS"}</text>
-                            </g>
-                          );
-                        })()}
-                      </>
-                    )}
-                  </svg>
+                  <TickChart ticks={ticks} activeContract={activeContract} />
                 </div>
                 <div className="digit-strip-heading">
                   <span>Digit frequency</span>
@@ -1058,44 +1000,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                         <div className="chart-skeleton-shimmer" />
                       </div>
                     )}
-                    <svg className="chart" viewBox="0 0 920 360" preserveAspectRatio="none" aria-label="Live price chart" role="img">
-                      <defs>
-                        <linearGradient id="area-m" x1="0" x2="0" y1="0" y2="1">
-                          <stop offset="0%" stopColor="#37d4bd" stopOpacity=".18" />
-                          <stop offset="100%" stopColor="#37d4bd" stopOpacity="0" />
-                        </linearGradient>
-                      </defs>
-                      {priceAxisTicks.map((pt, i) => (
-                        <line key={`hm${i}`} x1={CHART_LEFT} y1={pt.y} x2={CHART_RIGHT} y2={pt.y} stroke="rgba(157,179,203,0.08)" strokeWidth="1" />
-                      ))}
-                      <path d={`M ${chartX(0)} ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${chartX(i)} ${chartY(t.value)}`).join(" ")} L ${chartX(ticks.length - 1)} ${CHART_BOTTOM} L ${chartX(0)} ${CHART_BOTTOM} Z`} fill="url(#area-m)" />
-                      <path d={`M ${chartX(0)} ${chartY(ticks[0]?.value ?? current.value)} ${ticks.map((t, i) => `L ${chartX(i)} ${chartY(t.value)}`).join(" ")}`} fill="none" stroke="#43d6c1" strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-                      {priceAxisTicks.map((pt, i) => (
-                        <text key={`pm${i}`} x={CHART_RIGHT + 8} y={pt.y + 4} fill="#617085" fontSize="10" fontFamily="Space Grotesk, monospace">{pt.value.toFixed(2)}</text>
-                      ))}
-                      <line x1={CHART_LEFT} y1={chartY(current.value)} x2={CHART_RIGHT} y2={chartY(current.value)} stroke="#b9a1ff" strokeDasharray="4 3" opacity=".6" strokeWidth="1" />
-                      <circle cx={CHART_RIGHT} cy={chartY(current.value)} r="4" fill="#b9a1ff" stroke="#0b1420" strokeWidth="2" />
-                      <rect x={CHART_RIGHT + 6} y={chartY(current.value) - 10} width="58" height="20" rx="4" fill="#b9a1ff" />
-                      <text x={CHART_RIGHT + 35} y={chartY(current.value) + 4} fill="#0b1420" fontSize="10" fontWeight="700" fontFamily="Space Grotesk, monospace" textAnchor="middle">{fmt(current.value)}</text>
-                      {activeContract && activeContract.exit_tick != null && (() => {
-                        const exitDigit = Number(Number(activeContract.exit_tick).toFixed(2).replace(".", "").slice(-1));
-                        const isWin = activeContract.status === "won";
-                        const color = isWin ? "#22c55e" : "#ef4444";
-                        return (
-                          <g className="exit-tick-marker">
-                            <circle cx={CHART_RIGHT} cy={chartY(activeContract.exit_tick)} r="7" fill="none" stroke={color} strokeWidth="2" opacity="0.6">
-                              <animate attributeName="r" from="4" to="14" dur="1.5s" fill="freeze" />
-                              <animate attributeName="opacity" from="0.8" to="0" dur="1.5s" fill="freeze" />
-                            </circle>
-                            <circle cx={CHART_RIGHT} cy={chartY(activeContract.exit_tick)} r="5" fill={color} stroke="#0b1420" strokeWidth="2" />
-                            <rect x={CHART_RIGHT + 10} y={chartY(activeContract.exit_tick) - 12} width="36" height="24" rx="6" fill={color} />
-                            <text x={CHART_RIGHT + 28} y={chartY(activeContract.exit_tick) + 4} fill="#0b1420" fontSize="13" fontWeight="800" fontFamily="Space Grotesk, monospace" textAnchor="middle">{exitDigit}</text>
-                            <text x={CHART_RIGHT + 50} y={chartY(activeContract.exit_tick) + 4} fill={color} fontSize="9" fontWeight="bold">{isWin ? "WIN" : "LOSS"}</text>
-                          </g>
-                        );
-                      })()}
-                    </svg>
-                    <div className="crosshair-label" style={{ top: `${Math.max(5, Math.min(90, (chartY(current.value) / 310) * 100))}%` }}>{fmt(current.value)}</div>
+                    <TickChart ticks={ticks} activeContract={activeContract} />
                   </div>
                   {/* Slide 2: Digit strip */}
                   <div className="digit-strip-slide">
