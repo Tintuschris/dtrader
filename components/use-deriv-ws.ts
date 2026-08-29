@@ -362,6 +362,7 @@ export function useDerivTrading() {
               setActiveContract(contract);
               setLastError(null);
               if (!skipAutoSubscribe.current) {
+                console.log("[WS] Sending proposal_open_contract subscription for:", b.contract_id);
                 ws.send(
                   JSON.stringify({
                     proposal_open_contract: 1,
@@ -400,7 +401,8 @@ export function useDerivTrading() {
 
           // proposal_open_contract
           if (msg.msg_type === "proposal_open_contract") {
-            console.log("[WS] Contract update:", msg.proposal_open_contract ? "status=" + (msg.proposal_open_contract as any).status + " is_sold=" + (msg.proposal_open_contract as any).is_sold : "null");
+            const poc = msg.proposal_open_contract as Record<string, unknown> | undefined;
+            console.log("[WS] proposal_open_contract received:", poc ? "contract_id=" + poc.contract_id + " status=" + poc.status + " current_tick=" + poc.current_tick + " is_sold=" + poc.is_sold : "null");
             const c = msg.proposal_open_contract as
               | {
                   contract_id?: string;
@@ -425,9 +427,9 @@ export function useDerivTrading() {
                 profit: typeof c.profit === "number" ? c.profit : Number(c.profit) || 0,
                 buy_price: typeof c.buy_price === "number" ? c.buy_price : Number(c.buy_price) || 0,
                 payout: typeof c.payout === "number" ? c.payout : Number(c.payout) || 0,
-                entry_tick: typeof c.entry_tick === "number" ? c.entry_tick : Number(c.entry_tick) || undefined,
-                current_tick: typeof c.current_tick === "number" ? c.current_tick : Number(c.current_tick) || undefined,
-                exit_tick: typeof c.exit_tick === "number" ? c.exit_tick : Number(c.exit_tick) || undefined,
+                entry_tick: c.entry_tick != null ? Number(c.entry_tick) : undefined,
+                current_tick: c.current_tick != null ? Number(c.current_tick) : undefined,
+                exit_tick: c.exit_tick != null ? Number(c.exit_tick) : undefined,
                 is_sold: c.is_sold,
                 contract_type: c.contract_type,
                 underlying: c.underlying,
@@ -454,6 +456,7 @@ export function useDerivTrading() {
                   payout: oc.payout ?? 0,
                   buy_price: oc.buy_price ?? 0,
                 };
+                console.log("[WS] Trade settled:", finalStatus, "profit:", oc.profit, "payout:", oc.payout);
                 setLastResult(result);
                 // Clear proposal immediately so buy button state updates
                 proposalRef.current = null;
@@ -475,7 +478,7 @@ export function useDerivTrading() {
                 });
                 // Reduced settle delay: 800ms for 1-tick trades (just enough to see result), 2s for multi-tick
                 const settleDelay = (oc.tick_count && oc.tick_count <= 1) ? 800 : 2000;
-                setTimeout(() => setActiveContract(null), settleDelay);
+                setTimeout(() => { console.log("[WS] Clearing active contract after", settleDelay, "ms"); setActiveContract(null); }, settleDelay);
                 // Pre-warm proposal re-subscription immediately from WS handler
                 // instead of waiting for React effect cycle (saves ~200-400ms)
                 if (proposalSubscriptionIdRef.current) {

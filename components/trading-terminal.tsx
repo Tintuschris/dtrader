@@ -609,7 +609,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
   const [isBuying, setIsBuying] = useState(false);
   const handlePlaceTrade = useCallback(async () => {
     if (isBuying) return;
-    const proposal = currentProposal ?? proposalRef.current;
+    const proposal = proposalRef.current ?? currentProposal;
     if (!proposal) { setTradeError("No active proposal. Wait for pricing."); return; }
     const stakeNum = parseFloat(stake);
     if (isNaN(stakeNum) || stakeNum <= 0) { setTradeError("Enter a valid stake amount."); return; }
