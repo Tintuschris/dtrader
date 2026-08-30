@@ -65,7 +65,7 @@ export default function MarketAnalyzerPanel({ onUseRecommendation }: { onUseReco
   const [autoTradeConfig, setAutoTradeConfig] = useState({
     contractType: "DIGITOVER" as const,
     stake: 1, duration: 5, minScore: 65, minConfidence: 13,
-    dailyLossLimit: 50, cooldownSec: 15, maxOpenContracts: 1, maxConsecutiveLosses: 3,
+    dailyLossLimit: 50, cooldownSec: 15, maxOpenContracts: 1, maxConsecutiveLosses: 3, tickIntervalMs: 3000,
   });
   const [autoTradeState, setAutoTradeState] = useState<AutoTradeState>({
     isRunning: false, lastTradeTime: 0, tradesToday: 0, pnlToday: 0,
@@ -249,7 +249,7 @@ export default function MarketAnalyzerPanel({ onUseRecommendation }: { onUseReco
             </div>
             <div className="at-config-field">
               <label>Duration (ticks)</label>
-              <input type="number" min="1" max="50" step="1" value={autoTradeConfig.duration} onChange={(e) => { const v = parseInt(e.target.value) || 5; setAutoTradeConfig(p => ({...p, duration: v})); getAutoTradeEngine().updateConfig({duration: v}); }} />
+              <input type="number" min="1" max="50" step="1" value={autoTradeConfig.duration} onChange={(e) => { const v = parseInt(e.target.value) || 5; const tickMs = v === 1 ? 1000 : autoTradeConfig.tickIntervalMs; setAutoTradeConfig(p => ({...p, duration: v, tickIntervalMs: tickMs})); getAutoTradeEngine().updateConfig({duration: v, tickIntervalMs: tickMs}); }} />
             </div>
             <div className="at-config-field">
               <label>Min AI Score</label>
@@ -272,6 +272,11 @@ export default function MarketAnalyzerPanel({ onUseRecommendation }: { onUseReco
               <span className="at-config-hint">Min time between trades</span>
             </div>
             <div className="at-config-field">
+              <label>Tick Interval (ms)</label>
+              <input type="number" min="500" max="10000" step="100" value={autoTradeConfig.tickIntervalMs} onChange={(e) => { const v = parseInt(e.target.value) || 3000; setAutoTradeConfig(p => ({...p, tickIntervalMs: v})); getAutoTradeEngine().updateConfig({tickIntervalMs: v}); }} />
+              <span className="at-config-hint">How often to check for signals (1000ms for 1-tick trades)</span>
+            </div>
+            <div className="at-config-field">
               <label>Consecutive loss stop</label>
               <input type="number" min="1" max="10" step="1" value={autoTradeConfig.maxConsecutiveLosses} onChange={(e) => { const v = parseInt(e.target.value) || 3; setAutoTradeConfig(p => ({...p, maxConsecutiveLosses: v})); getAutoTradeEngine().updateConfig({maxConsecutiveLosses: v}); }} />
               <span className="at-config-hint">Stops after this many losses in a row</span>
@@ -284,6 +289,7 @@ export default function MarketAnalyzerPanel({ onUseRecommendation }: { onUseReco
           <div className="at-config-summary">
             <span>Per-trade risk: <strong>${autoTradeConfig.stake.toFixed(2)}</strong></span>
             <span>Daily limit: <strong>${autoTradeConfig.dailyLossLimit.toFixed(2)}</strong></span>
+            <span>Tick: <strong>{autoTradeConfig.tickIntervalMs}ms</strong></span>
             <span>Cooldown: <strong>{autoTradeConfig.cooldownSec}s</strong></span>
             <span>Max contracts: <strong>{autoTradeConfig.maxOpenContracts}</strong></span>
             <span>Mode: <strong>DEMO ONLY</strong></span>

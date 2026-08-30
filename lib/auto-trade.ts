@@ -11,7 +11,7 @@ export type AutoTradeConfig = {
   contractType: "DIGITOVER" | "DIGITUNDER" | "DIGITODD" | "DIGITEVEN" | "DIGITMATCH" | "DIGITDIFF";
   symbol: string; stake: number; duration: number; minScore: number; minConfidence: number;
   maxStakePerTrade: number; dailyLossLimit: number; cooldownMs: number; maxOpenContracts: number;
-  maxConsecutiveLosses: number; minTrainingSamples: number; minValidatedAccuracy: number; demoOnly: boolean;
+  maxConsecutiveLosses: number; minTrainingSamples: number; minValidatedAccuracy: number; demoOnly: boolean; tickIntervalMs: number;
 };
 
 export type AutoTradeState = {
@@ -33,7 +33,7 @@ const DEFAULT: AutoTradeConfig = {
   enabled: false, contractType: "DIGITOVER", symbol: "1HZ100V", stake: 1, duration: 5,
   minScore: 65, minConfidence: 13, maxStakePerTrade: 10, dailyLossLimit: 50,
   cooldownMs: 15000, maxOpenContracts: 1,
-  maxConsecutiveLosses: 3, minTrainingSamples: 500, minValidatedAccuracy: 0.13, demoOnly: true,
+  maxConsecutiveLosses: 3, minTrainingSamples: 500, minValidatedAccuracy: 0.13, demoOnly: true, tickIntervalMs: 3000,
 };
 
 export class AutoTradeEngine {
@@ -57,8 +57,15 @@ export class AutoTradeEngine {
   private emit() { for (const cb of this.cbs) cb({ ...this.state }); }
 
   updateConfig(p: Partial<AutoTradeConfig>) {
+    const prevInterval = this.config.tickIntervalMs;
     this.config = { ...this.config, ...p };
     if (p.enabled !== undefined) { if (p.enabled) this.start(); else this.stop(); }
+    // Restart timer if tick interval changed while running
+    if (p.tickIntervalMs !== undefined && p.tickIntervalMs !== prevInterval && this.state.isRunning) {
+      if (this.timer) clearInterval(this.timer);
+      this.timer = setInterval(() => this.tick(), this.config.tickIntervalMs);
+      console.log("[AutoTrade] Tick interval updated to", this.config.tickIntervalMs, "ms");
+    }
   }
 
   start() {
@@ -68,7 +75,7 @@ export class AutoTradeEngine {
       this.state.lastPrediction = "Blocked: ML automation is demo-only"; this.emit(); return;
     }
     this.state.isRunning = true; this.emit();
-    this.timer = setInterval(() => this.tick(), 3000);
+    this.timer = setInterval(() => this.tick(), this.config.tickIntervalMs);
     console.log("[AutoTrade] Started");
   }
 
