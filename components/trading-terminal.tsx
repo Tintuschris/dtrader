@@ -377,6 +377,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       if (!alive) return;
       const sym = currentSymbolRef.current;
       await getGlobalAnalyzer().setLearningSymbol(sym);
+      getGlobalAnalyzer().setTerminalSymbol(sym);
       if (!alive) return;
 
       // Close any previous connection

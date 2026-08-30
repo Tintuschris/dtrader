@@ -220,6 +220,7 @@ export class MarketAnalyzer {
   // One model must learn one market at a time. Mixing digit sequences from
   // unrelated symbols manufactures transitions that never happened.
   private learningSymbol: string | null = null;
+  private terminalSymbol: string | null = null;
   private wsStatusMap: Map<string, WsStatus> = new Map();
   private wsStatusCallbacks: Set<(statuses: Map<string, WsStatus>) => void> = new Set();
 
@@ -248,6 +249,13 @@ export class MarketAnalyzer {
     if (buffer.length > 5000) {
       buffer.splice(0, buffer.length - 5000);
     }
+    // Update WS status tick count for externally-streamed markets (terminal)
+    if (this.terminalSymbol === symbol) {
+      const prev = this.wsStatusMap.get(symbol);
+      if (prev?.status === "connected") {
+        this.wsStatusMap.set(symbol, { ...prev, tickCount: buffer.length, lastTickAt: Date.now() });
+      }
+    }
     // Feed only the selected market to the shared neural model. Other markets
     // are still retained for statistical comparison and ranking.
     if (this.learningSymbol !== symbol) return;
@@ -275,11 +283,22 @@ export class MarketAnalyzer {
 
   getLearningSymbol(): string | null { return this.learningSymbol; }
 
+  /** Register which market the terminal is already streaming to avoid duplicate WS connections. */
+  setTerminalSymbol(symbol: string): void { this.terminalSymbol = symbol; }
+  getTerminalSymbol(): string | null { return this.terminalSymbol; }
+
   /* ---- Real-time WebSocket connections ---- */
 
   startStreaming(symbols: string[]): void {
     for (const symbol of symbols) {
       if (this.wsConnections.has(symbol)) continue;
+      // Skip the market the terminal is already streaming — it feeds ticks via addTick()
+      if (this.terminalSymbol && symbol === this.terminalSymbol) {
+        // Mark as externally streamed so the UI shows it as live
+        const tickCount = this.tickBuffers.get(symbol)?.length ?? 0;
+        this.setWsStatus(symbol, { status: "connected", tickCount, lastTickAt: tickCount > 0 ? Date.now() : undefined });
+        continue;
+      }
       this.connectSymbol(symbol);
     }
     // Start online learning (only if model is ready)
