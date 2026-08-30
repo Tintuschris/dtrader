@@ -28,6 +28,7 @@ import ErrorBoundary from "./error-boundary";
 import { ToastContainer, NotificationCenter, pushNotification } from "./notification-system";
 import PortfolioDashboard from "./portfolio-dashboard";
 import { getGlobalAnalyzer } from "../lib/market-analyzer";
+import type { TradeRecommendation } from "./market-analyzer";
 import { getAutoTradeEngine } from "../lib/auto-trade";
 import RiskManagement, { defaultRiskSettings, createInitialRiskState, checkRiskLimits, updateRiskState, type RiskSettings, type RiskState } from "./risk-management";
 
@@ -618,6 +619,25 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       if (proposeTimer.current) clearTimeout(proposeTimer.current);
     };
   }, [subContract, symbol, stake, duration, selectedDigit, connectionStatus, balanceCurrency, subscribeProposal, clearError, activeTab, lastResult?.contract_id]);
+
+  /* ---- handle trade recommendation from analyzer ---- */
+  const handleUseRecommendation = useCallback((rec: TradeRecommendation) => {
+    // Map subContract to the right contractGroup
+    const groupMap: Record<string, ContractGroup> = {
+      over: "Over / Under",
+      under: "Over / Under",
+      match: "Matches / Differs",
+      differs: "Matches / Differs",
+      even: "Even / Odd",
+      odd: "Even / Odd",
+    };
+    const group = groupMap[rec.subContract] ?? "Over / Under";
+    setContractGroup(group);
+    setSubContract(rec.subContract);
+    if (rec.digit !== undefined) setSelectedDigit(rec.digit);
+    if (rec.symbol && rec.symbol !== symbol) setSymbol(rec.symbol);
+    setActiveTab("workspace");
+  }, [symbol]);
 
   /* ---- handle contract group change ---- */
   const handleContractGroupChange = useCallback((group: ContractGroup) => {
@@ -1303,7 +1323,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
       {activeTab === "analyzer" && (
         <section className="workspace">
           <ErrorBoundary name="MarketAnalyzer" fallback={<div style={{ padding: 40, textAlign: "center" }}><IconAlertTriangle size={32} color="#f59e0b" /><h3 style={{ margin: "12px 0 8px" }}>Analyzer Failed to Load</h3><p style={{ color: "var(--muted)", fontSize: 13 }}>The neural network engine encountered an error. Try refreshing the page.</p></div>}>
-            <MarketAnalyzerPanel />
+            <MarketAnalyzerPanel onUseRecommendation={handleUseRecommendation} />
           </ErrorBoundary>
         </section>
       )}

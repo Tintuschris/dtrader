@@ -31,13 +31,19 @@ import ProbDistChart from "./prob-dist-chart";
 import UnifiedDashboard from "./unified-dashboard";
 import NeuralNetView from "./analyzer/neural-net-view";
 
+export type TradeRecommendation = {
+  subContract: "over" | "under" | "match" | "differs" | "even" | "odd";
+  digit?: number;
+  symbol?: string;
+};
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                           */
 /* ------------------------------------------------------------------ */
 
 type Tab = "dashboard" | "overview" | "digits" | "trades" | "even-odd" | "matches" | "neural";
 
-export default function MarketAnalyzerPanel() {
+export default function MarketAnalyzerPanel({ onUseRecommendation }: { onUseRecommendation?: (rec: TradeRecommendation) => void } = {}) {
   const analyzerRef = useRef<MarketAnalyzer | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedMarket, setSelectedMarket] = useState<string>("1HZ100V");
@@ -457,17 +463,17 @@ export default function MarketAnalyzerPanel() {
 
       {/* ===== TRADE SCORES TAB ===== */}
       {activeTab === "trades" && currentScore && (
-        <TradeScoresView score={currentScore} />
+        <TradeScoresView score={currentScore} onUseRecommendation={onUseRecommendation} />
       )}
 
       {/* ===== EVEN/ODD TAB ===== */}
       {activeTab === "even-odd" && currentScore && (
-        <EvenOddView score={currentScore.evenOddScore} symbol={currentScore.name} />
+        <EvenOddView score={currentScore.evenOddScore} symbol={currentScore.name} onUseRecommendation={onUseRecommendation} />
       )}
 
       {/* ===== MATCHES/DIFFERS TAB ===== */}
       {activeTab === "matches" && currentScore && (
-        <MatchesDiffersView score={currentScore.matchesDiffersScore} symbol={currentScore.name} />
+        <MatchesDiffersView score={currentScore.matchesDiffersScore} symbol={currentScore.name} onUseRecommendation={onUseRecommendation} />
       )}
 
       {/* ===== NEURAL NET TAB ===== */}
@@ -594,6 +600,20 @@ export default function MarketAnalyzerPanel() {
         @keyframes ws-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
         .ws-status-label { color: #718197; font-size: 10px; white-space: nowrap; }
         .ws-status-summary { margin-left: auto; color: #566477; font-size: 10px; font-weight: 600; }
+
+        .use-rec-btn {
+          padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600;
+          background: linear-gradient(135deg, #37d4bd, #2ab8a3); color: #0b1420;
+          border: none; cursor: pointer; transition: all 0.15s;
+          white-space: nowrap;
+        }
+        .use-rec-btn:hover { box-shadow: 0 2px 12px rgba(55,212,189,.35); transform: translateY(-1px); }
+        .use-rec-btn-sm {
+          padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;
+          background: rgba(55,212,189,.12); color: #37d4bd;
+          border: 1px solid rgba(55,212,189,.3); cursor: pointer; transition: all 0.15s;
+        }
+        .use-rec-btn-sm:hover { background: rgba(55,212,189,.25); }
 
         .analyzer-empty {
           display: flex; flex-direction: column; align-items: center;
@@ -803,7 +823,7 @@ function DigitAnalysisView({ score }: { score: MarketScore }) {
 /*  Trade Scores View                                                   */
 /* ------------------------------------------------------------------ */
 
-function TradeScoresView({ score }: { score: MarketScore }) {
+function TradeScoresView({ score, onUseRecommendation }: { score: MarketScore; onUseRecommendation?: (rec: TradeRecommendation) => void }) {
   return (
     <div className="trade-scores">
       <h3>Trade Recommendations — {score.name}</h3>
@@ -817,6 +837,11 @@ function TradeScoresView({ score }: { score: MarketScore }) {
               {score.bestTrade.direction.toUpperCase()} {score.bestTrade.digit} — Score: {score.bestTrade.score}/100
             </span>
           </div>
+          {onUseRecommendation && score.bestTrade && (
+            <button className="use-rec-btn" onClick={() => onUseRecommendation({ subContract: score.bestTrade!.direction === "under" ? "under" : "over", digit: score.bestTrade!.digit, symbol: score.symbol })}>
+              Use this →
+            </button>
+          )}
           {score.bestTrade.neuralContribution !== 0 && (
             <div className="best-trade-neural">
               <span className="neural-badge">🧠 {score.bestTrade.neuralContribution > 0 ? "+" : ""}{score.bestTrade.neuralContribution}</span>
@@ -844,6 +869,9 @@ function TradeScoresView({ score }: { score: MarketScore }) {
                   <span className="trade-raw-score" title="Statistical score before neural blend">
                     ({d.rawScore})
                   </span>
+                )}
+                {onUseRecommendation && d.score >= 40 && (
+                  <button className="use-rec-btn-sm" onClick={() => onUseRecommendation({ subContract: d.direction === "under" ? "under" : "over", digit: d.digit, symbol: score.symbol })}>→</button>
                 )}
                 {d.neuralContribution !== 0 && (
                   <span className={`trade-neural-badge ${d.neuralAgreement ? "agree" : "disagree"}`} title={`Neural model ${d.neuralAgreement ? "agrees" : "disagrees"}`}>
@@ -934,7 +962,7 @@ function TradeScoresView({ score }: { score: MarketScore }) {
 /*  Even/Odd View                                                       */
 /* ------------------------------------------------------------------ */
 
-function EvenOddView({ score, symbol }: { score: EvenOddScore; symbol: string }) {
+function EvenOddView({ score, symbol, onUseRecommendation }: { score: EvenOddScore; symbol: string; onUseRecommendation?: (rec: TradeRecommendation) => void }) {
   return (
     <div className="even-odd-view">
       <h3>Even/Odd Analysis — {symbol}</h3>
@@ -951,6 +979,9 @@ function EvenOddView({ score, symbol }: { score: EvenOddScore; symbol: string })
           </div>
           {score.bestDirection === "even" && (
             <span className="eo-recommendation">RECOMMENDED</span>
+          )}
+          {onUseRecommendation && score.bestDirection === "even" && (
+            <button className="use-rec-btn" style={{ marginTop: 4 }} onClick={() => onUseRecommendation({ subContract: "even", symbol })}>Use this →</button>
           )}
         </div>
 
@@ -1028,7 +1059,7 @@ function EvenOddView({ score, symbol }: { score: EvenOddScore; symbol: string })
 /*  Matches/Differs View                                                */
 /* ------------------------------------------------------------------ */
 
-function MatchesDiffersView({ score, symbol }: { score: MatchesDiffersScore; symbol: string }) {
+function MatchesDiffersView({ score, symbol, onUseRecommendation }: { score: MatchesDiffersScore; symbol: string; onUseRecommendation?: (rec: TradeRecommendation) => void }) {
   return (
     <div className="md-view">
       <h3>Matches/Differs Analysis — {symbol}</h3>
@@ -1040,6 +1071,9 @@ function MatchesDiffersView({ score, symbol }: { score: MatchesDiffersScore; sym
           <div className="md-desc">Bet that next digit ≠ {score.bestDigit}</div>
           {score.differScore > score.matchScore && (
             <span className="md-rec">RECOMMENDED</span>
+          )}
+          {onUseRecommendation && score.differScore > score.matchScore && (
+            <button className="use-rec-btn" style={{ marginTop: 4 }} onClick={() => onUseRecommendation({ subContract: "differs", digit: score.bestDigit, symbol })}>Use this →</button>
           )}
         </div>
 
