@@ -174,7 +174,14 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
   const [riskSettings, setRiskSettings] = useState<RiskSettings>(defaultRiskSettings);
   const [riskState, setRiskState] = useState<RiskState>(createInitialRiskState);
   const [resolvedDigit, setResolvedDigit] = useState<number | null>(null);
-  
+  const [contractTickElapsed, setContractTickElapsed] = useState(0);
+  const [indicatorDuration, setIndicatorDuration] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("freebuff_indicatorDuration");
+      return saved ? Number(saved) : 3;
+    }
+    return 3;
+  });
 
   const tickStreamWs = useRef<WebSocket | null>(null);
   const proposeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -534,6 +541,14 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     return () => window.clearInterval(timer);
   }, [running, streamMode]);
 
+  /* ---- reset tick counter when trade starts ---- */
+  useEffect(() => {
+    if (activeContract && activeContract.status === "open") {
+      contractTickElapsedRef.current = 0;
+      setContractTickElapsed(0);
+    }
+  }, [activeContract?.contract_id]);
+
   /* ---- feed bot contract ticks into the chart ---- */
   const lastContractTickRef = useRef<number | null>(null);
   const contractTickElapsedRef = useRef(0);
@@ -597,9 +612,9 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     if (lastTick) {
       setResolvedDigit(lastTick.digit);
     }
-    const timer = setTimeout(() => setResolvedDigit(null), 3000);
+    const timer = setTimeout(() => setResolvedDigit(null), indicatorDuration * 1000);
     return () => clearTimeout(timer);
-  }, [lastResult, ticks]);
+  }, [lastResult, ticks, indicatorDuration]);
 
   /* ---- daily risk reset ---- */
   useEffect(() => {
@@ -1078,7 +1093,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                       <div className="chart-skeleton-shimmer" />
                     </div>
                   )}
-                  <TickChart ticks={ticks} activeContract={activeContract} />
+                  <TickChart ticks={ticks} activeContract={activeContract} displayDuration={indicatorDuration * 1000} />
                 </div>
                 <div className="digit-strip-heading">
                   <span>Digit frequency</span>
@@ -1105,7 +1120,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                         <div className="chart-skeleton-shimmer" />
                       </div>
                     )}
-                    <TickChart ticks={ticks} activeContract={activeContract} />
+                    <TickChart ticks={ticks} activeContract={activeContract} displayDuration={indicatorDuration * 1000} />
                   </div>
                   {/* Slide 2: Digit strip */}
                   <div className="digit-strip-slide">
@@ -1398,6 +1413,29 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                   <button className="settings-btn" onClick={() => void login()}><IconLogin size={14} /> Login with Deriv</button>
                 </div>
               )}
+            </div>
+            <div className="settings-section">
+              <h3>Display</h3>
+              <div className="field-group">
+                <label>Trade resolution indicator duration</label>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <input
+                    type="range"
+                    min={1}
+                    max={10}
+                    step={0.5}
+                    value={indicatorDuration}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setIndicatorDuration(val);
+                      localStorage.setItem("freebuff_indicatorDuration", String(val));
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontFamily: "Space Grotesk", fontWeight: 600, minWidth: 40, textAlign: "right" }}>{indicatorDuration}s</span>
+                </div>
+                <p className="muted" style={{ marginTop: 6, fontSize: 11 }}>How long the WIN/LOSS marker and resolved digit highlight stay visible on the chart after a trade settles.</p>
+              </div>
             </div>
           </div>
         </section>

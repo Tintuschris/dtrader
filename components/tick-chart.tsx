@@ -39,7 +39,7 @@ type ResolvedContract = {
 type Props = {
   ticks: Tick[];
   activeContract?: ActiveContract | null;
-
+  displayDuration?: number;
 };
 
 function digitFromPrice(price: number, pipSize = 2) {
@@ -64,12 +64,13 @@ function findTickIndex(ticks: Tick[], targetPrice: number): number {
  * TradingView Lightweight Charts v5 tick chart.
  * Area chart with crosshair, current price line, and active contract markers.
  */
-export default function TickChart({ ticks, activeContract }: Props) {
+export default function TickChart({ ticks, activeContract, displayDuration = 3000 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const markersPrimitiveRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const markersTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const priceLineRef = useRef<any>(null);
 
   // Persisted resolved contract snapshot so markers survive after activeContract is nulled.
   const resolvedRef = useRef<ResolvedContract | null>(null);
@@ -142,6 +143,7 @@ export default function TickChart({ ticks, activeContract }: Props) {
       chartRef.current = null;
       seriesRef.current = null;
       markersPrimitiveRef.current = null;
+      priceLineRef.current = null;
     };
   }, []);
 
@@ -175,6 +177,13 @@ export default function TickChart({ ticks, activeContract }: Props) {
   }, [activeContract]);
 
   // ---- build markers from contract data ----
+  const removePriceLine = () => {
+    if (priceLineRef.current && seriesRef.current) {
+      try { seriesRef.current.removePriceLine(priceLineRef.current); } catch { /* ignore */ }
+      priceLineRef.current = null;
+    }
+  };
+
   const buildMarkers = useCallback(
     (contract: { entry_tick?: number; exit_tick?: number; tick_count?: number; status: string; barrier?: string }, tickData: Tick[]) => {
       const latestIndex = tickData.length;
@@ -244,13 +253,27 @@ export default function TickChart({ ticks, activeContract }: Props) {
       if (markersPrimitiveRef.current) markersPrimitiveRef.current.detach();
       markersPrimitiveRef.current = createSeriesMarkers(series, markers);
 
+      // Create a horizontal barrier line at the exit tick price level
+      removePriceLine();
+      const exitPrice = activeContract!.exit_tick!;
+      const isWin = activeContract!.status === "won";
+      priceLineRef.current = series.createPriceLine({
+        price: exitPrice,
+        color: isWin ? "#22c55e" : "#ef4444",
+        lineWidth: 2,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: (isWin ? "WIN" : "LOSS") + " • " + digitFromPrice(exitPrice),
+      });
+
       markersTimerRef.current = setTimeout(() => {
         if (markersPrimitiveRef.current) {
           markersPrimitiveRef.current.detach();
           markersPrimitiveRef.current = null;
         }
+        removePriceLine();
         resolvedRef.current = null;
-      }, 3000);
+      }, displayDuration);
     } else if (resolved) {
       if (!markersPrimitiveRef.current) {
         const markers = buildMarkers(resolved, ticks);
@@ -261,8 +284,9 @@ export default function TickChart({ ticks, activeContract }: Props) {
             markersPrimitiveRef.current.detach();
             markersPrimitiveRef.current = null;
           }
+          removePriceLine();
           resolvedRef.current = null;
-        }, 2500);
+        }, displayDuration);
       }
     } else if (activeContract && activeContract.status === "open") {
       const latestIndex = ticks.length;
@@ -300,6 +324,7 @@ export default function TickChart({ ticks, activeContract }: Props) {
         markersPrimitiveRef.current.detach();
         markersPrimitiveRef.current = null;
       }
+      removePriceLine();
     }
   }, [activeContract, ticks, ticks.length, buildMarkers]);
 
