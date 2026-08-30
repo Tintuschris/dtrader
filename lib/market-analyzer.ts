@@ -147,6 +147,13 @@ export type Tick = {
   epoch: number;
 };
 
+export type WsStatus = {
+  status: "connecting" | "connected" | "reconnecting" | "failed" | "closed";
+  reconnectAttempt?: number;
+  tickCount?: number;
+  lastTickAt?: number;
+};
+
 import { DigitPredictor, getDigitPredictor, type ModelStatus, type TrainingMetrics, type OnlineLearningMetrics, type BacktestResult, type BacktestProgress } from "./digit-model";
 export { type ModelStatus, type TrainingMetrics, type OnlineLearningMetrics, type BacktestResult, type BacktestProgress };
 export { DigitPredictor, getDigitPredictor } from "./digit-model";
@@ -213,6 +220,8 @@ export class MarketAnalyzer {
   // One model must learn one market at a time. Mixing digit sequences from
   // unrelated symbols manufactures transitions that never happened.
   private learningSymbol: string | null = null;
+  private wsStatusMap: Map<string, WsStatus> = new Map();
+  private wsStatusCallbacks: Set<(statuses: Map<string, WsStatus>) => void> = new Set();
 
   constructor() {
     this.weights = loadWeights();
@@ -299,6 +308,11 @@ export class MarketAnalyzer {
       ws.close();
     }
     this.wsConnections.clear();
+    // Mark all tracked statuses as closed
+    for (const [sym] of this.wsStatusMap) {
+      this.wsStatusMap.set(sym, { status: "closed" });
+    }
+    this.emitWsStatus();
     if (this.analysisTimer) {
       clearInterval(this.analysisTimer);
       this.analysisTimer = null;
@@ -324,11 +338,15 @@ export class MarketAnalyzer {
       this.wsReconnectTimers.delete(symbol);
     }
 
+    const attempt = this.wsReconnectAttempts.get(symbol) ?? 0;
+    this.setWsStatus(symbol, { status: attempt > 0 ? "reconnecting" : "connecting", reconnectAttempt: attempt });
+
     const ws = new WebSocket("wss://api.derivws.com/trading/v1/options/ws/public");
 
     ws.onopen = () => {
       // Reset reconnect attempts on successful connection
       this.wsReconnectAttempts.delete(symbol);
+      this.setWsStatus(symbol, { status: "connected", tickCount: this.wsStatusMap.get(symbol)?.tickCount ?? 0, lastTickAt: this.wsStatusMap.get(symbol)?.lastTickAt });
       ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
     };
 
@@ -336,10 +354,12 @@ export class MarketAnalyzer {
       try {
         const msg = JSON.parse(event.data);
         if (msg.tick) {
+          const prev = this.wsStatusMap.get(symbol);
           this.addTick(symbol, {
             quote: Number(msg.tick.quote),
             epoch: msg.tick.epoch,
           });
+          this.setWsStatus(symbol, { status: "connected", tickCount: (prev?.tickCount ?? 0) + 1, lastTickAt: Date.now() });
           this.notifyUpdate();
         }
       } catch { /* ignore parse errors */ }
@@ -351,15 +371,18 @@ export class MarketAnalyzer {
 
     ws.onclose = () => {
       this.wsConnections.delete(symbol);
-      const attempt = this.wsReconnectAttempts.get(symbol) ?? 0;
-      if (attempt < MarketAnalyzer.WS_MAX_RECONNECT) {
-        this.wsReconnectAttempts.set(symbol, attempt + 1);
-        const delay = MarketAnalyzer.jitteredDelay(attempt);
+      const closeAttempt = this.wsReconnectAttempts.get(symbol) ?? 0;
+      if (closeAttempt < MarketAnalyzer.WS_MAX_RECONNECT) {
+        this.wsReconnectAttempts.set(symbol, closeAttempt + 1);
+        const delay = MarketAnalyzer.jitteredDelay(closeAttempt);
+        this.setWsStatus(symbol, { status: "reconnecting", reconnectAttempt: closeAttempt + 1, tickCount: this.wsStatusMap.get(symbol)?.tickCount ?? 0 });
         const timer = setTimeout(() => {
           this.wsReconnectTimers.delete(symbol);
           this.connectSymbol(symbol);
         }, delay);
         this.wsReconnectTimers.set(symbol, timer);
+      } else {
+        this.setWsStatus(symbol, { status: "failed", reconnectAttempt: closeAttempt, tickCount: this.wsStatusMap.get(symbol)?.tickCount ?? 0 });
       }
     };
 
@@ -368,6 +391,25 @@ export class MarketAnalyzer {
 
   private notifyUpdate(): void {
     for (const cb of this.updateCallbacks) cb();
+  }
+
+  private setWsStatus(symbol: string, status: WsStatus): void {
+    this.wsStatusMap.set(symbol, status);
+    this.emitWsStatus();
+  }
+
+  private emitWsStatus(): void {
+    const snapshot = new Map(this.wsStatusMap);
+    for (const cb of this.wsStatusCallbacks) cb(snapshot);
+  }
+
+  getWsStatuses(): Map<string, WsStatus> {
+    return new Map(this.wsStatusMap);
+  }
+
+  onWsStatusChange(cb: (statuses: Map<string, WsStatus>) => void): () => void {
+    this.wsStatusCallbacks.add(cb);
+    return () => this.wsStatusCallbacks.delete(cb);
   }
 
   onUpdate(cb: () => void): () => void {

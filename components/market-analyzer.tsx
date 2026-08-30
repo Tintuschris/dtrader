@@ -21,6 +21,7 @@ import {
   type OnlineLearningMetrics,
   type BacktestResult,
   type BacktestProgress,
+  type WsStatus,
 } from "../lib/market-analyzer";
 import type { DigitPredictor as DigitPredictorType, EpochProgress, PredictionRecord, ProbSnapshot } from "../lib/digit-model";
 import { getAutoTradeEngine, type AutoTradeState } from "../lib/auto-trade";
@@ -68,6 +69,7 @@ export default function MarketAnalyzerPanel() {
   const [gradNormHistory, setGradNormHistory] = useState<{ timestamp: number; gradNorm: number; loss: number; lr: number }[]>([]);
   const [predictionHistory, setPredictionHistory] = useState<import("../lib/digit-model").PredictionRecord[]>([]);
   const [probHistory, setProbHistory] = useState<ProbSnapshot[]>([]);
+  const [wsStatuses, setWsStatuses] = useState<Map<string, WsStatus>>(new Map());
 
   // Initialize analyzer
   useEffect(() => {
@@ -82,6 +84,7 @@ export default function MarketAnalyzerPanel() {
     const unsubGradNorm = predictor.onGradNormHistory((h) => setGradNormHistory(h));
     const unsubPredHistory = predictor.onPredictionHistory((h) => setPredictionHistory(h));
     const unsubProbHistory = predictor.onProbHistory((h) => setProbHistory(h));
+    const unsubWsStatus = analyzer.onWsStatusChange((s) => setWsStatuses(s));
 
     const unsub = analyzer.onUpdate(() => {
       // Re-score all active markets periodically
@@ -109,6 +112,7 @@ export default function MarketAnalyzerPanel() {
       unsubGradNorm();
       unsubPredHistory();
       unsubProbHistory();
+      unsubWsStatus();
       // Keep the shared model and its current-symbol observations alive when
       // the user navigates away; only stop the panel's extra market streams.
       analyzer.stopStreaming();
@@ -312,6 +316,28 @@ export default function MarketAnalyzerPanel() {
           <span className="accuracy-sub">{onlineMetrics.rollingTotal > 0 ? `${(onlineMetrics.rollingAccuracy * 100).toFixed(1)}% (${onlineMetrics.rollingCorrect}/${onlineMetrics.rollingTotal})` : `${bufferSize.toLocaleString()} samples | ${modelMetrics.epoch} epochs`}</span>
         </div>
       </div>
+
+      {/* WS Connection Status */}
+      {isStreaming && wsStatuses.size > 0 && (
+        <div className="ws-status-bar">
+          {ALL_MARKETS.filter(m => m.category === "volatility").map(m => {
+            const st = wsStatuses.get(m.symbol);
+            const status = st?.status ?? "closed";
+            const dotClass = status === "connected" ? "ws-dot-green" : status === "reconnecting" ? "ws-dot-yellow" : status === "connecting" ? "ws-dot-blue" : "ws-dot-red";
+            return (
+              <div key={m.symbol} className="ws-status-item" title={m.name + ": " + status + (st?.tickCount ? " (" + st.tickCount + " ticks)" : "")}>
+                <span className={"ws-dot " + dotClass} />
+                <span className="ws-status-label">{m.name.replace("Volatility ", "V").replace(" (1s)", "s")}</span>
+              </div>
+            );
+          })}
+          <div className="ws-status-summary">
+            {wsStatuses.size > 0 && (
+              <>{Array.from(wsStatuses.values()).filter(s => s.status === "connected").length}/{wsStatuses.size} live</>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="analyzer-tabs">
@@ -550,6 +576,24 @@ export default function MarketAnalyzerPanel() {
         .analyzer-market-score strong { color: var(--text, #d9e3ed); }
         .analyzer-market-score strong.good { color: #37d4bd; }
         .analyzer-market-score strong.bad { color: #e05555; }
+
+        .ws-status-bar {
+          display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+          background: #0c141f; border: 1px solid var(--border, #2a3444);
+          border-radius: 8px; flex-wrap: wrap; font-size: 11px;
+        }
+        .ws-status-item {
+          display: flex; align-items: center; gap: 4px; padding: 2px 6px;
+          background: rgba(255,255,255,.03); border-radius: 4px;
+        }
+        .ws-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+        .ws-dot-green { background: #37d4bd; box-shadow: 0 0 4px rgba(55,212,189,.5); }
+        .ws-dot-yellow { background: #f0c040; animation: ws-blink 1s ease-in-out infinite; }
+        .ws-dot-blue { background: #3ca8e0; animation: ws-blink 0.6s ease-in-out infinite; }
+        .ws-dot-red { background: #e05555; opacity: 0.6; }
+        @keyframes ws-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .ws-status-label { color: #718197; font-size: 10px; white-space: nowrap; }
+        .ws-status-summary { margin-left: auto; color: #566477; font-size: 10px; font-weight: 600; }
 
         .analyzer-empty {
           display: flex; flex-direction: column; align-items: center;
