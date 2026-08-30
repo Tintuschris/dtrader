@@ -173,6 +173,8 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
   const [showNotificationCenter, setShowNotificationCenter] = useState(false);
   const [riskSettings, setRiskSettings] = useState<RiskSettings>(defaultRiskSettings);
   const [riskState, setRiskState] = useState<RiskState>(createInitialRiskState);
+  const [resolvedDigit, setResolvedDigit] = useState<number | null>(null);
+  
 
   const tickStreamWs = useRef<WebSocket | null>(null);
   const proposeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -534,6 +536,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
 
   /* ---- feed bot contract ticks into the chart ---- */
   const lastContractTickRef = useRef<number | null>(null);
+  const contractTickElapsedRef = useRef(0);
   useEffect(() => {
     const tick = activeContract?.current_tick;
     if (!tick || tick === lastContractTickRef.current) return;
@@ -586,6 +589,17 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     queryClient.invalidateQueries({ queryKey: ["deriv", "wallets"] });
     queryClient.invalidateQueries({ queryKey: ["deriv", "platformAccounts"] });
   }, [lastResult, riskSettings, queryClient]);
+
+  /* ---- resolved digit indicator on digit strip ---- */
+  useEffect(() => {
+    if (!lastResult) return;
+    const lastTick = ticks.at(-1);
+    if (lastTick) {
+      setResolvedDigit(lastTick.digit);
+    }
+    const timer = setTimeout(() => setResolvedDigit(null), 3000);
+    return () => clearTimeout(timer);
+  }, [lastResult, ticks]);
 
   /* ---- daily risk reset ---- */
   useEffect(() => {
@@ -1072,7 +1086,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                 </div>
                 <div className="digit-strip">
                   {percentages.map((pct, digit) => (
-                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""}`} onClick={() => setSelectedDigit(digit)}>
+                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? "resolved" : ""}`} onClick={() => setSelectedDigit(digit)}>
                       <strong>{digit}</strong>
                       <span>{pct}%</span>
                     </button>
@@ -1101,7 +1115,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                     </div>
                     <div className="digit-strip">
                       {percentages.map((pct, digit) => (
-                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""}`} onClick={() => setSelectedDigit(digit)}>
+                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? "resolved" : ""}`} onClick={() => setSelectedDigit(digit)}>
                           <strong>{digit}</strong>
                           <span>{pct}%</span>
                         </button>

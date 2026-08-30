@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import {
   createChart,
   createSeriesMarkers,
@@ -27,10 +27,38 @@ type ActiveContract = {
   tick_count?: number;
 };
 
+/** Snapshot of a settled contract kept alive for marker display. */
+type ResolvedContract = {
+  entry_tick: number | undefined;
+  exit_tick: number;
+  tick_count: number | undefined;
+  status: "won" | "lost";
+  barrier: string | undefined;
+};
+
 type Props = {
   ticks: Tick[];
   activeContract?: ActiveContract | null;
+
 };
+
+function digitFromPrice(price: number, pipSize = 2) {
+  return Number(price.toFixed(pipSize).replace(".", "").slice(-1));
+}
+
+/** Find the tick array index closest to a target price value. */
+function findTickIndex(ticks: Tick[], targetPrice: number): number {
+  let best = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < ticks.length; i++) {
+    const dist = Math.abs(ticks[i].value - targetPrice);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = i;
+    }
+  }
+  return best;
+}
 
 /**
  * TradingView Lightweight Charts v5 tick chart.
@@ -42,6 +70,9 @@ export default function TickChart({ ticks, activeContract }: Props) {
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const markersPrimitiveRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const markersTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Persisted resolved contract snapshot so markers survive after activeContract is nulled.
+  const resolvedRef = useRef<ResolvedContract | null>(null);
 
   // ---- create chart once ----
   useEffect(() => {
@@ -128,6 +159,71 @@ export default function TickChart({ ticks, activeContract }: Props) {
     chartRef.current?.timeScale().scrollToRealTime();
   }, [ticks]);
 
+  // ---- snapshot resolved contract when activeContract transitions from settled -> null ----
+  useEffect(() => {
+    if (activeContract && activeContract.exit_tick != null && (activeContract.status === "won" || activeContract.status === "lost")) {
+      resolvedRef.current = {
+        entry_tick: activeContract.entry_tick,
+        exit_tick: activeContract.exit_tick,
+        tick_count: activeContract.tick_count,
+        status: activeContract.status as "won" | "lost",
+        barrier: activeContract.barrier,
+      };
+    } else if (activeContract && activeContract.status === "open") {
+      resolvedRef.current = null;
+    }
+  }, [activeContract]);
+
+  // ---- build markers from contract data ----
+  const buildMarkers = useCallback(
+    (contract: { entry_tick?: number; exit_tick?: number; tick_count?: number; status: string; barrier?: string }, tickData: Tick[]) => {
+      const latestIndex = tickData.length;
+      const markers: Array<{
+        time: Time;
+        position: "aboveBar" | "belowBar";
+        color: string;
+        shape: "circle" | "arrowUp" | "arrowDown";
+        text: string;
+        size?: number;
+      }> = [];
+
+      if (contract.exit_tick == null) return [];
+      const exitDigit = digitFromPrice(contract.exit_tick);
+      const isWin = contract.status === "won";
+      const exitIndex = findTickIndex(tickData, contract.exit_tick);
+      const exitTime = exitIndex >= 0 ? (exitIndex + 1) : latestIndex;
+
+      markers.push({
+        time: exitTime as Time,
+        position: "aboveBar",
+        color: isWin ? "#22c55e" : "#ef4444",
+        shape: "circle",
+        text: (isWin ? "WIN" : "LOSS") + " • " + exitDigit,
+        size: 2,
+      });
+
+      if (contract.entry_tick != null) {
+        const tickCount = contract.tick_count ?? 5;
+        const entryIndex = findTickIndex(tickData, contract.entry_tick);
+        const entryTime = entryIndex >= 0
+          ? entryIndex + 1
+          : Math.max(1, exitTime - tickCount);
+
+        markers.push({
+          time: entryTime as Time,
+          position: "belowBar",
+          color: "#f0c040",
+          shape: "circle",
+          text: "ENTRY",
+          size: 1,
+        });
+      }
+
+      return markers;
+    },
+    [],
+  );
+
   // ---- active contract markers (entry / exit) ----
   useEffect(() => {
     const series = seriesRef.current;
@@ -139,66 +235,73 @@ export default function TickChart({ ticks, activeContract }: Props) {
       markersTimerRef.current = null;
     }
 
-    if (!activeContract) {
-      // Clear markers by detaching
+    const hasLiveExit = activeContract && activeContract.exit_tick != null &&
+      (activeContract.status === "won" || activeContract.status === "lost");
+    const resolved = resolvedRef.current;
+
+    if (hasLiveExit) {
+      const markers = buildMarkers(activeContract!, ticks);
+      if (markersPrimitiveRef.current) markersPrimitiveRef.current.detach();
+      markersPrimitiveRef.current = createSeriesMarkers(series, markers);
+
+      markersTimerRef.current = setTimeout(() => {
+        if (markersPrimitiveRef.current) {
+          markersPrimitiveRef.current.detach();
+          markersPrimitiveRef.current = null;
+        }
+        resolvedRef.current = null;
+      }, 3000);
+    } else if (resolved) {
+      if (!markersPrimitiveRef.current) {
+        const markers = buildMarkers(resolved, ticks);
+        markersPrimitiveRef.current = createSeriesMarkers(series, markers);
+
+        markersTimerRef.current = setTimeout(() => {
+          if (markersPrimitiveRef.current) {
+            markersPrimitiveRef.current.detach();
+            markersPrimitiveRef.current = null;
+          }
+          resolvedRef.current = null;
+        }, 2500);
+      }
+    } else if (activeContract && activeContract.status === "open") {
+      const latestIndex = ticks.length;
+      const markers: Array<{
+        time: Time;
+        position: "aboveBar" | "belowBar";
+        color: string;
+        shape: "circle" | "arrowUp" | "arrowDown";
+        text: string;
+        size?: number;
+      }> = [];
+
+      if (activeContract.entry_tick != null) {
+        const entryIndex = findTickIndex(ticks, activeContract.entry_tick);
+        const entryTime = entryIndex >= 0
+          ? entryIndex + 1
+          : Math.max(1, latestIndex - (activeContract.tick_count ?? 5));
+
+        markers.push({
+          time: entryTime as Time,
+          position: "belowBar",
+          color: "#f0c040",
+          shape: "circle",
+          text: "ENTRY",
+          size: 1,
+        });
+      }
+
+      if (markers.length > 0) {
+        if (markersPrimitiveRef.current) markersPrimitiveRef.current.detach();
+        markersPrimitiveRef.current = createSeriesMarkers(series, markers);
+      }
+    } else {
       if (markersPrimitiveRef.current) {
         markersPrimitiveRef.current.detach();
         markersPrimitiveRef.current = null;
       }
-      return;
     }
-
-    const latestIndex = ticks.length;
-    const markers: Array<{
-      time: Time;
-      position: "aboveBar" | "belowBar";
-      color: string;
-      shape: "circle" | "arrowUp" | "arrowDown";
-      text: string;
-      size?: number;
-    }> = [];
-
-    // Entry tick marker
-    if (activeContract.entry_tick != null) {
-      markers.push({
-        time: Math.max(1, latestIndex - (activeContract.tick_count ?? 5)) as Time,
-        position: "aboveBar",
-        color: "#f0c040",
-        shape: "circle",
-        text: "ENTRY",
-        size: 1,
-      });
-    }
-
-    // Exit tick marker
-    if (activeContract.exit_tick != null) {
-      const isWin = activeContract.status === "won";
-      markers.push({
-        time: latestIndex as Time,
-        position: "aboveBar",
-        color: isWin ? "#22c55e" : "#ef4444",
-        shape: "circle",
-        text: `${isWin ? "WIN" : "LOSS"} ${Number(activeContract.exit_tick).toFixed(2)}`,
-        size: 2,
-      });
-    }
-
-    // Detach old markers if exists
-    if (markersPrimitiveRef.current) {
-      markersPrimitiveRef.current.detach();
-    }
-
-    // Create new markers (v5 API)
-    markersPrimitiveRef.current = createSeriesMarkers(series, markers);
-
-    // Clear markers after animation
-    markersTimerRef.current = setTimeout(() => {
-      if (markersPrimitiveRef.current) {
-        markersPrimitiveRef.current.detach();
-        markersPrimitiveRef.current = null;
-      }
-    }, 3000);
-  }, [activeContract, ticks.length]);
+  }, [activeContract, ticks, ticks.length, buildMarkers]);
 
   return (
     <div
