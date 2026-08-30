@@ -40,6 +40,8 @@ type Props = {
   ticks: Tick[];
   activeContract?: ActiveContract | null;
   displayDuration?: number;
+  tickElapsed?: number;
+  tickTotal?: number;
 };
 
 function digitFromPrice(price: number, pipSize = 2) {
@@ -64,7 +66,7 @@ function findTickIndex(ticks: Tick[], targetPrice: number): number {
  * TradingView Lightweight Charts v5 tick chart.
  * Area chart with crosshair, current price line, and active contract markers.
  */
-export default function TickChart({ ticks, activeContract, displayDuration = 3000 }: Props) {
+export default function TickChart({ ticks, activeContract, displayDuration = 3000, tickElapsed = 0, tickTotal }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
@@ -176,7 +178,6 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
     }
   }, [activeContract]);
 
-  // ---- build markers from contract data ----
   const removePriceLine = () => {
     if (priceLineRef.current && seriesRef.current) {
       try { seriesRef.current.removePriceLine(priceLineRef.current); } catch { /* ignore */ }
@@ -184,6 +185,7 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
     }
   };
 
+  // ---- build markers from contract data ----
   const buildMarkers = useCallback(
     (contract: { entry_tick?: number; exit_tick?: number; tick_count?: number; status: string; barrier?: string }, tickData: Tick[]) => {
       const latestIndex = tickData.length;
@@ -207,7 +209,7 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
         position: "aboveBar",
         color: isWin ? "#22c55e" : "#ef4444",
         shape: "circle",
-        text: (isWin ? "WIN" : "LOSS") + " • " + exitDigit,
+        text: (isWin ? "WIN" : "LOSS") + " \u2022 " + exitDigit,
         size: 2,
       });
 
@@ -263,7 +265,7 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
         lineWidth: 2,
         lineStyle: 2,
         axisLabelVisible: true,
-        title: (isWin ? "WIN" : "LOSS") + " • " + digitFromPrice(exitPrice),
+        title: (isWin ? "WIN" : "LOSS") + " \u2022 " + digitFromPrice(exitPrice),
       });
 
       markersTimerRef.current = setTimeout(() => {
@@ -326,12 +328,32 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
       }
       removePriceLine();
     }
-  }, [activeContract, ticks, ticks.length, buildMarkers]);
+  }, [activeContract, ticks, ticks.length, buildMarkers, displayDuration]);
+
+  // Show countdown during active trade
+  const showCountdown = activeContract && activeContract.status === "open" && tickTotal && tickTotal > 0;
+  const remaining = showCountdown ? Math.max(0, tickTotal - tickElapsed) : 0;
 
   return (
     <div
       ref={containerRef}
       style={{ width: "100%", height: "100%", position: "absolute", inset: 0 }}
-    />
+    >
+      {showCountdown && (
+        <div style={{
+          position: "absolute", top: 12, right: 12, zIndex: 10,
+          background: "rgba(10,16,26,0.85)",
+          border: "1px solid rgba(157,179,203,0.15)",
+          borderRadius: 8, padding: "6px 12px",
+          display: "flex", alignItems: "center", gap: 8,
+          fontFamily: "Space Grotesk, monospace", fontSize: 13,
+          backdropFilter: "blur(6px)",
+        }}>
+          <span style={{ color: "#617085", fontSize: 10, letterSpacing: ".1em" }}>TICKS LEFT</span>
+          <span style={{ color: remaining <= 2 ? "#f0c040" : "#dce6f0", fontWeight: 600, fontSize: 16, fontVariantNumeric: "tabular-nums", transition: "color .2s" }}>{remaining}</span>
+          <span style={{ color: "#617085", fontSize: 11 }}>/ {tickTotal}</span>
+        </div>
+      )}
+    </div>
   );
 }

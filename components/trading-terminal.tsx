@@ -1093,7 +1093,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                       <div className="chart-skeleton-shimmer" />
                     </div>
                   )}
-                  <TickChart ticks={ticks} activeContract={activeContract} displayDuration={indicatorDuration * 1000} />
+                  <TickChart ticks={ticks} activeContract={activeContract} displayDuration={indicatorDuration * 1000} tickElapsed={contractTickElapsed} tickTotal={activeContract?.tick_count} />
                 </div>
                 <div className="digit-strip-heading">
                   <span>Digit frequency</span>
@@ -1120,7 +1120,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                         <div className="chart-skeleton-shimmer" />
                       </div>
                     )}
-                    <TickChart ticks={ticks} activeContract={activeContract} displayDuration={indicatorDuration * 1000} />
+                    <TickChart ticks={ticks} activeContract={activeContract} displayDuration={indicatorDuration * 1000} tickElapsed={contractTickElapsed} tickTotal={activeContract?.tick_count} />
                   </div>
                   {/* Slide 2: Digit strip */}
                   <div className="digit-strip-slide">
