@@ -13,18 +13,40 @@ from collections import deque
 import aiohttp
 import websockets
 
+import argparse
+
+
+parser = argparse.ArgumentParser(description="Deriv STOCHRSI L-Shape Bot")
+parser.add_argument("-s", "--symbol", default=os.environ.get("SYMBOL", "R_25"),
+                    help="Deriv symbol (default: R_25)")
+parser.add_argument("--stake", type=float, default=float(os.environ.get("STAKE", "1")),
+                    help="Stake amount in USD (default: 1)")
+parser.add_argument("--duration", type=int, default=int(os.environ.get("DURATION", "5")),
+                    help="Contract duration in ticks (default: 5)")
+parser.add_argument("--barrier-higher", default=os.environ.get("BARRIER_HIGHER", "-0.23"),
+                    help="Barrier for HIGHER contract (default: -0.23)")
+parser.add_argument("--barrier-lower", default=os.environ.get("BARRIER_LOWER", "+0.23"),
+                    help="Barrier for LOWER contract (default: +0.23)")
+parser.add_argument("--account", default=os.environ.get("ACCOUNT_TYPE", "demo"),
+                    choices=["demo", "real"],
+                    help="Account type (default: demo)")
+parser.add_argument("--dry-run", action="store_true",
+                    help="Detect signals but do not place trades")
+args = parser.parse_args()
+
+
 # ============ CONFIG ============
 BRIDGE_URL = os.environ.get("DTRADER_BRIDGE_URL", "http://localhost:3000")
 USE_BRIDGE = os.environ.get("USE_BRIDGE", "1") == "1"
 PAT_TOKEN = os.environ.get("PAT_TOKEN", "")
 APP_ID = os.environ.get("DERIV_APP_ID", "")
 ACCOUNT_TYPE = os.environ.get("ACCOUNT_TYPE", "demo")
-SYMBOL = "R_25"
-STAKE = 1
+SYMBOL = args.symbol
+STAKE = args.stake
 CURRENCY = "USD"
-BARRIER_HIGHER = "-0.23"
-BARRIER_LOWER = "+0.23"
-DURATION = 5
+BARRIER_HIGHER = args.barrier_higher
+BARRIER_LOWER = args.barrier_lower
+DURATION = args.duration
 DURATION_UNIT = "t"
 RSI_PERIOD = 14
 STOCH_PERIOD = 14
@@ -49,6 +71,7 @@ RAW_SLOPE_MAX = 0.15
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_BASE_DELAY = 2
 PING_INTERVAL = 30
+DRY_RUN = args.dry_run
 REST_BASE_URL = "https://api.derivws.com"
 WS_URL = None
 
@@ -280,6 +303,8 @@ def print_header():
     print(f"{CYN}|{RST}  Stake:     {GRN}${STAKE} {CURRENCY}{RST}                       Barrier:  {BLD}{BARRIER_HIGHER}/{BARRIER_LOWER}{RST}")
     print(f"{CYN}|{RST}  Mode:      {BLD}{'BRIDGE' if USE_BRIDGE else 'PAT'}{RST}")
     print(f"{CYN}|{RST}  Strategy:  {MAG}RAW StochRSI({RSI_PERIOD}) slanted L{RST}")
+    if DRY_RUN:
+        print(f"  {DIM}    *** DRY RUN MODE ***{RST}")
     print(f"{CYN}+{'='*56}+{RST}")
     print()
 
@@ -540,7 +565,10 @@ async def process_tick(ws, tick_data, last_trade_time):
         print_signal(direction, srsi_now, reason)
         barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
         active_contract = {"direction": direction, "entry_price": price}
-        await place_trade(ws, direction, barrier)
+        if DRY_RUN:
+            print(f"  {DIM}[DRY RUN] Would place {direction} trade with barrier {barrier}{RST}")
+        else:
+            await place_trade(ws, direction, barrier)
         return now
 
     return last_trade_time
