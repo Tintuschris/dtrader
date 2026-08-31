@@ -177,6 +177,7 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
       }
     };
 
+    chart.subscribeCrosshairMove(onCrosshair);
     return () => { chart.unsubscribeCrosshairMove(onCrosshair); };
   }, [resolvedTrades, ticks]);
 

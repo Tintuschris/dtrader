@@ -735,9 +735,10 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
 
   /* ---- place trade ---- */
   const [isBuying, setIsBuying] = useState(false);
+  const isBuyingRef = useRef(false);
   const handlePlaceTrade = useCallback(async () => {
-    if (isBuying) return;
-    const proposal = proposalRef.current ?? currentProposal;
+    if (isBuyingRef.current) return;
+    const proposal = proposalRef.current;
     if (!proposal) { setTradeError("No active proposal. Wait for pricing."); return; }
     const stakeNum = parseFloat(stake);
     if (isNaN(stakeNum) || stakeNum <= 0) { setTradeError("Enter a valid stake amount."); return; }
@@ -763,6 +764,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
       if (!confirmed) return;
     }
     setIsBuying(true);
+    isBuyingRef.current = true;
     setTradeError(null);
     // For 1-tick trades, provide immediate visual feedback
     if (duration === 1) {
@@ -777,8 +779,9 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
       setTradeError(`Trade failed: ${String(e)}`);
     } finally {
       setIsBuying(false);
+      isBuyingRef.current = false;
     }
-  }, [isBuying, currentProposal, stake, activeContract, buy, clearLastResult, balance, balanceCurrency]);
+  }, [stake, activeContract, buy, balance, balanceCurrency, riskSettings, riskState, duration]);
 
   /* ---- keyboard shortcuts ---- */
   useEffect(() => {

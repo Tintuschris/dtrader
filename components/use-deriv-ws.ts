@@ -121,6 +121,7 @@ export function useDerivTrading() {
   const proposalSubscriptionIdRef = useRef<string | null>(null);
   const proposalSeqRef = useRef(0);
   const proposeRef = useRef<(req: ProposalRequest) => Promise<Proposal | null>>(undefined);
+  const lastProposalParamsRef = useRef<ProposalRequest | null>(null);
 
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -216,6 +217,10 @@ export function useDerivTrading() {
           ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: String(nextReqId++) }));
           // Fetch all accounts linked to this login
           ws.send(JSON.stringify({ account_list: 1, req_id: String(nextReqId++) }));
+          // Re-subscribe to proposal if we had active params
+          if (lastProposalParamsRef.current) {
+            setTimeout(() => resubscribeProposal(), 200);
+          }
         };
 
         ws.onmessage = (event) => {
@@ -458,9 +463,28 @@ export function useDerivTrading() {
                 };
                 console.log("[WS] Trade settled:", finalStatus, "profit:", oc.profit, "payout:", oc.payout);
                 setLastResult(result);
-                // Clear proposal immediately so buy button state updates
-                proposalRef.current = null;
-                setCurrentProposal(null);
+                // Pre-warm new proposal immediately before clearing old
+                // so the buy button has minimal downtime
+                const lastParams = lastProposalParamsRef.current;
+                if (lastParams) {
+                  const freshMsg: Record<string, unknown> = {
+                    proposal: 1,
+                    amount: lastParams.amount,
+                    basis: "stake",
+                    contract_type: lastParams.contract_type,
+                    currency: lastParams.currency,
+                    duration: lastParams.duration_ticks,
+                    duration_unit: "t",
+                    underlying_symbol: lastParams.symbol,
+                  };
+                  if (lastParams.barrier !== undefined) freshMsg.barrier = lastParams.barrier;
+                  send(freshMsg);
+                }
+                // Clear proposal after a short delay to allow fresh proposal to arrive
+                setTimeout(() => {
+                  proposalRef.current = null;
+                  setCurrentProposal(null);
+                }, 50);
                 setTradeHistory((prev) => {
                   const record: TradeRecord = {
                     id: oc.contract_id,
@@ -564,6 +588,7 @@ export function useDerivTrading() {
   /* ---- proposal subscription ---- */
   const subscribeProposal = useCallback(
     (req: ProposalRequest) => {
+      lastProposalParamsRef.current = req;
       if (proposalSubscriptionIdRef.current) {
         send({ forget: proposalSubscriptionIdRef.current });
         proposalSubscriptionIdRef.current = null;
@@ -588,6 +613,31 @@ export function useDerivTrading() {
     },
     [send],
   );
+
+  
+  /* ---- re-subscribe to proposal (used after reconnect / trade settle) ---- */
+  const resubscribeProposal = useCallback(() => {
+    const req = lastProposalParamsRef.current;
+    if (!req) return;
+    if (proposalSubscriptionIdRef.current) {
+      send({ forget: proposalSubscriptionIdRef.current });
+      proposalSubscriptionIdRef.current = null;
+    }
+    const subMsg: Record<string, unknown> = {
+      proposal: 1,
+      subscribe: 1,
+      amount: req.amount,
+      basis: "stake",
+      contract_type: req.contract_type,
+      currency: req.currency,
+      duration: req.duration_ticks,
+      duration_unit: "t",
+      underlying_symbol: req.symbol,
+    };
+    if (req.barrier !== undefined) subMsg.barrier = req.barrier;
+    setProposalLoading(true);
+    send(subMsg);
+  }, [send]);
 
   // Cleanup subscription on unmount
   useEffect(() => {
