@@ -20,7 +20,7 @@ type Tick = { value: number; digit: number };
 const tabRoutes: Record<ActiveTab, string> = { workspace: "/", history: "/history", bots: "/bots", analyzer: "/analyzer", portfolio: "/portfolio", risk: "/risk", settings: "/settings" };
 export { tabRoutes };
 
-type ResolvedTrade = { exit_tick: number; status: "won" | "lost"; epoch: number };
+type ResolvedTrade = { exit_tick: number; status: "won" | "lost"; epoch: number; profit: number; digit: number };
 
 type ActiveTab = "workspace" | "history" | "bots" | "settings" | "analyzer" | "portfolio" | "risk";
 
@@ -645,7 +645,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     if (lastTick) {
       setResolvedTrades((prev) => [
         ...prev.slice(-19),
-        { exit_tick: lastTick.value, status: lastResult.status as "won" | "lost", epoch: Date.now() },
+        { exit_tick: lastTick.value, status: lastResult.status as "won" | "lost", epoch: Date.now(), profit: lastResult.profit, digit: lastTick.digit },
       ]);
     }
   }, [lastResult, ticks]);

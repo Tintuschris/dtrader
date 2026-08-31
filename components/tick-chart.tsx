@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import {
   createChart,
   createSeriesMarkers,
@@ -37,7 +37,7 @@ type ResolvedContract = {
   barrier: string | undefined;
 };
 
-type ResolvedTrade = { exit_tick: number; status: "won" | "lost"; epoch: number };
+type ResolvedTrade = { exit_tick: number; status: "won" | "lost"; epoch: number; profit: number; digit: number };
 
 type Props = {
   ticks: Tick[];
@@ -45,7 +45,7 @@ type Props = {
   displayDuration?: number;
   tickElapsed?: number;
   tickTotal?: number;
-  resolvedTrades?: { exit_tick: number; status: "won" | "lost"; epoch: number }[];
+  resolvedTrades?: { exit_tick: number; status: "won" | "lost"; epoch: number; profit: number; digit: number }[];
 };
 
 /** Find the tick array index closest to a target price value. */
@@ -74,6 +74,8 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
   const markersTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const priceLineRef = useRef<any>(null);
   const historyMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; trade: ResolvedTrade } | null>(null);
 
   // Persisted resolved contract snapshot so markers survive after activeContract is nulled.
   const resolvedRef = useRef<ResolvedContract | null>(null);
@@ -149,6 +151,34 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
       priceLineRef.current = null;
     };
   }, []);
+
+  // ---- crosshair tooltip for historical trade dots ----
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const onCrosshair = (param: any) => {
+      if (!param || !param.time || !containerRef.current) {
+        setTooltip(null);
+        return;
+      }
+      const tradeTime = param.time as number;
+      const trade = resolvedTrades.find((t) => {
+        const idx = findTickIndex(ticks, t.exit_tick);
+        return idx >= 0 && (idx + 1) === tradeTime;
+      });
+      if (trade) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const x = (param.point?.x ?? 0) + rect.left;
+        const y = (param.point?.y ?? 0) + rect.top;
+        setTooltip({ x, y, trade });
+      } else {
+        setTooltip(null);
+      }
+    };
+
+    return () => { chart.unsubscribeCrosshairMove(onCrosshair); };
+  }, [resolvedTrades, ticks]);
 
   // ---- update data ----
   useEffect(() => {
@@ -386,6 +416,35 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
           <span style={{ color: "#617085", fontSize: 10, letterSpacing: ".1em" }}>TICKS LEFT</span>
           <span style={{ color: remaining <= 2 ? "#f0c040" : "#dce6f0", fontWeight: 600, fontSize: 16, fontVariantNumeric: "tabular-nums", transition: "color .2s" }}>{remaining}</span>
           <span style={{ color: "#617085", fontSize: 11 }}>/ {tickTotal}</span>
+        </div>
+      )}
+      {tooltip && (
+        <div ref={tooltipRef} style={{
+          position: "fixed",
+          left: tooltip.x + 12,
+          top: tooltip.y - 10,
+          zIndex: 20,
+          background: "rgba(10,16,26,0.92)",
+          border: tooltip.trade.status === "won" ? "1px solid rgba(34,197,94,0.4)" : "1px solid rgba(239,68,68,0.4)",
+          borderRadius: 8,
+          padding: "8px 12px",
+          pointerEvents: "none",
+          fontFamily: "Space Grotesk, monospace",
+          fontSize: 12,
+          lineHeight: 1.5,
+          minWidth: 120,
+          backdropFilter: "blur(8px)",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
+        }}>
+          <div style={{ color: tooltip.trade.status === "won" ? "#22c55e" : "#ef4444", fontWeight: 700, fontSize: 13 }}>
+            {tooltip.trade.status === "won" ? "✓ WIN" : "✗ LOSS"}
+          </div>
+          <div style={{ color: "#b9a1ff", marginTop: 2 }}>
+            Digit <strong>{tooltip.trade.digit}</strong>
+          </div>
+          <div style={{ color: tooltip.trade.profit >= 0 ? "#8de7d9" : "#f08080" }}>
+            {tooltip.trade.profit >= 0 ? "+" : ""}{Number(tooltip.trade.profit).toFixed(2)}
+          </div>
         </div>
       )}
     </div>
