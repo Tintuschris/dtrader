@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+import atexit
 from collections import deque
 
 import aiohttp
@@ -32,6 +33,12 @@ parser.add_argument("--account", default=os.environ.get("ACCOUNT_TYPE", "demo"),
                     help="Account type (default: demo)")
 parser.add_argument("--dry-run", action="store_true",
                     help="Detect signals but do not place trades")
+parser.add_argument("--record", metavar="FILE",
+                    help="Record ticks to JSON for backtesting")
+parser.add_argument("--replay", metavar="FILE",
+                    help="Replay recorded ticks for backtesting")
+parser.add_argument("--speed", type=float, default=1.0,
+                    help="Replay speed (1.0=real-time, 10=10x)")
 args = parser.parse_args()
 
 
@@ -71,7 +78,10 @@ RAW_SLOPE_MAX = 0.15
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_BASE_DELAY = 2
 PING_INTERVAL = 30
-DRY_RUN = args.dry_run
+DRY_RUN = args.dry_run or bool(args.replay)
+RECORD_FILE = args.record
+REPLAY_FILE = args.replay
+REPLAY_SPEED = args.speed
 REST_BASE_URL = "https://api.derivws.com"
 WS_URL = None
 
@@ -100,6 +110,7 @@ active_contract = None
 _tick_count = 0
 _in_cooldown = False
 _reconnect_count = 0
+_recorded_ticks = []
 
 # L-shape state tracking (operates on RAW StochRSI)
 _l_phase = None
@@ -428,6 +439,34 @@ def print_balance(amount):
     print(f"  {DIM}Balance: ${stats['balance']:.2f}{RST}")
 
 
+
+
+def save_recording():
+    if not RECORD_FILE or not _recorded_ticks:
+        return
+    data = {"symbol": SYMBOL, "ticks": _recorded_ticks,
+            "config": {"rsi_period": RSI_PERIOD, "stoch_period": STOCH_PERIOD}}
+    with open(RECORD_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+    print("  " + GRN + "+" + RST + " Saved " + str(len(_recorded_ticks)) + " ticks to " + RECORD_FILE)
+
+
+atexit.register(save_recording)
+
+
+def print_backtest_results(bt):
+    total, wins, losses, pnl = bt["trades"], bt["wins"], bt["losses"], bt["pnl"]
+    wr = (wins / total * 100) if total > 0 else 0
+    rc = GRN if pnl >= 0 else RED
+    print()
+    print(f"  {BLD}{CYN}+============================================================+{RST}")
+    print(f"  {BLD}{CYN}|  BACKTEST RESULTS                                         |{RST}")
+    print(f"  {BLD}{CYN}+============================================================+{RST}")
+    print(f"  {CYN}|{RST}  Ticks:    {BLD}{bt['ticks']}{RST}  |  Signals: {BLD}{bt['signals']}{RST}")
+    print(f"  {CYN}|{RST}  Trades:   {BLD}{total}{RST}  |  Wins: {GRN}{wins}{RST}  Losses: {RED}{losses}{RST}")
+    print(f"  {CYN}|{RST}  Win rate: {BLD}{wr:.1f}%{RST}  |  P&L: {rc}{BLD}{pnl:+.2f}{RST}")
+    print(f"  {BLD}{CYN}+============================================================+{RST}")
+
 # ============ AUTH ============
 
 async def get_ws_url_via_bridge():
@@ -522,6 +561,11 @@ async def process_tick(ws, tick_data, last_trade_time):
     price = tick_data["quote"]
     closes.append(price)
     tick_history.append(price)
+
+    if RECORD_FILE:
+        _recorded_ticks.append({"epoch": tick_data.get("epoch", time.time()), "quote": price})
+        if len(_recorded_ticks) % 10 == 0:
+            save_recording()
 
     print_tick(price, _tick_count)
 
@@ -752,9 +796,84 @@ async def trading_loop():
             reset_l_state()
             await asyncio.sleep(delay)
     print(f"  {RED}X Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) reached. Exiting.{RST}")
+
+
+async def replay_loop():
+    print_header()
+    print(f"  {CYN}>{RST} Replay mode: loading {REPLAY_FILE}...")
+    with open(REPLAY_FILE, "r") as f:
+        data = json.load(f)
+    recorded = data.get("ticks", [])
+    if not recorded:
+        print(f"  {RED}X No ticks in {REPLAY_FILE}{RST}")
+        return
+    print(f"  {GRN}+{RST} Loaded {len(recorded)} ticks | Speed: {REPLAY_SPEED}x | Stake: ${STAKE}")
+    print("  " + "-" * 60)
+    bt = {"ticks": 0, "signals": 0, "trades": 0, "wins": 0, "losses": 0, "pnl": 0.0, "last_trade": 0}
+    delay = 0.05 / REPLAY_SPEED
+    for tick in recorded:
+        bt["ticks"] += 1
+        await process_tick_replay({"quote": tick["quote"], "epoch": tick.get("epoch", 0)}, bt)
+        if delay > 0:
+            await asyncio.sleep(delay)
+    save_recording()
+    print_backtest_results(bt)
+
+
+async def process_tick_replay(tick_data, bt):
+    global _tick_count, _in_cooldown, active_contract
+    _tick_count += 1
+    price = tick_data["quote"]
+    closes.append(price)
+    tick_history.append(price)
+    print_tick(price, _tick_count)
+    rsi = calc_rsi(list(closes), RSI_PERIOD)
+    if rsi is not None:
+        rsi_vals.append(rsi)
+        stochrsi = calc_stochrsi(list(rsi_vals), STOCH_PERIOD)
+        if stochrsi is not None:
+            stochrsi_vals.append(stochrsi)
+            k = sma(list(stochrsi_vals), K_SMOOTH)
+            d = sma(list(stochrsi_vals), D_SMOOTH) if len(stochrsi_vals) >= D_SMOOTH else k
+            if k is not None: k_vals.append(k)
+            if d is not None: d_vals.append(d)
+    print_dashboard()
+    if len(stochrsi_vals) < 2 or active_contract:
+        return
+    now = time.time()
+    if now - bt.get("last_trade", 0) < (DURATION + 2):
+        return
+    srsi_now = stochrsi_vals[-1]
+    srsi_prev = stochrsi_vals[-2]
+    result = detect_l_shape(srsi_now, srsi_prev)
+    if result:
+        direction, reason = result
+        bt["signals"] += 1
+        print_signal(direction, srsi_now, reason)
+        entry = price
+        barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
+        bv = float(barrier)
+        print(f"  {YLW}[SIM] {direction.upper()} at {entry:.4f} barrier {barrier}{RST}")
+        active_contract = {"direction": direction, "entry_price": entry}
+        exit_p = entry + bv * 0.5
+        won = (exit_p > entry) if direction == "higher" else (exit_p < entry)
+        profit = STAKE * 0.9 if won else -STAKE
+        bt["trades"] += 1
+        if won: bt["wins"] += 1
+        else: bt["losses"] += 1
+        bt["pnl"] += profit
+        bt["last_trade"] = time.time()
+        rc = GRN if won else RED
+        txt = "WIN" if won else "LOSS"
+        print(f"  {rc}[SIM] {txt} | Entry: {entry:.4f} | Exit: {exit_p:.4f} | P&L: ${profit:+.2f}{RST}")
+        active_contract = None
+
 if __name__ == "__main__":
     try:
-        asyncio.run(trading_loop())
+        if args.replay:
+            asyncio.run(replay_loop())
+        else:
+            asyncio.run(trading_loop())
     except KeyboardInterrupt:
         print(f"\n\n  {YLW}Bot stopped by user{RST}")
         if stats["trades"] > 0:
