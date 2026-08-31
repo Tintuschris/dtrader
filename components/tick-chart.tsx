@@ -12,6 +12,7 @@ import {
   type ISeriesMarkersPluginApi,
   type Time,
 } from "lightweight-charts";
+import { digitFromQuote } from "../lib/format-utils";
 
 type Tick = { value: number; digit: number };
 
@@ -43,10 +44,6 @@ type Props = {
   tickElapsed?: number;
   tickTotal?: number;
 };
-
-function digitFromPrice(price: number, pipSize = 2) {
-  return Number(price.toFixed(pipSize).replace(".", "").slice(-1));
-}
 
 /** Find the tick array index closest to a target price value. */
 function findTickIndex(ticks: Tick[], targetPrice: number): number {
@@ -199,7 +196,7 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
       }> = [];
 
       if (contract.exit_tick == null) return [];
-      const exitDigit = digitFromPrice(contract.exit_tick);
+      const exitDigit = digitFromQuote(contract.exit_tick);
       const isWin = contract.status === "won";
       const exitIndex = findTickIndex(tickData, contract.exit_tick);
       const exitTime = exitIndex >= 0 ? (exitIndex + 1) : latestIndex;
@@ -265,7 +262,7 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
         lineWidth: 2,
         lineStyle: 2,
         axisLabelVisible: true,
-        title: (isWin ? "WIN" : "LOSS") + " \u2022 " + digitFromPrice(exitPrice),
+        title: (isWin ? "WIN" : "LOSS") + " \u2022 " + digitFromQuote(exitPrice),
       });
 
       markersTimerRef.current = setTimeout(() => {

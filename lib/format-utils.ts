@@ -55,3 +55,9 @@ export function formatContractType(type: string): string {
   };
   return map[type] ?? type;
 }
+
+
+/** Extract the last decimal digit from a quote price. */
+export function digitFromQuote(quote: number | string, pipSize = 2): number {
+  return Number(Number(quote).toFixed(pipSize).replace(".", "").slice(-1));
+}

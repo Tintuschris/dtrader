@@ -30,6 +30,7 @@ import PortfolioDashboard from "./portfolio-dashboard";
 import { getGlobalAnalyzer } from "../lib/market-analyzer";
 import type { TradeRecommendation } from "./market-analyzer";
 import { getAutoTradeEngine } from "../lib/auto-trade";
+import { digitFromQuote } from "../lib/format-utils";
 import RiskManagement, { defaultRiskSettings, createInitialRiskState, checkRiskLimits, updateRiskState, type RiskSettings, type RiskState } from "./risk-management";
 
 /* ------------------------------------------------------------------ */
@@ -116,10 +117,6 @@ function makeTick(previous: number): Tick {
     value,
     digit: Number(value.toFixed(2).replace(".", "").slice(-1)),
   };
-}
-
-function digitFromQuote(quote: number | string, pipSize = 2) {
-  return Number(Number(quote).toFixed(pipSize).replace(".", "").slice(-1));
 }
 
 function fmt(n: number | string) {
