@@ -37,12 +37,15 @@ type ResolvedContract = {
   barrier: string | undefined;
 };
 
+type ResolvedTrade = { exit_tick: number; status: "won" | "lost"; epoch: number };
+
 type Props = {
   ticks: Tick[];
   activeContract?: ActiveContract | null;
   displayDuration?: number;
   tickElapsed?: number;
   tickTotal?: number;
+  resolvedTrades?: { exit_tick: number; status: "won" | "lost"; epoch: number }[];
 };
 
 /** Find the tick array index closest to a target price value. */
@@ -63,13 +66,14 @@ function findTickIndex(ticks: Tick[], targetPrice: number): number {
  * TradingView Lightweight Charts v5 tick chart.
  * Area chart with crosshair, current price line, and active contract markers.
  */
-export default function TickChart({ ticks, activeContract, displayDuration = 3000, tickElapsed = 0, tickTotal }: Props) {
+export default function TickChart({ ticks, activeContract, displayDuration = 3000, tickElapsed = 0, tickTotal, resolvedTrades = [] }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const markersPrimitiveRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const markersTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const priceLineRef = useRef<any>(null);
+  const historyMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   // Persisted resolved contract snapshot so markers survive after activeContract is nulled.
   const resolvedRef = useRef<ResolvedContract | null>(null);
@@ -326,6 +330,39 @@ export default function TickChart({ ticks, activeContract, displayDuration = 300
       removePriceLine();
     }
   }, [activeContract, ticks, ticks.length, buildMarkers, displayDuration]);
+
+  // ---- historical trade resolution markers (last 20) ----
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || ticks.length === 0 || resolvedTrades.length === 0) {
+      if (historyMarkersRef.current) { historyMarkersRef.current.detach(); historyMarkersRef.current = null; }
+      return;
+    }
+
+    const markers: Array<{
+      time: Time; position: "aboveBar" | "belowBar"; color: string;
+      shape: "circle" | "arrowUp" | "arrowDown"; text: string; size?: number;
+    }> = [];
+
+    for (const trade of resolvedTrades) {
+      const idx = findTickIndex(ticks, trade.exit_tick);
+      if (idx < 0) continue; // trade exit not visible in current tick window
+      const isWin = trade.status === "won";
+      markers.push({
+        time: (idx + 1) as Time,
+        position: "aboveBar",
+        color: isWin ? "rgba(34,197,94,0.6)" : "rgba(239,68,68,0.6)",
+        shape: "circle",
+        text: "",
+        size: 1,
+      });
+    }
+
+    if (historyMarkersRef.current) historyMarkersRef.current.detach();
+    if (markers.length > 0) {
+      historyMarkersRef.current = createSeriesMarkers(series, markers);
+    }
+  }, [resolvedTrades, ticks, ticks.length]);
 
   // Show countdown during active trade
   const showCountdown = activeContract && activeContract.status === "open" && tickTotal && tickTotal > 0;

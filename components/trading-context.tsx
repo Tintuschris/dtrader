@@ -20,6 +20,8 @@ type Tick = { value: number; digit: number };
 const tabRoutes: Record<ActiveTab, string> = { workspace: "/", history: "/history", bots: "/bots", analyzer: "/analyzer", portfolio: "/portfolio", risk: "/risk", settings: "/settings" };
 export { tabRoutes };
 
+type ResolvedTrade = { exit_tick: number; status: "won" | "lost"; epoch: number };
+
 type ActiveTab = "workspace" | "history" | "bots" | "settings" | "analyzer" | "portfolio" | "risk";
 
 export const contractGroups: ContractGroup[] = ["Over / Under", "Matches / Differs", "Even / Odd"];
@@ -142,7 +144,7 @@ export type TradingContextValue = {
   lastError: string | null;
   authenticated: boolean;
   authLoading: boolean;
-  
+  resolvedTrades: ResolvedTrade[];
   login: () => Promise<void>;
   logout: () => Promise<void>;
   fetchProfitTable: any;
@@ -193,6 +195,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   const [riskSettings, setRiskSettings] = useState<RiskSettings>(defaultRiskSettings);
   const [riskState, setRiskState] = useState<RiskState>(createInitialRiskState);
   const [resolvedDigit, setResolvedDigit] = useState<number | null>(null);
+  const [resolvedTrades, setResolvedTrades] = useState<ResolvedTrade[]>([]);
   const [contractTickElapsed, setContractTickElapsed] = useState(0);
   const [indicatorDuration, setIndicatorDuration] = useState(() => {
     if (typeof window !== "undefined") {
@@ -634,6 +637,19 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     const timer = setTimeout(() => setResolvedDigit(null), indicatorDuration * 1000);
     return () => clearTimeout(timer);
   }, [lastResult, ticks, indicatorDuration]);
+
+  /* ---- record resolved trades for chart history markers ---- */
+  useEffect(() => {
+    if (!lastResult) return;
+    const lastTick = ticks.at(-1);
+    if (lastTick) {
+      setResolvedTrades((prev) => [
+        ...prev.slice(-19),
+        { exit_tick: lastTick.value, status: lastResult.status as "won" | "lost", epoch: Date.now() },
+      ]);
+    }
+  }, [lastResult, ticks]);
+
   /* ---- daily risk reset ---- */
   useEffect(() => {
     const today = new Date().toISOString().split("T")[0];
@@ -875,7 +891,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     // From hooks
     balance, balanceCurrency, connectionStatus, lastResult, clearLastResult,
     tradeHistory, currentProposal, proposalRef, proposalLoading, activeContract, buy, sell,
-    setMarkets, authLoading,
+    setMarkets, authLoading, resolvedTrades,
     subscribeProposal, clearError, lastError, authenticated, login, logout,
     fetchProfitTable, fetchPortfolio, botApi, wsAccounts, propose, buyBot, subscribeToContract, unsubscribeFromContract,
   };

@@ -72,7 +72,7 @@ function TradingTerminalInner() {
     balance, balanceCurrency, connectionStatus, lastResult, clearLastResult,
     tradeHistory, currentProposal, proposalRef, proposalLoading, buy, sell,
     clearError, lastError, authenticated, login, logout,
-    fetchProfitTable, fetchPortfolio, botApi, wsAccounts, 
+    fetchProfitTable, fetchPortfolio, botApi, wsAccounts, resolvedTrades,
     activeContract, setMarkets, loadAccounts, authLoading, isBuying, setIsBuying,
     activateAccount, setIndicatorDuration, propose, buyBot, subscribeToContract, unsubscribeFromContract,
   } = t;
