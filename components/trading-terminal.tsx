@@ -672,6 +672,28 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
     setSubContract(subContracts[group][0].value);
   }, []);
 
+  /* ---- hedge: auto-fill opposite contract ---- */
+  const handleHedge = useCallback(() => {
+    if (!activeContract) return;
+    const ct = activeContract.contract_type;
+    const digit = Number(activeContract.barrier ?? selectedDigit);
+    const hedgeMap: Record<string, { sub: SubContract; group: ContractGroup }> = {
+      DIGITOVER:  { sub: "under",  group: "Over / Under" },
+      DIGITUNDER: { sub: "over",   group: "Over / Under" },
+      DIGITEVEN:  { sub: "odd",    group: "Even / Odd" },
+      DIGITODD:   { sub: "even",   group: "Even / Odd" },
+      DIGITMATCH: { sub: "differs", group: "Matches / Differs" },
+      DIGITDIFF:  { sub: "match",  group: "Matches / Differs" },
+    };
+    const hedge = ct ? hedgeMap[ct] : undefined;
+    if (!hedge) return;
+    setContractGroup(hedge.group);
+    setSubContract(hedge.sub);
+    setSelectedDigit(digit);
+    setTradeError(null);
+    clearError();
+  }, [activeContract, selectedDigit, clearError]);
+
   /* ---- place trade ---- */
   const [isBuying, setIsBuying] = useState(false);
   const handlePlaceTrade = useCallback(async () => {
@@ -1239,6 +1261,7 @@ export default function TradingTerminal({ initialTab = "workspace" }: { initialT
                     Contract active · {activeContract.contract_type} ·{" "}
                     {activeContract.current_tick !== undefined ? `Tick ${activeContract.current_tick}` : "Waiting…"}
                   </span>
+                  <button className="hedge-button" onClick={handleHedge} title="Auto-fill opposite contract">Hedge</button>
                   <button className="sell-button" onClick={() => sell(activeContract.contract_id)}>Sell</button>
                 </div>
               )}
