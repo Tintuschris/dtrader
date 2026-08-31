@@ -44,15 +44,15 @@ export async function GET(request: NextRequest) {
         { headers, cache: "no-store" },
       );
       const listData = await listRes.json().catch(() => null);
-      const accounts = listData?.data?.accounts || listData?.accounts || [];
+      const accounts = Array.isArray(listData?.data) ? listData.data : (listData?.data?.accounts || listData?.accounts || []);
       if (accounts.length > 0) {
         // Prefer demo for safety
         const preferred = accounts.find((a: any) => {
-          const id = a.accountId || a.id || a.loginid || "";
-          const isVirtual = a.isVirtual || id.startsWith("VR") || id.toLowerCase().includes("demo");
+          const id = a.account_id || a.accountId || a.id || a.loginid || "";
+          const isVirtual = a.isVirtual || a.is_virtual || a.account_type === "demo" || id.startsWith("VR") || id.startsWith("DOT");
           return accountType === "demo" ? isVirtual : !isVirtual;
         }) || accounts[0];
-        accountId = preferred.accountId || preferred.id || preferred.loginid;
+        accountId = preferred.account_id || preferred.accountId || preferred.id || preferred.loginid;
       }
     } catch (e) {
       return NextResponse.json(
