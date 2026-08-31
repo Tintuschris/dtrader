@@ -476,6 +476,7 @@ async def place_trade(ws, direction, barrier):
     contract_type = "CALL" if direction == "higher" else "PUT"
     proposal = {
         "buy": 1,
+        "symbol": SYMBOL,
         "price": STAKE,
         "parameters": {
             "amount": STAKE,
@@ -484,13 +485,10 @@ async def place_trade(ws, direction, barrier):
             "currency": CURRENCY,
             "duration": DURATION,
             "duration_unit": DURATION_UNIT,
-            "symbol": SYMBOL,
             "barrier": barrier,
         },
     }
     await ws.send(json.dumps(proposal))
-
-
 # ============ TICK PROCESSING ============
 
 async def process_tick(ws, tick_data, last_trade_time):
