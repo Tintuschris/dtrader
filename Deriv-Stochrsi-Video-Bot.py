@@ -35,6 +35,20 @@ LEVEL_HIGH = 0.7
 FLAT_LOOKBACK = 6
 FLAT_THRESHOLD = 0.06
 BREAKOUT_MIN = 0.12
+
+# === RAW StochRSI L-shape detection (replaces SMA-smoothed K detection) ===
+RAW_LEVEL_LOW = 0.20
+RAW_LEVEL_HIGH = 0.80
+RAW_FLAT_LOOKBACK = 3
+RAW_FLAT_THRESHOLD = 0.08
+RAW_BREAKOUT_MIN = 0.10
+RAW_SLOPE_MIN = -0.15
+RAW_SLOPE_MAX = 0.15
+
+# Reconnection
+MAX_RECONNECT_ATTEMPTS = 10
+RECONNECT_BASE_DELAY = 2
+PING_INTERVAL = 30
 REST_BASE_URL = "https://api.derivws.com"
 WS_URL = None
 
@@ -62,6 +76,14 @@ stats = {"trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0, "balance": 0.0}
 active_contract = None
 _tick_count = 0
 _in_cooldown = False
+_reconnect_count = 0
+
+# L-shape state tracking (operates on RAW StochRSI)
+_l_phase = None
+_l_slope_start_val = 0.0
+_l_flat_count = 0
+_l_flat_val_sum = 0.0
+_l_direction = None
 
 
 # ============ INDICATOR MATH ============
@@ -107,6 +129,112 @@ def is_flat(values, lookback, threshold):
 
 # ============ UI HELPERS ============
 
+
+def reset_l_state():
+    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction
+    _l_phase = None
+    _l_slope_start_val = 0.0
+    _l_flat_count = 0
+    _l_flat_val_sum = 0.0
+    _l_direction = None
+
+
+def detect_l_shape(srsi_now, srsi_prev):
+    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction
+    if srsi_now is None or srsi_prev is None:
+        return None
+    delta = srsi_now - srsi_prev
+
+    if _l_phase is None:
+        if delta <= RAW_SLOPE_MIN:
+            _l_phase = "slope_down"
+            _l_slope_start_val = srsi_prev
+            _l_direction = "long"
+            return None
+        if delta >= RAW_SLOPE_MAX:
+            _l_phase = "slope_up"
+            _l_slope_start_val = srsi_prev
+            _l_direction = "short"
+            return None
+        return None
+
+    if _l_phase == "slope_down":
+        if srsi_now <= RAW_LEVEL_LOW:
+            _l_phase = "flat_low"
+            _l_flat_count = 1
+            _l_flat_val_sum = srsi_now
+            return None
+        if delta > 0.02:
+            reset_l_state()
+            return None
+        return None
+
+    if _l_phase == "slope_up":
+        if srsi_now >= RAW_LEVEL_HIGH:
+            _l_phase = "flat_high"
+            _l_flat_count = 1
+            _l_flat_val_sum = srsi_now
+            return None
+        if delta < -0.02:
+            reset_l_state()
+            return None
+        return None
+
+    if _l_phase == "flat_low":
+        _l_flat_count += 1
+        _l_flat_val_sum += srsi_now
+        avg = _l_flat_val_sum / _l_flat_count
+        if abs(srsi_now - avg) < RAW_FLAT_THRESHOLD and srsi_now <= RAW_LEVEL_LOW + 0.10:
+            if _l_flat_count >= RAW_FLAT_LOOKBACK:
+                _l_phase = "ready_long"
+            return None
+        else:
+            reset_l_state()
+            return None
+
+    if _l_phase == "flat_high":
+        _l_flat_count += 1
+        _l_flat_val_sum += srsi_now
+        avg = _l_flat_val_sum / _l_flat_count
+        if abs(srsi_now - avg) < RAW_FLAT_THRESHOLD and srsi_now >= RAW_LEVEL_HIGH - 0.10:
+            if _l_flat_count >= RAW_FLAT_LOOKBACK:
+                _l_phase = "ready_short"
+            return None
+        else:
+            reset_l_state()
+            return None
+
+    if _l_phase == "ready_long":
+        if delta >= RAW_BREAKOUT_MIN:
+            flat_avg = _l_flat_val_sum / _l_flat_count
+            reason = (f"SRSI dropped from {_l_slope_start_val:.3f} to {flat_avg:.3f} "
+                     f"(flat {_l_flat_count}t), broke UP +{delta:.3f}")
+            reset_l_state()
+            return ("higher", reason)
+        if abs(delta) < RAW_FLAT_THRESHOLD:
+            _l_flat_count += 1
+            return None
+        if delta < -0.02:
+            reset_l_state()
+            return None
+        return None
+
+    if _l_phase == "ready_short":
+        if delta <= -RAW_BREAKOUT_MIN:
+            flat_avg = _l_flat_val_sum / _l_flat_count
+            reason = (f"SRSI rose from {_l_slope_start_val:.3f} to {flat_avg:.3f} "
+                     f"(flat {_l_flat_count}t), broke DOWN {delta:.3f}")
+            reset_l_state()
+            return ("lower", reason)
+        if abs(delta) < RAW_FLAT_THRESHOLD:
+            _l_flat_count += 1
+            return None
+        if delta > 0.02:
+            reset_l_state()
+            return None
+        return None
+
+    return None
 def mini_spark(values, width=20):
     if len(values) < 2:
         return "." * width
@@ -151,79 +279,76 @@ def print_header():
     print(f"{CYN}|{RST}  Symbol:    {BLD}{SYMBOL}{RST}                          Duration: {BLD}{DURATION}{DURATION_UNIT}{RST}")
     print(f"{CYN}|{RST}  Stake:     {GRN}${STAKE} {CURRENCY}{RST}                       Barrier:  {BLD}{BARRIER_HIGHER}/{BARRIER_LOWER}{RST}")
     print(f"{CYN}|{RST}  Mode:      {BLD}{'BRIDGE' if USE_BRIDGE else 'PAT'}{RST}")
-    print(f"{CYN}|{RST}  Strategy:  {MAG}STOCHRSI({RSI_PERIOD}) {LEVEL_LOW}/{LEVEL_HIGH} L-shape{RST}")
+    print(f"{CYN}|{RST}  Strategy:  {MAG}RAW StochRSI({RSI_PERIOD}) slanted L{RST}")
     print(f"{CYN}+{'='*56}+{RST}")
     print()
 
 
 def print_dashboard():
-    n = len(k_vals)
-    if n < 2:
-        rsi_n = len(rsi_vals)
-        stoch_n = len(stochrsi_vals)
+    rsi_n = len(rsi_vals)
+    stoch_n = len(stochrsi_vals)
+    raw_now = stochrsi_vals[-1] if stochrsi_vals else None
+    k_now = k_vals[-1] if k_vals else None
+    d_now = d_vals[-1] if d_vals else None
+    rsi_now = rsi_vals[-1] if rsi_vals else 0
+
+    if raw_now is None:
         needed = max(0, RSI_PERIOD + 1 - rsi_n) + max(0, STOCH_PERIOD - stoch_n)
-        print(f"  {DIM}+--- WARMUP -------------------------------------+{RST}")
+        print(f"  {DIM}+--- WARMUP -------------------------------------------+{RST}")
         print(f"  {DIM}|{RST}  RSI: {YLW}{rsi_n:2d}{RST}/{RSI_PERIOD+1}  StochRSI: {YLW}{stoch_n:2d}{RST}/{STOCH_PERIOD}  {DIM}~{needed} ticks left{RST}")
-        print(f"  {DIM}+------------------------------------------------+{RST}")
+        print(f"  {DIM}+------------------------------------------------------+{RST}")
         return
 
-    k_now = k_vals[-1]
-    k_prev = k_vals[-2]
-    rsi_now = rsi_vals[-1] if rsi_vals else 0
-    stoch_now = stochrsi_vals[-1] if stochrsi_vals else 0
-    d_now = d_vals[-1] if d_vals else 0
+    raw_color = GRN if raw_now > RAW_LEVEL_HIGH else (RED if raw_now < RAW_LEVEL_LOW else YLW)
 
-    k_color = GRN if k_now > LEVEL_HIGH else (RED if k_now < LEVEL_LOW else YLW)
-    rsi_color = GRN if rsi_now > 55 else (RED if rsi_now < 45 else YLW)
+    phase_str = DIM + "IDLE" + RST
+    if _l_phase == "slope_down": phase_str = RED + "SLOPE DN" + RST
+    elif _l_phase == "slope_up": phase_str = GRN + "SLOPE UP" + RST
+    elif _l_phase == "flat_low": phase_str = YLW + "FLAT LOW" + RST
+    elif _l_phase == "flat_high": phase_str = YLW + "FLAT HIGH" + RST
+    elif _l_phase == "ready_long": phase_str = GRN + "READY-L" + RST
+    elif _l_phase == "ready_short": phase_str = RED + "READY-S" + RST
 
-    k_diff = k_now - k_prev
-    if k_diff > 0.001:
-        trend = GRN + f"UP +{k_diff:.4f}" + RST
-    elif k_diff < -0.001:
-        trend = RED + f"DN {k_diff:.4f}" + RST
-    else:
-        trend = DIM + "FLAT" + RST
-
-    print(f"  {DIM}+--- INDICATORS ----------------------------------+{RST}")
-    print(f"  {DIM}|{RST}  RSI({RSI_PERIOD}):  {rsi_color}{BLD}{rsi_now:6.2f}{RST}  |  StochRSI: {MAG}{BLD}{stoch_now:6.4f}{RST}  |  {trend}")
-    print(f"  {DIM}|{RST}  K({K_SMOOTH}):    {k_color}{BLD}{k_now:6.4f}{RST}  |  D({D_SMOOTH}):    {CYN}{BLD}{d_now:6.4f}{RST}")
-    print(f"  {DIM}|{RST}  K line:  {DIM}{mini_spark(k_vals, 30)}{RST}")
-    print(f"  {DIM}|{RST}  Signal:  {signal_bar(k_now)}")
-    print(f"  {DIM}|{RST}  Levels:  {RED}0.3{RST}{DIM}---------{YLW}MID{YLW}{DIM}---------{GRN}0.7{RST}")
-    print(f"  {DIM}+------------------------------------------------+{RST}")
-
-
+    print(f"  {DIM}+--- RAW STOCHRSI DETECTION ---------------------------+{RST}")
+    print(f"  {DIM}|{RST}  RSI({RSI_PERIOD}):  {BLD}{rsi_now:6.2f}{RST}  |  Raw SRSI: {raw_color}{BLD}{raw_now:6.4f}{RST}  |  Phase: {phase_str}")
+    if k_now is not None:
+        k_color = GRN if k_now > LEVEL_HIGH else (RED if k_now < LEVEL_LOW else YLW)
+        print(f"  {DIM}|{RST}  K({K_SMOOTH}):     {k_color}{BLD}{k_now:6.4f}{RST}  |  D({D_SMOOTH}):     {CYN}{BLD}{d_now:6.4f}{RST}")
+        print(f"  {DIM}|{RST}  K line:    {DIM}{mini_spark(k_vals, 30)}{RST}")
+    print(f"  {DIM}|{RST}  Raw SRSI:  {DIM}{mini_spark(stochrsi_vals, 30)}{RST}")
+    print(f"  {DIM}|{RST}  Signal:    {signal_bar(raw_now)}")
+    print(f"  {DIM}|{RST}  Levels:    {RED}{RAW_LEVEL_LOW}{RST}{DIM}--------{YLW}MID{YLW}{DIM}--------{GRN}{RAW_LEVEL_HIGH}{RST}")
+    print(f"  {DIM}+------------------------------------------------------+{RST}")
 def print_tick(price, tick_num):
     if len(closes) >= 2:
         prev = list(closes)[-2]
         arrow = GRN + "^" + RST if price > prev else (RED + "v" + RST if price < prev else DIM + "-" + RST)
     else:
         arrow = DIM + "." + RST
-
     digit = int(str(price).split(".")[-1][-1]) if "." in str(price) else 0
     digit_color = GRN if digit >= 5 else RED
     spark = mini_spark(tick_history, 30)
-
-    print(f"  {DIM}#{tick_num:>4d}{RST} {arrow} {BLD}{price:.4f}{RST}  {digit_color}[{digit}]{RST}  {DIM}{spark}{RST}")
-
-
-def print_signal(direction, k_val, reason):
+    srsi_str = ""
+    if stochrsi_vals:
+        sv = stochrsi_vals[-1]
+        sc = GRN if sv > RAW_LEVEL_HIGH else (RED if sv < RAW_LEVEL_LOW else DIM)
+        srsi_str = f"  {sc}SRSI:{sv:.3f}{RST}"
+    print(f"  {DIM}#{tick_num:>4d}{RST} {arrow} {BLD}{price:.4f}{RST}  {digit_color}[{digit}]{RST}{srsi_str}  {DIM}{spark}{RST}")
+def print_signal(direction, srsi_val, reason):
     if direction == "higher":
-        print(f"  {BLD}{GRN}{'='*56}{RST}")
+        print(f"  {BLD}{GRN}{"="*60}{RST}")
         print(f"  {BLD}{GRN}  >>>  L-SHAPE LONG SIGNAL  <<<{RST}")
-        print(f"  {BLD}{GRN}  K={k_val:.4f} broke UP from oversold zone{RST}")
+        print(f"  {BLD}{GRN}  Raw SRSI={srsi_val:.4f} broke UP from oversold zone{RST}")
         print(f"  {GRN}  Reason: {reason}{RST}")
-        print(f"  {GRN}  Barrier: {BARRIER_HIGHER} | Contract: HIGHER | Stake: ${STAKE}{RST}")
-        print(f"  {BLD}{GRN}{'='*56}{RST}")
+        print(f"  {GRN}  Barrier: {BARRIER_HIGHER} | Contract: HIGHER | Stake: {RST}")
+        print(f"  {BLD}{GRN}{"="*60}{RST}")
     else:
-        print(f"  {BLD}{RED}{'='*56}{RST}")
+        print(f"  {BLD}{RED}{"="*60}{RST}")
         print(f"  {BLD}{RED}  <<<  L-SHAPE SHORT SIGNAL  >>>{RST}")
-        print(f"  {BLD}{RED}  K={k_val:.4f} broke DOWN from overbought zone{RST}")
+        print(f"  {BLD}{RED}  Raw SRSI={srsi_val:.4f} broke DOWN from overbought zone{RST}")
         print(f"  {RED}  Reason: {reason}{RST}")
-        print(f"  {RED}  Barrier: {BARRIER_LOWER} | Contract: LOWER | Stake: ${STAKE}{RST}")
-        print(f"  {BLD}{RED}{'='*56}{RST}")
-
-
+        print(f"  {RED}  Barrier: {BARRIER_LOWER} | Contract: LOWER | Stake: {RST}")
+        print(f"  {BLD}{RED}{"="*60}{RST}")
 def print_trade_placed(contract_id, direction, cost, payout):
     print(f"  {BLD}{YLW}+--- TRADE PLACED --------------------------------+{RST}")
     print(f"  {YLW}|{RST}  Contract:   {BLD}{contract_id}{RST}")
@@ -393,11 +518,9 @@ async def process_tick(ws, tick_data, last_trade_time):
 
     print_dashboard()
 
-    if len(k_vals) < 2 or active_contract:
+    if len(stochrsi_vals) < 2 or active_contract:
         return last_trade_time
 
-    k_now = k_vals[-1]
-    k_prev = k_vals[-2]
 
     # Cooldown
     now = time.time()
@@ -409,31 +532,17 @@ async def process_tick(ws, tick_data, last_trade_time):
         return last_trade_time
     _in_cooldown = False
 
-    # === L-SHAPE DETECTION ===
-    k_was_flat_low = (
-        is_flat(list(k_vals), FLAT_LOOKBACK, FLAT_THRESHOLD)
-        and k_prev <= LEVEL_LOW + FLAT_THRESHOLD
-    )
-    k_breaking_up = k_now > k_prev and (k_now - k_prev) >= BREAKOUT_MIN
+    # === L-SHAPE DETECTION ON RAW STOCHRSI ===
+    srsi_now = stochrsi_vals[-1]
+    srsi_prev = stochrsi_vals[-2]
 
-    k_was_flat_high = (
-        is_flat(list(k_vals), FLAT_LOOKBACK, FLAT_THRESHOLD)
-        and k_prev >= LEVEL_HIGH - FLAT_THRESHOLD
-    )
-    k_breaking_down = k_now < k_prev and (k_prev - k_now) >= BREAKOUT_MIN
-
-    if k_was_flat_low and k_breaking_up:
-        reason = f"K flat at {k_prev:.4f} (near {LEVEL_LOW}), breakout +{k_now - k_prev:.4f}"
-        print_signal("higher", k_now, reason)
-        active_contract = {"direction": "higher", "entry_price": price}
-        await place_trade(ws, "higher", BARRIER_HIGHER)
-        return now
-
-    if k_was_flat_high and k_breaking_down:
-        reason = f"K flat at {k_prev:.4f} (near {LEVEL_HIGH}), breakout -{k_prev - k_now:.4f}"
-        print_signal("lower", k_now, reason)
-        active_contract = {"direction": "lower", "entry_price": price}
-        await place_trade(ws, "lower", BARRIER_LOWER)
+    result = detect_l_shape(srsi_now, srsi_prev)
+    if result:
+        direction, reason = result
+        print_signal(direction, srsi_now, reason)
+        barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
+        active_contract = {"direction": direction, "entry_price": price}
+        await place_trade(ws, direction, barrier)
         return now
 
     return last_trade_time
@@ -441,123 +550,182 @@ async def process_tick(ws, tick_data, last_trade_time):
 
 # ============ TRADING LOOP ============
 
-async def trading_loop():
-    global WS_URL, stats
-
-    print_header()
-    print(f"  {CYN}>{RST} Authenticating...")
+async def get_ws_url():
+    global WS_URL
     use_bridge = USE_BRIDGE
     if use_bridge:
         try:
             WS_URL = await get_ws_url_via_bridge()
+            return WS_URL
         except Exception as e:
             print(f"  {RED}X Bridge failed: {e}{RST}")
             if not PAT_TOKEN:
                 print(f"  {RED}No PAT_TOKEN for fallback. Exiting.{RST}")
-                return
+                return None
             print(f"  {YLW}> Falling back to PAT mode...{RST}")
-            use_bridge = False
+    try:
+        acc_data = await get_accounts()
+        acc_id = select_account(acc_data)
+        if not acc_id:
+            print(f"  {RED}X No matching {ACCOUNT_TYPE} account found{RST}")
+            return None
+        print(f"  {GRN}+{RST} Account: {BLD}{acc_id}{RST} ({ACCOUNT_TYPE})")
+        WS_URL = await get_otp_url(acc_id)
+        return WS_URL
+    except Exception as e:
+        print(f"  {RED}X PAT auth error: {e}{RST}")
+        return None
 
-    if not use_bridge or not WS_URL:
+
+async def subscribe_ws(ws):
+    if ("binaryws.com" in WS_URL or "otp" not in WS_URL) and PAT_TOKEN:
+        await ws.send(json.dumps({"authorize": PAT_TOKEN}))
+        auth_resp = json.loads(await ws.recv())
+        if "error" in auth_resp:
+            print(f"  {RED}X Auth failed: {auth_resp["error"]}{RST}")
+            return False
+        print(f"  {GRN}+{RST} Authenticated")
+    await ws.send(json.dumps({"ticks": SYMBOL, "subscribe": 1}))
+    await ws.send(json.dumps({"balance": 1, "subscribe": 1}))
+    print(f"  {GRN}+{RST} Subscribed to {SYMBOL}")
+    print(f"  {DIM}{"-"*60}{RST}")
+    print(f"  {DIM}Watching for L-shape signals on RAW StochRSI...{RST}")
+    print(f"  {DIM}{"-"*60}{RST}")
+    print()
+    return True
+
+
+async def handle_message(ws, data, last_trade_time):
+    global active_contract
+    if data.get("msg_type") == "tick":
+        tick = data.get("tick", {})
+        if tick:
+            result = await process_tick(ws, tick, last_trade_time)
+            if isinstance(result, (int, float)):
+                return result
+    elif data.get("msg_type") == "buy":
+        buy = data.get("buy", {})
+        if "error" in data:
+            print(f"  {RED}X BUY ERROR: {data["error"]}{RST}")
+            active_contract = None
+        elif buy:
+            cid = buy.get("contract_id", "?")
+            cost = buy.get("buy_price", "?")
+            payout = buy.get("payout", "?")
+            direction = active_contract["direction"] if active_contract else "?"
+            print_trade_placed(cid, direction, cost, payout)
+            if active_contract:
+                active_contract["contract_id"] = cid
+            await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": cid}))
+    elif data.get("msg_type") == "proposal_open_contract":
+        poc = data.get("proposal_open_contract", {})
+        if poc:
+            status = poc.get("status", "")
+            profit = poc.get("profit", 0)
+            entry = poc.get("entry_tick", 0)
+            exit_p = poc.get("exit_tick", 0)
+            cur = poc.get("current_tick", 0)
+            total = poc.get("tick_count", DURATION)
+            cid = poc.get("contract_id", "?")
+            if status in ("expired", "sold"):
+                direction = active_contract["direction"] if active_contract else "?"
+                entry_price = active_contract["entry_price"] if active_contract else entry
+                print_trade_result(status, profit, entry_price, exit_p, direction, cid)
+                active_contract = None
+                last_trade_time = time.time()
+            elif status == "open" and total:
+                direction = active_contract["direction"] if active_contract else "?"
+                barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
+                print_trade_progress(cur, total, entry, barrier)
+    elif data.get("msg_type") == "balance":
+        bal = data.get("balance", {})
+        print_balance(bal.get("balance", "?"))
+    elif data.get("msg_type") == "ping":
+        await ws.send(json.dumps({"pong": 1}))
+    return last_trade_time
+
+
+
+async def keepalive_ping(ws):
+    """Send periodic pings to keep the WebSocket connection alive."""
+    while True:
         try:
-            acc_data = await get_accounts()
-            acc_id = select_account(acc_data)
-            if not acc_id:
-                print(f"  {RED}X No matching {ACCOUNT_TYPE} account found{RST}")
+            await asyncio.sleep(PING_INTERVAL)
+            await ws.send(json.dumps({"ping": 1}))
+        except Exception:
+            break  # Connection is dead, stop pinging
+
+async def run_session():
+    """Run one WebSocket session with keepalive ping."""
+    global active_contract, _reconnect_count
+
+    url = await get_ws_url()
+    if not url:
+        return False
+
+    async with websockets.connect(url) as ws:
+        if not await subscribe_ws(ws):
+            return False
+
+        # Reset reconnect counter on successful connection
+        _reconnect_count = 0
+
+        # Start keepalive ping task
+        ping_task = asyncio.create_task(keepalive_ping(ws))
+
+        try:
+            last_trade_time = 0
+            async for msg in ws:
+                data = json.loads(msg)
+                result = await handle_message(ws, data, last_trade_time)
+                if isinstance(result, (int, float)):
+                    last_trade_time = result
+        finally:
+            ping_task.cancel()
+            try:
+                await ping_task
+            except asyncio.CancelledError:
+                pass
+
+    return True
+
+
+async def trading_loop():
+    global _reconnect_count, active_contract
+    print_header()
+    print(f"  {CYN}>{RST} Authenticating...")
+    while _reconnect_count < MAX_RECONNECT_ATTEMPTS:
+        try:
+            success = await run_session()
+            if not success:
                 return
-            print(f"  {GRN}+{RST} Account: {BLD}{acc_id}{RST} ({ACCOUNT_TYPE})")
-            WS_URL = await get_otp_url(acc_id)
+            _reconnect_count += 1
+            delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
+            print(f"  {YLW}> Connection closed. Reconnecting in {delay}s (attempt {_reconnect_count}/{MAX_RECONNECT_ATTEMPTS})...{RST}")
+            active_contract = None
+            reset_l_state()
+            await asyncio.sleep(delay)
+        except (websockets.exceptions.ConnectionClosed,
+                websockets.exceptions.ConnectionClosedError,
+                ConnectionError, OSError) as e:
+            _reconnect_count += 1
+            delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
+            print(f"  {RED}X Connection error: {e}{RST}")
+            print(f"  {YLW}> Reconnecting in {delay}s (attempt {_reconnect_count}/{MAX_RECONNECT_ATTEMPTS})...{RST}")
+            active_contract = None
+            reset_l_state()
+            await asyncio.sleep(delay)
         except Exception as e:
-            print(f"  {RED}X PAT auth error: {e}{RST}")
-            return
-
-    if not WS_URL:
-        print(f"  {RED}X Could not obtain WebSocket URL{RST}")
-        return
-
-    print(f"  {CYN}>{RST} Connecting to Deriv WebSocket...")
-    async with websockets.connect(WS_URL) as ws:
-        if ("binaryws.com" in WS_URL or "otp" not in WS_URL) and PAT_TOKEN:
-            await ws.send(json.dumps({"authorize": PAT_TOKEN}))
-            auth_resp = json.loads(await ws.recv())
-            if "error" in auth_resp:
-                print(f"  {RED}X Auth failed: {auth_resp['error']}{RST}")
-                return
-            print(f"  {GRN}+{RST} Authenticated")
-
-        await ws.send(json.dumps({"ticks": SYMBOL, "subscribe": 1}))
-        await ws.send(json.dumps({"balance": 1, "subscribe": 1}))
-        print(f"  {GRN}+{RST} Subscribed to {SYMBOL}")
-        print(f"  {DIM}{'-'*56}{RST}")
-        print(f"  {DIM}Watching for L-shape signals...{RST}")
-        print(f"  {DIM}{'-'*56}{RST}")
-        print()
-
-        last_trade_time = 0
-
-        async for msg in ws:
-            data = json.loads(msg)
-
-            if data.get("msg_type") == "tick":
-                tick = data.get("tick", {})
-                if tick:
-                    result = await process_tick(ws, tick, last_trade_time)
-                    if isinstance(result, (int, float)):
-                        last_trade_time = result
-
-            elif data.get("msg_type") == "proposal":
-                contract = data.get("proposal", {})
-                ptype = contract.get("contract_type", "?")
-                payout = contract.get("payout", "?")
-                cost = contract.get("ask_price", "?")
-                print(f"  {YLW}Proposal: {ptype} | Cost: ${cost} | Payout: ${payout}{RST}")
-
-            elif data.get("msg_type") == "buy":
-                buy = data.get("buy", {})
-                if "error" in data:
-                    print(f"  {RED}X BUY ERROR: {data['error']}{RST}")
-                    active_contract = None
-                elif buy:
-                    cid = buy.get("contract_id", "?")
-                    cost = buy.get("buy_price", "?")
-                    payout = buy.get("payout", "?")
-                    direction = active_contract["direction"] if active_contract else "?"
-                    print_trade_placed(cid, direction, cost, payout)
-                    if active_contract:
-                        active_contract["contract_id"] = cid
-                    await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": cid}))
-
-            elif data.get("msg_type") == "proposal_open_contract":
-                poc = data.get("proposal_open_contract", {})
-                if poc:
-                    status = poc.get("status", "")
-                    profit = poc.get("profit", 0)
-                    entry = poc.get("entry_tick", 0)
-                    exit_p = poc.get("exit_tick", 0)
-                    cur = poc.get("current_tick", 0)
-                    total = poc.get("tick_count", DURATION)
-                    cid = poc.get("contract_id", "?")
-
-                    if status in ("expired", "sold"):
-                        direction = active_contract["direction"] if active_contract else "?"
-                        entry_price = active_contract["entry_price"] if active_contract else entry
-                        print_trade_result(status, profit, entry_price, exit_p, direction, cid)
-                        active_contract = None
-                        last_trade_time = time.time()
-                    elif status == "open" and total:
-                        direction = active_contract["direction"] if active_contract else "?"
-                        barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
-                        print_trade_progress(cur, total, entry, barrier)
-
-            elif data.get("msg_type") == "balance":
-                bal = data.get("balance", {})
-                amount = bal.get("balance", "?")
-                print_balance(amount)
-
-            elif data.get("msg_type") == "ping":
-                await ws.send(json.dumps({"pong": 1}))
-
-
+            print(f"  {RED}X Unexpected error: {e}{RST}")
+            import traceback
+            traceback.print_exc()
+            _reconnect_count += 1
+            delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
+            print(f"  {YLW}> Reconnecting in {delay}s...{RST}")
+            active_contract = None
+            reset_l_state()
+            await asyncio.sleep(delay)
+    print(f"  {RED}X Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) reached. Exiting.{RST}")
 if __name__ == "__main__":
     try:
         asyncio.run(trading_loop())
