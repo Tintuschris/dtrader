@@ -108,6 +108,7 @@ tick_history = deque(maxlen=60)
 stats = {"trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0, "balance": 0.0}
 active_contract = None
 pending_proposal = None  # {proposal_id, direction, barrier, entry_price}
+_active_contract_id = None  # Persists across reconnects for POC re-subscription
 _tick_count = 0
 _in_cooldown = False
 _reconnect_count = 0
@@ -173,6 +174,15 @@ def reset_l_state():
     _l_flat_count = 0
     _l_flat_val_sum = 0.0
     _l_direction = None
+
+
+def reset_active_contract():
+    """Clear active contract and pending proposal, saving contract_id for re-subscription."""
+    global active_contract, pending_proposal, _active_contract_id
+    if active_contract and active_contract.get("contract_id"):
+        _active_contract_id = active_contract["contract_id"]
+    active_contract = None
+    pending_proposal = None
 
 
 def detect_l_shape(srsi_now, srsi_prev):
@@ -627,6 +637,7 @@ async def place_trade(ws, direction, barrier):
         "underlying_symbol": SYMBOL,
     }
     pending_proposal = {"direction": direction, "barrier": barrier, "entry_price": None}
+    print(f"  {DIM}[PROPOSAL] amount={STAKE} type={contract_type} barrier={barrier} symbol={SYMBOL}{RST}")
     await ws.send(json.dumps(proposal_req))
 # ============ TICK PROCESSING ============
 
@@ -733,6 +744,10 @@ async def subscribe_ws(ws):
     await ws.send(json.dumps({"ticks": SYMBOL, "subscribe": 1}))
     await ws.send(json.dumps({"balance": 1, "subscribe": 1}))
     print(f"  {GRN}+{RST} Subscribed to {SYMBOL}")
+    # Re-subscribe to active contract POC if we have one
+    if _active_contract_id:
+        print(f"  {YLW}> Re-subscribing to active contract {_active_contract_id}...{RST}")
+        await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": _active_contract_id}))
     print(f"  {DIM}{"-"*60}{RST}")
     print(f"  {DIM}Watching for L-shape signals on RAW StochRSI...{RST}")
     print(f"  {DIM}{"-"*60}{RST}")
@@ -753,23 +768,22 @@ async def handle_message(ws, data, last_trade_time):
         prop = data.get("proposal", {})
         if "error" in data:
             print(f"  {RED}X PROPOSAL ERROR: {data["error"]}{RST}")
-            pending_proposal = None
-            active_contract = None
+            reset_active_contract()
         elif prop and pending_proposal:
             pid = prop.get("id")
             if pid:
                 buy_req = {"buy": pid, "price": STAKE}
+                print(f"  {DIM}[BUY] proposal={pid} price={STAKE}{RST}")
                 pending_proposal["entry_price"] = prop.get("spot", active_contract["entry_price"] if active_contract else 0)
                 await ws.send(json.dumps(buy_req))
             else:
                 print(f"  {RED}X No proposal_id in response{RST}")
-                pending_proposal = None
-                active_contract = None
+                reset_active_contract()
     elif data.get("msg_type") == "buy":
         buy = data.get("buy", {})
         if "error" in data:
             print(f"  {RED}X BUY ERROR: {data["error"]}{RST}")
-            active_contract = None
+            reset_active_contract()
         elif buy:
             cid = buy.get("contract_id", "?")
             cost = buy.get("buy_price", "?")
@@ -794,11 +808,16 @@ async def handle_message(ws, data, last_trade_time):
             cid = poc.get("contract_id", "?")
             is_sold = status in ("expired", "sold", "won", "lost") or poc.get("is_sold") or poc.get("is_expired")
             if is_sold:
-                direction = active_contract["direction"] if active_contract else "?"
-                entry_price = active_contract["entry_price"] if active_contract else entry
-                barrier_val = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
+                direction = "?"
+                entry_price = entry
+                if active_contract:
+                    direction = active_contract["direction"]
+                    entry_price = active_contract["entry_price"]
+                barrier_val = BARRIER_HIGHER if direction == "higher" else (BARRIER_LOWER if direction == "lower" else "0.23")
+                print(f"  {DIM}[POC] status={status} profit={profit} cid={cid}{RST}")
                 print_trade_result_analyzed(status, profit, entry_price, exit_p, direction, cid, barrier_val, poc)
-                active_contract = None
+                reset_active_contract()
+                _active_contract_id = None
                 last_trade_time = time.time()
             elif status == "open" and total:
                 direction = active_contract["direction"] if active_contract else "?"
@@ -869,7 +888,7 @@ async def trading_loop():
             _reconnect_count += 1
             delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
             print(f"  {YLW}> Connection closed. Reconnecting in {delay}s (attempt {_reconnect_count}/{MAX_RECONNECT_ATTEMPTS})...{RST}")
-            active_contract = None
+            reset_active_contract()
             reset_l_state()
             await asyncio.sleep(delay)
         except (websockets.exceptions.ConnectionClosed,
@@ -879,7 +898,7 @@ async def trading_loop():
             delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
             print(f"  {RED}X Connection error: {e}{RST}")
             print(f"  {YLW}> Reconnecting in {delay}s (attempt {_reconnect_count}/{MAX_RECONNECT_ATTEMPTS})...{RST}")
-            active_contract = None
+            reset_active_contract()
             reset_l_state()
             await asyncio.sleep(delay)
         except Exception as e:
@@ -889,7 +908,7 @@ async def trading_loop():
             _reconnect_count += 1
             delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
             print(f"  {YLW}> Reconnecting in {delay}s...{RST}")
-            active_contract = None
+            reset_active_contract()
             reset_l_state()
             await asyncio.sleep(delay)
     print(f"  {RED}X Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) reached. Exiting.{RST}")
