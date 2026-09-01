@@ -668,6 +668,7 @@ async def subscribe_ws(ws):
 
 
 async def handle_message(ws, data, last_trade_time):
+    global pending_proposal
     global active_contract
     if data.get("msg_type") == "tick":
         tick = data.get("tick", {})
