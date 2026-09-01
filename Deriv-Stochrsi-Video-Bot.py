@@ -542,7 +542,6 @@ async def place_trade(ws, direction, barrier):
         "buy": 1,
         "price": STAKE,
         "parameters": {
-            "symbol": SYMBOL,
             "amount": STAKE,
             "basis": "stake",
             "contract_type": contract_type,
