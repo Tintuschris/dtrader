@@ -399,6 +399,10 @@ def print_trade_placed(contract_id, direction, cost, payout):
 
 
 def print_trade_progress(current, total, entry_price, barrier):
+    try: current = int(current)
+    except Exception: current = 0
+    try: total = int(total)
+    except Exception: total = 1
     pct = current / total if total > 0 else 0
     bar_w = 20
     filled = int(pct * bar_w)
