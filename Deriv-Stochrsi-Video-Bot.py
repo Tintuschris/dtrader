@@ -107,6 +107,7 @@ tick_history = deque(maxlen=60)
 # Stats
 stats = {"trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0, "balance": 0.0}
 active_contract = None
+pending_proposal = None  # {proposal_id, direction, barrier, entry_price}
 _tick_count = 0
 _in_cooldown = False
 _reconnect_count = 0
@@ -165,7 +166,8 @@ def is_flat(values, lookback, threshold):
 
 
 def reset_l_state():
-    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction
+    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction, pending_proposal
+    pending_proposal = None
     _l_phase = None
     _l_slope_start_val = 0.0
     _l_flat_count = 0
@@ -537,22 +539,22 @@ async def get_otp_url(account_id):
 # ============ TRADE PLACEMENT ============
 
 async def place_trade(ws, direction, barrier):
+    global pending_proposal
     contract_type = "CALL" if direction == "higher" else "PUT"
-    proposal = {
-        "buy": 1,
-        "price": STAKE,
-        "parameters": {
-            "underlying_symbol": SYMBOL,
-            "amount": STAKE,
-            "basis": "stake",
-            "contract_type": contract_type,
-            "currency": CURRENCY,
-            "duration": DURATION,
-            "duration_unit": DURATION_UNIT,
-            "barrier": barrier,
-        },
+    proposal_req = {
+        "proposal": 1,
+        "amount": STAKE,
+        "basis": "stake",
+        "contract_type": contract_type,
+        "currency": CURRENCY,
+        "duration": DURATION,
+        "duration_unit": DURATION_UNIT,
+        "barrier": barrier,
+        "underlying_symbol": SYMBOL,
+        "subscribe": 1,
     }
-    await ws.send(json.dumps(proposal))
+    pending_proposal = {"direction": direction, "barrier": barrier, "entry_price": None}
+    await ws.send(json.dumps(proposal_req))
 # ============ TICK PROCESSING ============
 
 async def process_tick(ws, tick_data, last_trade_time):
@@ -673,6 +675,22 @@ async def handle_message(ws, data, last_trade_time):
             result = await process_tick(ws, tick, last_trade_time)
             if isinstance(result, (int, float)):
                 return result
+    elif data.get("msg_type") == "proposal":
+        prop = data.get("proposal", {})
+        if "error" in data:
+            print(f"  {RED}X PROPOSAL ERROR: {data["error"]}{RST}")
+            pending_proposal = None
+            active_contract = None
+        elif prop and pending_proposal:
+            pid = prop.get("proposal_id")
+            if pid:
+                buy_req = {"buy": pid, "price": STAKE}
+                pending_proposal["entry_price"] = active_contract["entry_price"] if active_contract else 0
+                await ws.send(json.dumps(buy_req))
+            else:
+                print(f"  {RED}X No proposal_id in response{RST}")
+                pending_proposal = None
+                active_contract = None
     elif data.get("msg_type") == "buy":
         buy = data.get("buy", {})
         if "error" in data:
@@ -682,10 +700,13 @@ async def handle_message(ws, data, last_trade_time):
             cid = buy.get("contract_id", "?")
             cost = buy.get("buy_price", "?")
             payout = buy.get("payout", "?")
-            direction = active_contract["direction"] if active_contract else "?"
-            print_trade_placed(cid, direction, cost, payout)
+            direction = active_contract["direction"] if active_contract else (pending_proposal["direction"] if pending_proposal else "?")
             if active_contract:
                 active_contract["contract_id"] = cid
+            elif pending_proposal:
+                active_contract = {"direction": direction, "entry_price": pending_proposal.get("entry_price", 0), "contract_id": cid}
+            pending_proposal = None
+            print_trade_placed(cid, direction, cost, payout)
             await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": cid}))
     elif data.get("msg_type") == "proposal_open_contract":
         poc = data.get("proposal_open_contract", {})
