@@ -39,6 +39,34 @@ parser.add_argument("--replay", metavar="FILE",
                     help="Replay recorded ticks for backtesting")
 parser.add_argument("--speed", type=float, default=1.0,
                     help="Replay speed (1.0=real-time, 10=10x)")
+# Filter threshold args
+parser.add_argument("--max-loss-streak", type=int,
+                    default=int(os.environ.get("FILTER_LOSS_STREAK_MAX", "2")),
+                    help="Max consecutive losses before circuit breaker (default: 2)")
+parser.add_argument("--rsi-long-max", type=float,
+                    default=float(os.environ.get("FILTER_RSI_LONG_MAX", "35")),
+                    help="RSI must be below this for LONG signals (default: 35)")
+parser.add_argument("--rsi-short-min", type=float,
+                    default=float(os.environ.get("FILTER_RSI_SHORT_MIN", "75")),
+                    help="RSI must be above this for SHORT signals (default: 75)")
+parser.add_argument("--srsi-short-peak", type=float,
+                    default=float(os.environ.get("FILTER_SRSI_SHORT_PEAK_MIN", "0.90")),
+                    help="SRSI peak must be above this for SHORT signals (default: 0.90)")
+parser.add_argument("--srsi-long-peak", type=float,
+                    default=float(os.environ.get("FILTER_SRSI_LONG_PEAK_MAX", "0.10")),
+                    help="SRSI trough must be below this for LONG signals (default: 0.10)")
+parser.add_argument("--reversal-ticks", type=int,
+                    default=int(os.environ.get("FILTER_REVERSAL_TICKS", "3")),
+                    help="Consecutive ticks needed for reversal confirmation (default: 3)")
+parser.add_argument("--adaptive-flat-max", type=int,
+                    default=int(os.environ.get("FILTER_ADAPTIVE_FLAT_MAX", "8")),
+                    help="Flat duration threshold for adaptive cap (default: 8)")
+parser.add_argument("--adaptive-breakout-min", type=float,
+                    default=float(os.environ.get("FILTER_ADAPTIVE_BREAKOUT_MIN", "0.20")),
+                    help="Min breakout when flat exceeds adaptive cap (default: 0.20)")
+parser.add_argument("--price-dir-min", type=int,
+                    default=int(os.environ.get("FILTER_PRICE_DIR_MIN", "3")),
+                    help="Min ticks in trade direction (of last 5) (default: 3)")
 args = parser.parse_args()
 
 
@@ -73,6 +101,17 @@ RAW_FLAT_THRESHOLD = 0.08
 RAW_BREAKOUT_MIN = 0.15
 RAW_SLOPE_MIN = -0.15
 RAW_SLOPE_MAX = 0.15
+
+# === Filter thresholds (configurable via CLI or env vars) ===
+FILTER_LOSS_STREAK_MAX = args.max_loss_streak
+FILTER_RSI_LONG_MAX = args.rsi_long_max
+FILTER_RSI_SHORT_MIN = args.rsi_short_min
+FILTER_SRSI_SHORT_PEAK_MIN = args.srsi_short_peak
+FILTER_SRSI_LONG_PEAK_MAX = args.srsi_long_peak
+FILTER_REVERSAL_TICKS = args.reversal_ticks
+FILTER_ADAPTIVE_FLAT_MAX = args.adaptive_flat_max
+FILTER_ADAPTIVE_BREAKOUT_MIN = args.adaptive_breakout_min
+FILTER_PRICE_DIR_MIN = args.price_dir_min
 
 # Reconnection
 MAX_RECONNECT_ATTEMPTS = 10
@@ -786,51 +825,51 @@ async def process_tick(ws, tick_data, last_trade_time):
         delta = srsi_now - srsi_prev
 
         # === FILTER 1: LOSS-STREAK CIRCUIT BREAKER ===
-        if _consecutive_losses >= 2:
-            print(f"  {YLW}! SKIPPED: Loss streak ({_consecutive_losses}L) - cooling down{RST}")
+        if _consecutive_losses >= FILTER_LOSS_STREAK_MAX:
+            print(f"  {YLW}! SKIPPED: Loss streak ({_consecutive_losses}L) >= {FILTER_LOSS_STREAK_MAX} - cooling down{RST}")
             reset_l_state()
             return now
 
         # === FILTER 2: RSI TREND ALIGNMENT ===
         rsi_now = rsi_vals[-1] if rsi_vals else 50
-        if direction == "higher" and rsi_now > 35:
-            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > 35, not strongly oversold{RST}")
+        if direction == "higher" and rsi_now > FILTER_RSI_LONG_MAX:
+            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > {FILTER_RSI_LONG_MAX}, not strongly oversold{RST}")
             reset_l_state()
             return now
-        if direction == "lower" and rsi_now < 75:
-            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < 75, not strongly overbought{RST}")
+        if direction == "lower" and rsi_now < FILTER_RSI_SHORT_MIN:
+            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < {FILTER_RSI_SHORT_MIN}, not strongly overbought{RST}")
             reset_l_state()
             return now
 
         # === FILTER 3: SRSI PEAK CHECK ===
-        if direction == "lower" and _l_flat_extreme < 0.90:
-            print(f"  {YLW}! SKIPPED: SRSI max={_l_flat_extreme:.3f} < 0.90, not high enough overbought{RST}")
+        if direction == "lower" and _l_flat_extreme < FILTER_SRSI_SHORT_PEAK_MIN:
+            print(f"  {YLW}! SKIPPED: SRSI max={_l_flat_extreme:.3f} < {FILTER_SRSI_SHORT_PEAK_MIN:.2f}, not high enough overbought{RST}")
             reset_l_state()
             return now
-        if direction == "higher" and _l_flat_extreme > 0.10:
-            print(f"  {YLW}! SKIPPED: SRSI min={_l_flat_extreme:.3f} > 0.10, not deep enough oversold{RST}")
+        if direction == "higher" and _l_flat_extreme > FILTER_SRSI_LONG_PEAK_MAX:
+            print(f"  {YLW}! SKIPPED: SRSI min={_l_flat_extreme:.3f} > {FILTER_SRSI_LONG_PEAK_MAX:.2f}, not deep enough oversold{RST}")
             reset_l_state()
             return now
 
         # === FILTER 4: 3-TICK REVERSAL CONFIRMATION ===
-        if len(tick_history) >= 4:
-            t1, t2, t3, t4 = tick_history[-4], tick_history[-3], tick_history[-2], tick_history[-1]
+        if len(tick_history) >= FILTER_REVERSAL_TICKS + 1:
+            ticks = list(tick_history)[-(FILTER_REVERSAL_TICKS+1):]
             if direction == "higher":
-                if not (t4 > t3 and t3 > t2):
-                    print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 consecutive UP ticks){RST}")
+                if not all(ticks[i] > ticks[i-1] for i in range(1, len(ticks))):
+                    print(f"  {YLW}! SKIPPED: No reversal confirmation (need {FILTER_REVERSAL_TICKS} consecutive UP ticks){RST}")
                     reset_l_state()
                     return now
             if direction == "lower":
-                if not (t4 < t3 and t3 < t2):
-                    print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 consecutive DOWN ticks){RST}")
+                if not all(ticks[i] < ticks[i-1] for i in range(1, len(ticks))):
+                    print(f"  {YLW}! SKIPPED: No reversal confirmation (need {FILTER_REVERSAL_TICKS} consecutive DOWN ticks){RST}")
                     reset_l_state()
                     return now
 
         # === FILTER 5: ADAPTIVE FLAT DURATION CAP ===
         flat_dur = _l_flat_count
         breakout_mag = abs(delta)
-        if flat_dur > 8 and breakout_mag < 0.20:
-            print(f"  {YLW}! SKIPPED: Flat {flat_dur}t too long, breakout {breakout_mag:.3f} < 0.20{RST}")
+        if flat_dur > FILTER_ADAPTIVE_FLAT_MAX and breakout_mag < FILTER_ADAPTIVE_BREAKOUT_MIN:
+            print(f"  {YLW}! SKIPPED: Flat {flat_dur}t > {FILTER_ADAPTIVE_FLAT_MAX}, breakout {breakout_mag:.3f} < {FILTER_ADAPTIVE_BREAKOUT_MIN}{RST}")
             reset_l_state()
             return now
 
@@ -839,12 +878,12 @@ async def process_tick(ws, tick_data, last_trade_time):
             recent = list(tick_history)[-6:]
             up_count = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i-1])
             dn_count = sum(1 for i in range(1, len(recent)) if recent[i] < recent[i-1])
-            if direction == "higher" and up_count < 3:
-                print(f"  {YLW}! SKIPPED: Price momentum bearish ({up_count}UP/{dn_count}DN in last 5){RST}")
+            if direction == "higher" and up_count < FILTER_PRICE_DIR_MIN:
+                print(f"  {YLW}! SKIPPED: Price momentum bearish ({up_count}UP/{dn_count}DN, need {FILTER_PRICE_DIR_MIN}){RST}")
                 reset_l_state()
                 return now
-            if direction == "lower" and dn_count < 3:
-                print(f"  {YLW}! SKIPPED: Price momentum bullish ({up_count}UP/{dn_count}DN in last 5){RST}")
+            if direction == "lower" and dn_count < FILTER_PRICE_DIR_MIN:
+                print(f"  {YLW}! SKIPPED: Price momentum bullish ({up_count}UP/{dn_count}DN, need {FILTER_PRICE_DIR_MIN}){RST}")
                 reset_l_state()
                 return now
 
