@@ -120,6 +120,9 @@ _l_slope_start_val = 0.0
 _l_flat_count = 0
 _l_flat_val_sum = 0.0
 _l_direction = None
+_consecutive_losses = 0
+_trade_log = []
+_last_displayed_cid = None
 
 
 # ============ INDICATOR MATH ============
@@ -693,6 +696,36 @@ async def process_tick(ws, tick_data, last_trade_time):
     result = detect_l_shape(srsi_now, srsi_prev)
     if result:
         direction, reason = result
+
+        # === LOSS-STREAK CIRCUIT BREAKER ===
+        if _consecutive_losses >= 2:
+            print(f"  {YLW}! SKIPPED: Loss streak ({_consecutive_losses}L) - cooling down{RST}")
+            reset_l_state()
+            return now
+
+        # === RSI TREND ALIGNMENT ===
+        rsi_now = rsi_vals[-1] if rsi_vals else 50
+        if direction == "higher" and rsi_now > 40:
+            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > 40, not strongly oversold{RST}")
+            reset_l_state()
+            return now
+        if direction == "lower" and rsi_now < 60:
+            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < 60, not strongly overbought{RST}")
+            reset_l_state()
+            return now
+
+        # === REVERSAL CONFIRMATION (2-tick) ===
+        if len(tick_history) >= 3:
+            t1, t2, t3 = tick_history[-3], tick_history[-2], tick_history[-1]
+            if direction == "higher" and not (t3 > t2 or t2 > t1):
+                print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 UP ticks){RST}")
+                reset_l_state()
+                return now
+            if direction == "lower" and not (t3 < t2 or t2 < t1):
+                print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 DOWN ticks){RST}")
+                reset_l_state()
+                return now
+
         print_signal(direction, srsi_now, reason)
         barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
         active_contract = {"direction": direction, "entry_price": price}
@@ -815,7 +848,7 @@ async def handle_message(ws, data, last_trade_time):
             total = poc.get("tick_count", DURATION)
             cid = poc.get("contract_id", "?")
             is_sold = status in ("expired", "sold", "won", "lost") or poc.get("is_sold") == 1 or poc.get("is_expired") == 1
-            if is_sold:
+            if is_sold and poc.get("exit_spot") is not None and _last_displayed_cid != cid:
                 direction = "?"
                 entry_price = entry
                 if active_contract:
