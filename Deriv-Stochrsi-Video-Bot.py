@@ -540,7 +540,7 @@ async def get_otp_url(account_id):
 
 async def place_trade(ws, direction, barrier):
     global pending_proposal
-    contract_type = "CALL" if direction == "higher" else "PUT"
+    contract_type = "HIGHER" if direction == "higher" else "LOWER"
     proposal_req = {
         "proposal": 1,
         "amount": STAKE,
