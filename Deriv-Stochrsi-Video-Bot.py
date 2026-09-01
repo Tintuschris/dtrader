@@ -64,6 +64,13 @@ parser.add_argument("--adaptive-flat-max", type=int,
 parser.add_argument("--adaptive-breakout-min", type=float,
                     default=float(os.environ.get("FILTER_ADAPTIVE_BREAKOUT_MIN", "0.20")),
                     help="Min breakout when flat exceeds adaptive cap (default: 0.20)")
+parser.add_argument("--entry-delay", type=int,
+                    default=int(os.environ.get("FILTER_ENTRY_DELAY", "2")),
+                    help="Ticks to wait for confirmation (default: 2)")
+parser.add_argument("--barrier-strong", default=os.environ.get("BARRIER_STRONG", "-0.20"),
+                    help="Barrier for strong signals (default: -0.20)")
+parser.add_argument("--barrier-weak", default=os.environ.get("BARRIER_WEAK", "-0.30"),
+                    help="Barrier for weaker signals (default: -0.30)")
 parser.add_argument("--price-dir-min", type=int,
                     default=int(os.environ.get("FILTER_PRICE_DIR_MIN", "3")),
                     help="Min ticks in trade direction (of last 5) (default: 3)")
@@ -81,6 +88,8 @@ STAKE = args.stake
 CURRENCY = "USD"
 BARRIER_HIGHER = args.barrier_higher
 BARRIER_LOWER = args.barrier_lower
+BARRIER_STRONG = args.barrier_strong
+BARRIER_WEAK = args.barrier_weak
 DURATION = args.duration
 DURATION_UNIT = "t"
 RSI_PERIOD = 14
@@ -112,6 +121,7 @@ FILTER_REVERSAL_TICKS = args.reversal_ticks
 FILTER_ADAPTIVE_FLAT_MAX = args.adaptive_flat_max
 FILTER_ADAPTIVE_BREAKOUT_MIN = args.adaptive_breakout_min
 FILTER_PRICE_DIR_MIN = args.price_dir_min
+FILTER_ENTRY_DELAY = args.entry_delay
 
 # Reconnection
 MAX_RECONNECT_ATTEMPTS = 10
@@ -163,6 +173,7 @@ _l_flat_extreme = 0.0
 _consecutive_losses = 0
 _trade_log = []
 _last_displayed_cid = None
+_pending_signal = None
 
 
 # ============ INDICATOR MATH ============
@@ -595,12 +606,25 @@ TRADE_LOG_FILE = "trade_log.json"
 
 
 def save_trade_log():
-    """Save trade log to disk."""
+    """Save trade log with summary stats."""
     if not _trade_log:
         return
     try:
+        done = [e for e in _trade_log if e["result"]["status"] in ("won","lost")]
+        w = sum(1 for e in done if e["result"]["status"]=="won")
+        l = sum(1 for e in done if e["result"]["status"]=="lost")
+        t = w + l
+        wr = (w/t*100) if t else 0
+        pnl = sum(float(e["result"].get("profit",0) or 0) for e in done)
+        sw,sl,bw,bl = 0,0,0,0
+        for e in done:
+            if e["result"]["status"]=="won": sw+=1;sl=0;bw=max(bw,sw)
+            else: sl+=1;sw=0;bl=max(bl,sl)
+        summary = {"total_trades":t,"wins":w,"losses":l,"win_rate":round(wr,1),
+            "pnl":round(pnl,2),"best_win_streak":bw,"best_loss_streak":bl,
+            "current_streak":sw if sw else -sl,"last_updated":time.strftime("%Y-%m-%d %H:%M:%S")}
         with open(TRADE_LOG_FILE, "w") as f:
-            json.dump(_trade_log, f, indent=2)
+            json.dump({"summary":summary,"trades":_trade_log}, f, indent=2)
     except Exception as e:
         print(f"  {RED}X Failed to save trade log: {e}{RST}")
 
@@ -805,6 +829,37 @@ async def process_tick(ws, tick_data, last_trade_time):
         return last_trade_time
 
 
+    # === ENTRY DELAY PROCESSING ===
+    global _pending_signal
+    if _pending_signal is not None:
+        _pending_signal["delay_count"] += 1
+        ps = _pending_signal
+        ts = list(tick_history)[-3:] if len(tick_history) >= 3 else list(tick_history)
+        if len(ts) >= 2:
+            t1, t2 = ts[-2], ts[-1]
+            if ps["direction"] == "higher" and t2 <= t1:
+                print(f"  {YLW}[DELAY] Tick {ps["delay_count"]}/{FILTER_ENTRY_DELAY}: NOT confirming UP ({t1:.4f}->{t2:.4f}) ABORT{RST}")
+                _pending_signal = None
+                return last_trade_time
+            if ps["direction"] == "lower" and t2 >= t1:
+                print(f"  {YLW}[DELAY] Tick {ps["delay_count"]}/{FILTER_ENTRY_DELAY}: NOT confirming DOWN ({t1:.4f}->{t2:.4f}) ABORT{RST}")
+                _pending_signal = None
+                return last_trade_time
+            print(f"  {GRN}[DELAY] Tick {ps["delay_count"]}/{FILTER_ENTRY_DELAY}: confirming {ps["direction"].upper()} ({t1:.4f}->{t2:.4f}){RST}")
+        if ps["delay_count"] >= FILTER_ENTRY_DELAY:
+            barrier = _calc_barrier(ps["direction"], ps["rsi"])
+            active_contract = {"direction": ps["direction"], "entry_price": ps["entry_price"]}
+            flat_avg = _l_flat_val_sum / _l_flat_count if _l_flat_count > 0 else 0
+            log_trade_signal(ps["direction"], ps["srsi"], ps["rsi"], ps["flat_count"], flat_avg, abs(ps["delta"]), ps["reason"], ps["entry_price"], barrier)
+            print(f"  {GRN}[DELAY] Confirmed! Placing {ps["direction"]} trade barrier={barrier}{RST}")
+            if DRY_RUN:
+                print(f"  {DIM}[DRY RUN] Would place {ps["direction"]} trade{RST}")
+            else:
+                await place_trade(ws, ps["direction"], barrier)
+            _pending_signal = None
+            return last_trade_time
+        return last_trade_time
+
     # Cooldown
     now = time.time()
     if now - last_trade_time < (DURATION + 2):
@@ -888,9 +943,13 @@ async def process_tick(ws, tick_data, last_trade_time):
                 return now
 
         print_signal(direction, srsi_now, reason)
-        barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
+        if FILTER_ENTRY_DELAY > 0:
+            _pending_signal = {"direction": direction, "srsi": srsi_now, "rsi": rsi_now,
+                "flat_count": _l_flat_count, "delta": delta, "reason": reason, "entry_price": price, "delay_count": 0}
+            print(f"  {DIM}[DELAY] Signal queued, waiting {FILTER_ENTRY_DELAY} ticks for confirmation...{RST}")
+            return now
+        barrier = _calc_barrier(direction, rsi_now)
         active_contract = {"direction": direction, "entry_price": price}
-        # Log the trade signal with full context
         flat_avg = _l_flat_val_sum / _l_flat_count if _l_flat_count > 0 else 0
         log_trade_signal(direction, srsi_now, rsi_now, _l_flat_count, flat_avg, abs(delta), reason, price, barrier)
         if DRY_RUN:
@@ -901,6 +960,15 @@ async def process_tick(ws, tick_data, last_trade_time):
 
     return last_trade_time
 
+
+
+def _calc_barrier(direction, rsi):
+    strong_threshold = 25 if direction == "higher" else 85
+    if direction == "higher":
+        return BARRIER_STRONG if rsi <= strong_threshold else BARRIER_WEAK
+    else:
+        bv = BARRIER_STRONG if rsi >= strong_threshold else BARRIER_WEAK
+        return "+" + bv.lstrip("-")
 
 # ============ TRADING LOOP ============
 
