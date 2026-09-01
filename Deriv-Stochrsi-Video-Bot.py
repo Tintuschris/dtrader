@@ -443,6 +443,76 @@ def print_balance(amount):
 
 
 
+
+def print_trade_result_analyzed(status, profit, entry_price, exit_price, direction, contract_id, barrier_val, poc):
+    is_win = profit >= 0
+    rc = GRN if is_win else RED
+    txt = "WIN" if is_win else "LOSS"
+
+    stats["trades"] += 1
+    stats["total_pnl"] += profit
+    if is_win:
+        stats["wins"] += 1
+    else:
+        stats["losses"] += 1
+    wr = (stats["wins"] / stats["trades"] * 100) if stats["trades"] > 0 else 0
+
+    entry_spot = poc.get("entry_tick", entry_price)
+    exit_spot = poc.get("exit_tick", exit_price)
+    if isinstance(entry_spot, dict):
+        entry_spot = entry_spot.get("epoch", entry_price)
+    if isinstance(exit_spot, dict):
+        exit_spot = exit_spot.get("epoch", exit_price)
+    try:
+        entry_spot = float(entry_spot)
+    except Exception:
+        entry_spot = entry_price
+    try:
+        exit_spot = float(exit_spot)
+    except Exception:
+        exit_spot = exit_price
+
+    bv = float(barrier_val)
+    if direction == "higher":
+        barrier_level = entry_spot + bv
+        won = exit_spot > barrier_level
+        condition = "Exit ({:.4f}) > Barrier ({:.4f})".format(exit_spot, barrier_level)
+    else:
+        barrier_level = entry_spot + bv
+        won = exit_spot < barrier_level
+        condition = "Exit ({:.4f}) < Barrier ({:.4f})".format(exit_spot, barrier_level)
+
+    diff = exit_spot - barrier_level
+    pct_diff = abs(diff) / entry_spot * 100 if entry_spot else 0
+
+    print()
+    print("  " + rc + "=" * 60 + RST)
+    print("  " + BLD + rc + "  TRADE " + txt + "  " + RST)
+    print("  " + rc + "=" * 60 + RST)
+    print("  " + DIM + "|" + RST + "  Contract:   " + BLD + str(contract_id) + RST)
+    print("  " + DIM + "|" + RST + "  Direction:  " + BLD + direction.upper() + RST)
+    print("  " + DIM + "|" + RST + "  Stake:      $" + str(STAKE))
+    try:
+        payout_val = float(poc.get("payout", 0))
+    except Exception:
+        payout_val = 0
+    print("  " + DIM + "|" + RST + "  Payout:     $" + "{:.2f}".format(payout_val))
+    print("  " + DIM + "|" + RST + "  Profit:     " + rc + BLD + "${:+.2f}".format(profit) + RST)
+    print("  " + DIM + "|" + RST + "  Balance:    " + BLD + "${:.2f}".format(stats["balance"]) + RST)
+    print("  " + DIM + "|" + RST)
+    print("  " + DIM + "|" + RST + "  " + BLD + "Trade Analysis:" + RST)
+    print("  " + DIM + "|" + RST + "  Entry spot:  " + "{:.4f}".format(entry_spot))
+    print("  " + DIM + "|" + RST + "  Exit spot:   " + "{:.4f}".format(exit_spot))
+    print("  " + DIM + "|" + RST + "  Barrier:     " + "{:.4f}".format(barrier_level) + " (" + str(barrier_val) + ")")
+    print("  " + DIM + "|" + RST + "  " + condition)
+    print("  " + DIM + "|" + RST + "  Gap:         " + rc + "{:+.4f}".format(diff) + " ({:.4f}%)".format(pct_diff) + RST)
+    if not won:
+        needed = abs(diff)
+        print("  " + DIM + "|" + RST + "  " + YLW + "Lost by:     " + "{:.4f}".format(needed) + " ({:.4f}%)".format(needed / entry_spot * 100) + RST)
+    print("  " + DIM + "|" + RST)
+    print("  " + DIM + "|" + RST + "  Session:  {} trades  |  ".format(stats["trades"]) + GRN + "{}W".format(stats["wins"]) + RST + " " + RED + "{}L".format(stats["losses"]) + RST + "  |  WR: " + BLD + "{:.0f}%".format(wr) + RST + "  |  PnL: " + rc + "${:+.2f}".format(stats["total_pnl"]) + RST)
+    print("  " + rc + "=" * 60 + RST)
+
 def save_recording():
     if not RECORD_FILE or not _recorded_ticks:
         return
@@ -685,7 +755,7 @@ async def handle_message(ws, data, last_trade_time):
             pid = prop.get("id")
             if pid:
                 buy_req = {"buy": pid, "price": STAKE}
-                pending_proposal["entry_price"] = active_contract["entry_price"] if active_contract else 0
+                pending_proposal["entry_price"] = prop.get("spot", active_contract["entry_price"] if active_contract else 0)
                 await ws.send(json.dumps(buy_req))
             else:
                 print(f"  {RED}X No proposal_id in response{RST}")
@@ -715,19 +785,21 @@ async def handle_message(ws, data, last_trade_time):
             profit = poc.get("profit", 0)
             entry = poc.get("entry_tick", 0)
             exit_p = poc.get("exit_tick", 0)
-            cur = poc.get("current_tick", 0)
+            cur = poc.get("current_spot", poc.get("current_tick", 0))
             total = poc.get("tick_count", DURATION)
             cid = poc.get("contract_id", "?")
-            if status in ("expired", "sold"):
+            is_sold = status in ("expired", "sold") or poc.get("is_sold") or poc.get("is_expired")
+            if is_sold:
                 direction = active_contract["direction"] if active_contract else "?"
                 entry_price = active_contract["entry_price"] if active_contract else entry
-                print_trade_result(status, profit, entry_price, exit_p, direction, cid)
+                barrier_val = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
+                print_trade_result_analyzed(status, profit, entry_price, exit_p, direction, cid, barrier_val, poc)
                 active_contract = None
                 last_trade_time = time.time()
             elif status == "open" and total:
                 direction = active_contract["direction"] if active_contract else "?"
-                barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
-                print_trade_progress(cur, total, entry, barrier)
+                barrier_val = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
+                print_trade_progress(cur, total, entry, barrier_val)
     elif data.get("msg_type") == "balance":
         bal = data.get("balance", {})
         print_balance(bal.get("balance", "?"))
