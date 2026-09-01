@@ -551,7 +551,6 @@ async def place_trade(ws, direction, barrier):
         "duration_unit": DURATION_UNIT,
         "barrier": barrier,
         "underlying_symbol": SYMBOL,
-        "subscribe": 1,
     }
     pending_proposal = {"direction": direction, "barrier": barrier, "entry_price": None}
     await ws.send(json.dumps(proposal_req))
@@ -683,7 +682,7 @@ async def handle_message(ws, data, last_trade_time):
             pending_proposal = None
             active_contract = None
         elif prop and pending_proposal:
-            pid = prop.get("proposal_id")
+            pid = prop.get("id")
             if pid:
                 buy_req = {"buy": pid, "price": STAKE}
                 pending_proposal["entry_price"] = active_contract["entry_price"] if active_contract else 0
