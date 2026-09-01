@@ -792,8 +792,7 @@ async def handle_message(ws, data, last_trade_time):
             cur = poc.get("current_spot", poc.get("current_tick", 0))
             total = poc.get("tick_count", DURATION)
             cid = poc.get("contract_id", "?")
-            print(f"  {DIM}[POC] status={status} profit={profit} cid={cid}{RST}")
-            is_sold = status in ("expired", "sold") or poc.get("is_sold") or poc.get("is_expired")
+            is_sold = status in ("expired", "sold", "won", "lost") or poc.get("is_sold") or poc.get("is_expired")
             if is_sold:
                 direction = active_contract["direction"] if active_contract else "?"
                 entry_price = active_contract["entry_price"] if active_contract else entry
