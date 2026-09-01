@@ -70,7 +70,7 @@ RAW_LEVEL_LOW = 0.20
 RAW_LEVEL_HIGH = 0.80
 RAW_FLAT_LOOKBACK = 3
 RAW_FLAT_THRESHOLD = 0.08
-RAW_BREAKOUT_MIN = 0.10
+RAW_BREAKOUT_MIN = 0.15
 RAW_SLOPE_MIN = -0.15
 RAW_SLOPE_MAX = 0.15
 
@@ -120,6 +120,7 @@ _l_slope_start_val = 0.0
 _l_flat_count = 0
 _l_flat_val_sum = 0.0
 _l_direction = None
+_l_flat_extreme = 0.0
 _consecutive_losses = 0
 _trade_log = []
 _last_displayed_cid = None
@@ -170,13 +171,14 @@ def is_flat(values, lookback, threshold):
 
 
 def reset_l_state():
-    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction, pending_proposal
+    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction, _l_flat_extreme, pending_proposal
     pending_proposal = None
     _l_phase = None
     _l_slope_start_val = 0.0
     _l_flat_count = 0
     _l_flat_val_sum = 0.0
     _l_direction = None
+    _l_flat_extreme = 0.0
 
 
 def reset_active_contract():
@@ -189,7 +191,7 @@ def reset_active_contract():
 
 
 def detect_l_shape(srsi_now, srsi_prev):
-    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction
+    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction, _l_flat_extreme
     if srsi_now is None or srsi_prev is None:
         return None
     delta = srsi_now - srsi_prev
@@ -233,6 +235,9 @@ def detect_l_shape(srsi_now, srsi_prev):
         _l_flat_count += 1
         _l_flat_val_sum += srsi_now
         avg = _l_flat_val_sum / _l_flat_count
+        # Track how low SRSI goes during flat zone (deeper = better for LONG)
+        if _l_flat_extreme == 0.0 or srsi_now < _l_flat_extreme:
+            _l_flat_extreme = srsi_now
         if abs(srsi_now - avg) < RAW_FLAT_THRESHOLD and srsi_now <= RAW_LEVEL_LOW + 0.10:
             if _l_flat_count >= RAW_FLAT_LOOKBACK:
                 _l_phase = "ready_long"
@@ -245,6 +250,9 @@ def detect_l_shape(srsi_now, srsi_prev):
         _l_flat_count += 1
         _l_flat_val_sum += srsi_now
         avg = _l_flat_val_sum / _l_flat_count
+        # Track how high SRSI goes during flat zone (higher = better for SHORT)
+        if _l_flat_extreme == 0.0 or srsi_now > _l_flat_extreme:
+            _l_flat_extreme = srsi_now
         if abs(srsi_now - avg) < RAW_FLAT_THRESHOLD and srsi_now >= RAW_LEVEL_HIGH - 0.10:
             if _l_flat_count >= RAW_FLAT_LOOKBACK:
                 _l_phase = "ready_short"
@@ -475,8 +483,8 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
         stats["losses"] += 1
     wr = (stats["wins"] / stats["trades"] * 100) if stats["trades"] > 0 else 0
 
-    entry_spot = poc.get("entry_tick", entry_price)
-    exit_spot = poc.get("exit_tick", exit_price)
+    entry_spot = poc.get("entry_spot", poc.get("entry_tick", entry_price))
+    exit_spot = poc.get("exit_spot", poc.get("exit_tick", exit_price))
     if isinstance(entry_spot, dict):
         entry_spot = entry_spot.get("epoch", entry_price)
     if isinstance(exit_spot, dict):
@@ -696,33 +704,68 @@ async def process_tick(ws, tick_data, last_trade_time):
     result = detect_l_shape(srsi_now, srsi_prev)
     if result:
         direction, reason = result
+        delta = srsi_now - srsi_prev
 
-        # === LOSS-STREAK CIRCUIT BREAKER ===
+        # === FILTER 1: LOSS-STREAK CIRCUIT BREAKER ===
         if _consecutive_losses >= 2:
             print(f"  {YLW}! SKIPPED: Loss streak ({_consecutive_losses}L) - cooling down{RST}")
             reset_l_state()
             return now
 
-        # === RSI TREND ALIGNMENT ===
+        # === FILTER 2: RSI TREND ALIGNMENT ===
         rsi_now = rsi_vals[-1] if rsi_vals else 50
-        if direction == "higher" and rsi_now > 40:
-            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > 40, not strongly oversold{RST}")
+        if direction == "higher" and rsi_now > 35:
+            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > 35, not strongly oversold{RST}")
             reset_l_state()
             return now
-        if direction == "lower" and rsi_now < 60:
-            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < 60, not strongly overbought{RST}")
+        if direction == "lower" and rsi_now < 75:
+            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < 75, not strongly overbought{RST}")
             reset_l_state()
             return now
 
-        # === REVERSAL CONFIRMATION (2-tick) ===
-        if len(tick_history) >= 3:
-            t1, t2, t3 = tick_history[-3], tick_history[-2], tick_history[-1]
-            if direction == "higher" and not (t3 > t2 or t2 > t1):
-                print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 UP ticks){RST}")
+        # === FILTER 3: SRSI PEAK CHECK ===
+        if direction == "lower" and _l_flat_extreme < 0.90:
+            print(f"  {YLW}! SKIPPED: SRSI max={_l_flat_extreme:.3f} < 0.90, not high enough overbought{RST}")
+            reset_l_state()
+            return now
+        if direction == "higher" and _l_flat_extreme > 0.10:
+            print(f"  {YLW}! SKIPPED: SRSI min={_l_flat_extreme:.3f} > 0.10, not deep enough oversold{RST}")
+            reset_l_state()
+            return now
+
+        # === FILTER 4: 3-TICK REVERSAL CONFIRMATION ===
+        if len(tick_history) >= 4:
+            t1, t2, t3, t4 = tick_history[-4], tick_history[-3], tick_history[-2], tick_history[-1]
+            if direction == "higher":
+                if not (t4 > t3 and t3 > t2):
+                    print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 consecutive UP ticks){RST}")
+                    reset_l_state()
+                    return now
+            if direction == "lower":
+                if not (t4 < t3 and t3 < t2):
+                    print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 consecutive DOWN ticks){RST}")
+                    reset_l_state()
+                    return now
+
+        # === FILTER 5: ADAPTIVE FLAT DURATION CAP ===
+        flat_dur = _l_flat_count
+        breakout_mag = abs(delta)
+        if flat_dur > 8 and breakout_mag < 0.20:
+            print(f"  {YLW}! SKIPPED: Flat {flat_dur}t too long, breakout {breakout_mag:.3f} < 0.20{RST}")
+            reset_l_state()
+            return now
+
+        # === FILTER 6: PRICE DIRECTION CHECK ===
+        if len(tick_history) >= 6:
+            recent = list(tick_history)[-6:]
+            up_count = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i-1])
+            dn_count = sum(1 for i in range(1, len(recent)) if recent[i] < recent[i-1])
+            if direction == "higher" and up_count < 3:
+                print(f"  {YLW}! SKIPPED: Price momentum bearish ({up_count}UP/{dn_count}DN in last 5){RST}")
                 reset_l_state()
                 return now
-            if direction == "lower" and not (t3 < t2 or t2 < t1):
-                print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 DOWN ticks){RST}")
+            if direction == "lower" and dn_count < 3:
+                print(f"  {YLW}! SKIPPED: Price momentum bullish ({up_count}UP/{dn_count}DN in last 5){RST}")
                 reset_l_state()
                 return now
 
@@ -842,13 +885,13 @@ async def handle_message(ws, data, last_trade_time):
             print(f"  {DIM}[POC] keys={list(poc.keys())} status={poc.get(chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115), chr(63))} is_sold={poc.get(chr(105)+chr(115)+chr(95)+chr(115)+chr(111)+chr(108)+chr(100), chr(63))} profit={poc.get(chr(112)+chr(114)+chr(111)+chr(102)+chr(105)+chr(116), chr(63))}{RST}")
             status = poc.get("status", "")
             profit = poc.get("profit", 0)
-            entry = poc.get("entry_tick", 0)
-            exit_p = poc.get("exit_tick", 0)
+            entry = poc.get("entry_spot", poc.get("entry_tick", 0))
+            exit_p = poc.get("exit_spot", poc.get("exit_tick", 0))
             cur = poc.get("current_spot", poc.get("current_tick", 0))
             total = poc.get("tick_count", DURATION)
             cid = poc.get("contract_id", "?")
             is_sold = status in ("expired", "sold", "won", "lost") or poc.get("is_sold") == 1 or poc.get("is_expired") == 1
-            if is_sold and poc.get("exit_spot") is not None and _last_displayed_cid != cid:
+            if (_last_displayed_cid != cid) and ("audit_details" in poc) and (poc.get("exit_spot") is not None and float(poc.get("exit_spot", 0) or 0) > 0):
                 direction = "?"
                 entry_price = entry
                 if active_contract:
@@ -858,7 +901,7 @@ async def handle_message(ws, data, last_trade_time):
                 print(f"  {DIM}[POC] status={status} profit={profit} cid={cid}{RST}")
                 try:
                     profit_f = float(profit)
-                    entry_f = float(entry_price) if entry_price else 0
+                    entry_f = float(entry) if entry else float(entry_price) if entry_price else 0
                     exit_f = float(exit_p) if exit_p else 0
                     print_trade_result_analyzed(status, profit_f, entry_f, exit_f, direction, cid, barrier_val, poc)
                 except Exception as e:
@@ -867,7 +910,7 @@ async def handle_message(ws, data, last_trade_time):
                 reset_active_contract()
                 _active_contract_id = None
                 last_trade_time = time.time()
-            elif status == "open" and total:
+            elif status == "open" and "audit_details" not in poc and total:
                 direction = active_contract["direction"] if active_contract else "?"
                 barrier_val = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
                 print_trade_progress(cur, total, entry, barrier_val)
@@ -1012,6 +1055,7 @@ async def process_tick_replay(tick_data, bt):
     result = detect_l_shape(srsi_now, srsi_prev)
     if result:
         direction, reason = result
+        delta = srsi_now - srsi_prev
         bt["signals"] += 1
         print_signal(direction, srsi_now, reason)
         entry = price
