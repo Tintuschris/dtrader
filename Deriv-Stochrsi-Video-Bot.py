@@ -552,6 +552,85 @@ def save_recording():
 atexit.register(save_recording)
 
 
+TRADE_LOG_FILE = "trade_log.json"
+
+
+def save_trade_log():
+    """Save trade log to disk."""
+    if not _trade_log:
+        return
+    try:
+        with open(TRADE_LOG_FILE, "w") as f:
+            json.dump(_trade_log, f, indent=2)
+    except Exception as e:
+        print(f"  {RED}X Failed to save trade log: {e}{RST}")
+
+
+atexit.register(save_trade_log)
+
+
+def log_trade_signal(direction, srsi_val, rsi_val, flat_count, flat_avg, breakout, reason, price, barrier):
+    """Log a trade signal with full context when it fires."""
+    entry = {
+        "id": len(_trade_log) + 1,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "epoch": time.time(),
+        "symbol": SYMBOL,
+        "direction": direction,
+        "stake": STAKE,
+        "barrier": barrier,
+        "signal": {
+            "srsi_value": round(srsi_val, 4),
+            "rsi_value": round(rsi_val, 2),
+            "flat_duration": flat_count,
+            "flat_avg_srsi": round(flat_avg, 4),
+            "breakout_delta": round(breakout, 4),
+            "flat_extreme": round(_l_flat_extreme, 4),
+            "reason": reason,
+        },
+        "market": {
+            "entry_price": price,
+            "last_5_ticks": [round(t, 4) for t in list(tick_history)[-5:]],
+            "tick_count": _tick_count,
+        },
+        "filters_passed": {
+            "circuit_breaker": _consecutive_losses < 2,
+            "rsi_alignment": True,
+            "srsi_peak": True,
+            "reversal_confirm": True,
+            "adaptive_cap": True,
+            "price_direction": True,
+        },
+        "result": {
+            "status": "pending",
+            "contract_id": None,
+            "exit_spot": None,
+            "profit": None,
+            "payout": None,
+            "balance": None,
+        },
+    }
+    _trade_log.append(entry)
+    save_trade_log()
+    return entry
+
+
+def log_trade_result(contract_id, status, profit, entry_spot, exit_spot, payout, balance):
+    """Update a trade log entry with the result."""
+    for entry in reversed(_trade_log):
+        if entry["result"]["status"] == "pending":
+            entry["result"]["status"] = status
+            entry["result"]["contract_id"] = contract_id
+            entry["result"]["exit_spot"] = exit_spot
+            entry["result"]["profit"] = profit
+            entry["result"]["payout"] = payout
+            entry["result"]["balance"] = balance
+            entry["result"]["settled_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            entry["result"]["settled_epoch"] = time.time()
+            break
+    save_trade_log()
+
+
 def print_backtest_results(bt):
     total, wins, losses, pnl = bt["trades"], bt["wins"], bt["losses"], bt["pnl"]
     wr = (wins / total * 100) if total > 0 else 0
@@ -772,6 +851,9 @@ async def process_tick(ws, tick_data, last_trade_time):
         print_signal(direction, srsi_now, reason)
         barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
         active_contract = {"direction": direction, "entry_price": price}
+        # Log the trade signal with full context
+        flat_avg = _l_flat_val_sum / _l_flat_count if _l_flat_count > 0 else 0
+        log_trade_signal(direction, srsi_now, rsi_now, _l_flat_count, flat_avg, abs(delta), reason, price, barrier)
         if DRY_RUN:
             print(f"  {DIM}[DRY RUN] Would place {direction} trade with barrier {barrier}{RST}")
         else:
@@ -907,6 +989,8 @@ async def handle_message(ws, data, last_trade_time):
                 except Exception as e:
                     print(f"  {RED}X Trade result error: {e}{RST}")
                     print(f"  {DIM}  status={status} profit={profit} entry={entry_price} exit={exit_p}{RST}")
+                log_trade_result(cid, status, profit_f, entry_f, exit_f,
+                                float(poc.get("payout", 0)), stats["balance"])
                 reset_active_contract()
                 _active_contract_id = None
                 last_trade_time = time.time()
