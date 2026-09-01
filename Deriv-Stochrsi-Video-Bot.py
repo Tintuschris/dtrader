@@ -459,6 +459,7 @@ def print_balance(amount):
 
 
 def print_trade_result_analyzed(status, profit, entry_price, exit_price, direction, contract_id, barrier_val, poc):
+    profit = float(profit) if profit else 0.0
     is_win = profit >= 0
     rc = GRN if is_win else RED
     txt = "WIN" if is_win else "LOSS"
@@ -747,7 +748,7 @@ async def subscribe_ws(ws):
     # Re-subscribe to active contract POC if we have one
     if _active_contract_id:
         print(f"  {YLW}> Re-subscribing to active contract {_active_contract_id}...{RST}")
-        await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": _active_contract_id}))
+        await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": _active_contract_id, "subscribe": 1}))
     print(f"  {DIM}{"-"*60}{RST}")
     print(f"  {DIM}Watching for L-shape signals on RAW StochRSI...{RST}")
     print(f"  {DIM}{"-"*60}{RST}")
@@ -756,6 +757,10 @@ async def subscribe_ws(ws):
 
 
 async def handle_message(ws, data, last_trade_time):
+    # Debug: log non-tick messages
+    _mt = data.get("msg_type", "?")
+    if _mt not in ("tick", "balance", "ping"):
+        print(f"  {DIM}[MSG] msg_type={_mt}{RST}")
     global pending_proposal
     global active_contract
     if data.get("msg_type") == "tick":
@@ -794,11 +799,14 @@ async def handle_message(ws, data, last_trade_time):
             elif pending_proposal:
                 active_contract = {"direction": direction, "entry_price": pending_proposal.get("entry_price", 0), "contract_id": cid}
             pending_proposal = None
+            _active_contract_id = cid
             print_trade_placed(cid, direction, cost, payout)
-            await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": cid}))
+            await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": cid, "subscribe": 1}))
+            print(f"  {DIM}[DEBUG] Sent POC subscribe for contract {cid}{RST}")
     elif data.get("msg_type") == "proposal_open_contract":
         poc = data.get("proposal_open_contract", {})
         if poc:
+            print(f"  {DIM}[POC] keys={list(poc.keys())} status={poc.get(chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115), chr(63))} is_sold={poc.get(chr(105)+chr(115)+chr(95)+chr(115)+chr(111)+chr(108)+chr(100), chr(63))} profit={poc.get(chr(112)+chr(114)+chr(111)+chr(102)+chr(105)+chr(116), chr(63))}{RST}")
             status = poc.get("status", "")
             profit = poc.get("profit", 0)
             entry = poc.get("entry_tick", 0)
@@ -806,7 +814,7 @@ async def handle_message(ws, data, last_trade_time):
             cur = poc.get("current_spot", poc.get("current_tick", 0))
             total = poc.get("tick_count", DURATION)
             cid = poc.get("contract_id", "?")
-            is_sold = status in ("expired", "sold", "won", "lost") or poc.get("is_sold") or poc.get("is_expired")
+            is_sold = status in ("expired", "sold", "won", "lost") or poc.get("is_sold") == 1 or poc.get("is_expired") == 1
             if is_sold:
                 direction = "?"
                 entry_price = entry
@@ -815,7 +823,14 @@ async def handle_message(ws, data, last_trade_time):
                     entry_price = active_contract["entry_price"]
                 barrier_val = BARRIER_HIGHER if direction == "higher" else (BARRIER_LOWER if direction == "lower" else "0.23")
                 print(f"  {DIM}[POC] status={status} profit={profit} cid={cid}{RST}")
-                print_trade_result_analyzed(status, profit, entry_price, exit_p, direction, cid, barrier_val, poc)
+                try:
+                    profit_f = float(profit)
+                    entry_f = float(entry_price) if entry_price else 0
+                    exit_f = float(exit_p) if exit_p else 0
+                    print_trade_result_analyzed(status, profit_f, entry_f, exit_f, direction, cid, barrier_val, poc)
+                except Exception as e:
+                    print(f"  {RED}X Trade result error: {e}{RST}")
+                    print(f"  {DIM}  status={status} profit={profit} entry={entry_price} exit={exit_p}{RST}")
                 reset_active_contract()
                 _active_contract_id = None
                 last_trade_time = time.time()
