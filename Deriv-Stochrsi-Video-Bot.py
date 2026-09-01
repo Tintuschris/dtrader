@@ -540,9 +540,9 @@ async def place_trade(ws, direction, barrier):
     contract_type = "CALL" if direction == "higher" else "PUT"
     proposal = {
         "buy": 1,
-        "symbol": SYMBOL,
         "price": STAKE,
         "parameters": {
+            "symbol": SYMBOL,
             "amount": STAKE,
             "basis": "stake",
             "contract_type": contract_type,
