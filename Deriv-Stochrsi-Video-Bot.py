@@ -82,7 +82,7 @@ BRIDGE_URL = os.environ.get("DTRADER_BRIDGE_URL", "http://localhost:3000")
 USE_BRIDGE = os.environ.get("USE_BRIDGE", "1") == "1"
 PAT_TOKEN = os.environ.get("PAT_TOKEN", "")
 APP_ID = os.environ.get("DERIV_APP_ID", "")
-ACCOUNT_TYPE = os.environ.get("ACCOUNT_TYPE", "demo")
+ACCOUNT_TYPE = args.account or os.environ.get("ACCOUNT_TYPE", "demo")
 SYMBOL = args.symbol
 STAKE = args.stake
 CURRENCY = "USD"
@@ -1274,8 +1274,21 @@ if __name__ == "__main__":
         else:
             asyncio.run(trading_loop())
     except KeyboardInterrupt:
-        print(f"\n\n  {YLW}Bot stopped by user{RST}")
+        print("\n\n  Bot stopped by user")
+        # Force save trade log and recording (atexit may not fire on Windows)
+        try:
+            save_trade_log()
+            save_recording()
+        except Exception:
+            pass
+        # Always print session summary
         if stats["trades"] > 0:
             wr = stats["wins"] / stats["trades"] * 100
-            print(f"  {DIM}Session: {stats['trades']} trades | {stats['wins']}W {stats['losses']}L | WR: {wr:.0f}% | PnL: ${stats['total_pnl']:+.2f}{RST}")
+            pnl_color = GRN if stats["total_pnl"] >= 0 else RED
+            print("  Session: {} trades | {}W {}L | WR: {:.0f}% | PnL: ${:+.2f}".format(
+                stats["trades"], stats["wins"], stats["losses"], wr, stats["total_pnl"]))
+        else:
+            print("  No trades placed this session")
+            if _trade_log:
+                print("  Trade log saved to {}".format(TRADE_LOG_FILE))
         print()
