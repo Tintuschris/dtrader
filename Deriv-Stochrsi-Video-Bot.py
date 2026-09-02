@@ -154,7 +154,7 @@ d_vals = deque(maxlen=200)
 tick_history = deque(maxlen=60)
 
 # Stats
-stats = {"trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0, "balance": 0.0}
+stats = {"trades": 0, "wins": 0, "losses": 0, "cancelled": 0, "total_pnl": 0.0, "balance": 0.0}
 active_contract = None
 pending_proposal = None  # {proposal_id, direction, barrier, entry_price}
 _active_contract_id = None  # Persists across reconnects for POC re-subscription
@@ -521,16 +521,23 @@ def print_balance(amount):
 
 def print_trade_result_analyzed(status, profit, entry_price, exit_price, direction, contract_id, barrier_val, poc):
     profit = float(profit) if profit else 0.0
-    is_win = profit >= 0
-    rc = GRN if is_win else RED
-    txt = "WIN" if is_win else "LOSS"
-
-    stats["trades"] += 1
-    stats["total_pnl"] += profit
-    if is_win:
-        stats["wins"] += 1
+    is_cancelled = status in ("cancelled", "sold") and profit <= 0
+    
+    if is_cancelled:
+        rc = YLW
+        txt = "CANCELLED"
+        stats["cancelled"] += 1
+        stats["total_pnl"] += profit
     else:
-        stats["losses"] += 1
+        is_win = profit >= 0
+        rc = GRN if is_win else RED
+        txt = "WIN" if is_win else "LOSS"
+        stats["trades"] += 1
+        stats["total_pnl"] += profit
+        if is_win:
+            stats["wins"] += 1
+        else:
+            stats["losses"] += 1
     wr = (stats["wins"] / stats["trades"] * 100) if stats["trades"] > 0 else 0
 
     entry_spot = poc.get("entry_spot", poc.get("entry_tick", entry_price))
@@ -582,11 +589,14 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
     print("  " + DIM + "|" + RST + "  Barrier:     " + "{:.4f}".format(barrier_level) + " (" + str(barrier_val) + ")")
     print("  " + DIM + "|" + RST + "  " + condition)
     print("  " + DIM + "|" + RST + "  Gap:         " + rc + "{:+.4f}".format(diff) + " ({:.4f}%)".format(pct_diff) + RST)
-    if not won:
+    if is_cancelled:
+        reason = "Early sold by user" if poc.get("sell_time") else "Market cancelled"
+        print("  " + DIM + "|" + RST + "  " + YLW + "Reason:      " + reason + RST)
+    elif not won:
         needed = abs(diff)
         print("  " + DIM + "|" + RST + "  " + YLW + "Lost by:     " + "{:.4f}".format(needed) + " ({:.4f}%)".format(needed / entry_spot * 100) + RST)
     print("  " + DIM + "|" + RST)
-    print("  " + DIM + "|" + RST + "  Session:  {} trades  |  ".format(stats["trades"]) + GRN + "{}W".format(stats["wins"]) + RST + " " + RED + "{}L".format(stats["losses"]) + RST + "  |  WR: " + BLD + "{:.0f}%".format(wr) + RST + "  |  PnL: " + rc + "${:+.2f}".format(stats["total_pnl"]) + RST)
+    print("  " + DIM + "|" + RST + "  Session:  {} trades  |  ".format(stats["trades"] + stats["cancelled"]) + GRN + "{}W".format(stats["wins"]) + RST + " " + RED + "{}L".format(stats["losses"]) + RST + " " + YLW + "{}C".format(stats["cancelled"]) + RST + "  |  WR: " + BLD + "{:.0f}%".format(wr) + RST + "  |  PnL: " + rc + "${:+.2f}".format(stats["total_pnl"]) + RST)
     print("  " + rc + "=" * 60 + RST)
 
 def save_recording():
@@ -848,7 +858,7 @@ async def process_tick(ws, tick_data, last_trade_time):
             print(f"  {GRN}[DELAY] Tick {ps["delay_count"]}/{FILTER_ENTRY_DELAY}: confirming {ps["direction"].upper()} ({t1:.4f}->{t2:.4f}){RST}")
         if ps["delay_count"] >= FILTER_ENTRY_DELAY:
             barrier = _calc_barrier(ps["direction"], ps["rsi"])
-            active_contract = {"direction": ps["direction"], "entry_price": ps["entry_price"]}
+            active_contract = {"direction": ps["direction"], "entry_price": ps["entry_price"], "barrier": ps.get("barrier", BARRIER_HIGHER)}
             flat_avg = _l_flat_val_sum / _l_flat_count if _l_flat_count > 0 else 0
             log_trade_signal(ps["direction"], ps["srsi"], ps["rsi"], ps["flat_count"], flat_avg, abs(ps["delta"]), ps["reason"], ps["entry_price"], barrier)
             print(f"  {GRN}[DELAY] Confirmed! Placing {ps["direction"]} trade barrier={barrier}{RST}")
@@ -942,6 +952,39 @@ async def process_tick(ws, tick_data, last_trade_time):
                 reset_l_state()
                 return now
 
+        # === FILTER 7: STRONG TREND AGAINST TRADE ===
+        TREND_TICKS = 5
+        TREND_MIN_SAME = 4
+        if len(tick_history) >= TREND_TICKS:
+            recent = list(tick_history)[-TREND_TICKS:]
+            if direction == "higher":
+                down_count = sum(1 for i in range(1, len(recent)) if recent[i] < recent[i-1])
+                if down_count >= TREND_MIN_SAME:
+                    print(f"  {YLW}! SKIPPED: Strong downtrend ({down_count}/{TREND_TICKS} ticks down) - price dropping against LONG{RST}")
+                    reset_l_state()
+                    return now
+            if direction == "lower":
+                up_count = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i-1])
+                if up_count >= TREND_MIN_SAME:
+                    print(f"  {YLW}! SKIPPED: Strong uptrend ({up_count}/{TREND_TICKS} ticks up) - price rising against SHORT{RST}")
+                    reset_l_state()
+                    return now
+
+        # === FILTER 8: PRICE DROP SPIKE CHECK ===
+        DROP_TICKS = 10
+        DROP_MIN_PTS = 2.0
+        if len(tick_history) >= DROP_TICKS:
+            old_price = list(tick_history)[-DROP_TICKS]
+            price_change = tick_history[-1] - old_price
+            if direction == "higher" and price_change < -DROP_MIN_PTS:
+                print(f"  {YLW}! SKIPPED: Price dropped {abs(price_change):.4f} pts in last {DROP_TICKS} ticks (threshold: {DROP_MIN_PTS}){RST}")
+                reset_l_state()
+                return now
+            if direction == "lower" and price_change > DROP_MIN_PTS:
+                print(f"  {YLW}! SKIPPED: Price rose {price_change:.4f} pts in last {DROP_TICKS} ticks (threshold: {DROP_MIN_PTS}){RST}")
+                reset_l_state()
+                return now
+
         print_signal(direction, srsi_now, reason)
         if FILTER_ENTRY_DELAY > 0:
             _pending_signal = {"direction": direction, "srsi": srsi_now, "rsi": rsi_now,
@@ -949,7 +992,7 @@ async def process_tick(ws, tick_data, last_trade_time):
             print(f"  {DIM}[DELAY] Signal queued, waiting {FILTER_ENTRY_DELAY} ticks for confirmation...{RST}")
             return now
         barrier = _calc_barrier(direction, rsi_now)
-        active_contract = {"direction": direction, "entry_price": price}
+        active_contract = {"direction": direction, "entry_price": price, "barrier": barrier}
         flat_avg = _l_flat_val_sum / _l_flat_count if _l_flat_count > 0 else 0
         log_trade_signal(direction, srsi_now, rsi_now, _l_flat_count, flat_avg, abs(delta), reason, price, barrier)
         if DRY_RUN:
@@ -963,11 +1006,12 @@ async def process_tick(ws, tick_data, last_trade_time):
 
 
 def _calc_barrier(direction, rsi):
+    """Pick barrier based on RSI strength. Uses user-specified BARRIER_HIGHER/BARRIER_LOWER."""
     strong_threshold = 25 if direction == "higher" else 85
     if direction == "higher":
-        return BARRIER_STRONG if rsi <= strong_threshold else BARRIER_WEAK
+        return BARRIER_HIGHER if rsi <= strong_threshold else BARRIER_WEAK
     else:
-        bv = BARRIER_STRONG if rsi >= strong_threshold else BARRIER_WEAK
+        bv = BARRIER_LOWER if rsi >= strong_threshold else BARRIER_WEAK
         return "+" + bv.lstrip("-")
 
 # ============ TRADING LOOP ============
@@ -1062,7 +1106,7 @@ async def handle_message(ws, data, last_trade_time):
             if active_contract:
                 active_contract["contract_id"] = cid
             elif pending_proposal:
-                active_contract = {"direction": direction, "entry_price": pending_proposal.get("entry_price", 0), "contract_id": cid}
+                active_contract = {"direction": direction, "entry_price": pending_proposal.get("entry_price", 0), "contract_id": cid, "barrier": pending_proposal.get("barrier", BARRIER_HIGHER)}
             pending_proposal = None
             _active_contract_id = cid
             print_trade_placed(cid, direction, cost, payout)
@@ -1079,14 +1123,14 @@ async def handle_message(ws, data, last_trade_time):
             cur = poc.get("current_spot", poc.get("current_tick", 0))
             total = poc.get("tick_count", DURATION)
             cid = poc.get("contract_id", "?")
-            is_sold = status in ("expired", "sold", "won", "lost") or poc.get("is_sold") == 1 or poc.get("is_expired") == 1
+            is_sold = status in ("expired", "sold", "won", "lost", "cancelled") or poc.get("is_sold") == 1 or poc.get("is_expired") == 1
             if (_last_displayed_cid != cid) and ("audit_details" in poc) and (poc.get("exit_spot") is not None and float(poc.get("exit_spot", 0) or 0) > 0):
                 direction = "?"
                 entry_price = entry
                 if active_contract:
                     direction = active_contract["direction"]
                     entry_price = active_contract["entry_price"]
-                barrier_val = BARRIER_HIGHER if direction == "higher" else (BARRIER_LOWER if direction == "lower" else "0.23")
+                barrier_val = active_contract.get("barrier", BARRIER_HIGHER) if active_contract and direction != "?" else (BARRIER_HIGHER if direction == "higher" else (BARRIER_LOWER if direction == "lower" else "0.23"))
                 print(f"  {DIM}[POC] status={status} profit={profit} cid={cid}{RST}")
                 try:
                     profit_f = float(profit)
