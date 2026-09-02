@@ -1,45 +1,50 @@
-# Deriv STOCHRSI L-Shape Bot v3.0
+# Deriv STOCHRSI L-Shape Bot v3.1
 
-An automated trading bot for Deriv's Volatility Indices (R_25, R_75, R_100, etc.) that detects **L-shaped patterns** on the Stochastic RSI indicator and places short-term tick trades.
+An automated trading bot for Deriv's Volatility Indices (R_25, R_75, R_100, etc.) that detects **L-shaped patterns** on the Stochastic RSI indicator and places short-term tick trades with 6 configurable strategy filters.
 
 ---
 
 ## Table of Contents
 
-1. [What It Does](#what-it-does)
+1. [Overview](#overview)
 2. [The L-Shape Strategy](#the-l-shape-strategy)
-3. [Architecture](#architecture)
-4. [Prerequisites](#prerequisites)
-5. [Quick Start](#quick-start)
-6. [Authentication Modes](#authentication-modes)
-7. [CLI Reference](#cli-reference)
-8. [Terminal UI](#terminal-ui)
-9. [Recording & Backtesting](#recording--backtesting)
-10. [Bridge Endpoint (Next.js)](#bridge-endpoint-nextjs)
-11. [Configuration Reference](#configuration-reference)
-12. [Troubleshooting](#troubleshooting)
-13. [File Structure](#file-structure)
+3. [Strategy Filters (6 Filters)](#strategy-filters)
+4. [Adaptive Barrier System](#adaptive-barrier-system)
+5. [Entry Delay Confirmation](#entry-delay-confirmation)
+6. [Architecture](#architecture)
+7. [Prerequisites](#prerequisites)
+8. [Quick Start](#quick-start)
+9. [CLI Reference](#cli-reference)
+10. [Environment Variables](#environment-variables)
+11. [Terminal UI](#terminal-ui)
+12. [Trade Log](#trade-log)
+13. [Recording & Backtesting](#recording--backtesting)
+14. [Authentication](#authentication)
+15. [Troubleshooting](#troubleshooting)
+16. [File Structure](#file-structure)
 
 ---
 
-## What It Does
+## Overview
 
-The bot connects to Deriv's WebSocket API, streams real-time tick data for a volatility index, and runs a **Stochastic RSI** indicator pipeline. When it detects a specific **slanted L-shape** pattern on the raw StochRSI line, it automatically places a trade betting that the next few ticks will move in the expected direction.
+The bot connects to Deriv's WebSocket API, streams real-time tick data for a volatility index, and runs a **Stochastic RSI** indicator pipeline. When it detects a specific **slanted L-shape** pattern on the raw StochRSI line, it applies 6 strategy filters, waits for price confirmation, then automatically places a trade betting that the next few ticks will move in the expected direction.
 
-**Key behaviors:**
-- Streams live ticks and computes RSI → StochRSI → K/D indicators in real-time
-- Detects L-shape patterns using a state machine that operates on **raw (unsmoothed) StochRSI** values
-- Places tick trades (default: 5 ticks, $1 stake) on HIGHER or LOWER contracts
-- Tracks trade resolution, win/loss, and session P&L
-- Automatically reconnects if the WebSocket drops (exponential backoff)
-- Sends keepalive pings every 30 seconds to prevent disconnection
-- Shows a rich terminal UI with spark charts, indicator values, and detection phases
+**Key capabilities:**
+- Streams live ticks and computes RSI(14) -> StochRSI(14) -> K/D indicators in real-time
+- Detects L-shape patterns using a state machine on **raw (unsmoothed) StochRSI**
+- Applies 6 configurable strategy filters before placing any trade
+- Waits for 2-tick price confirmation after signal fires (entry delay)
+- Uses adaptive barrier offset based on signal strength (RSI)
+- Saves every trade to `trade_log.json` with full signal context
+- Automatically reconnects with exponential backoff
+- Sends keepalive pings every 30 seconds
+- Rich terminal UI with spark charts, indicator values, detection phases
+- Dry-run mode for testing without placing trades
+- Record/replay mode for backtesting
 
 ---
 
 ## The L-Shape Strategy
-
-The strategy identifies a specific pattern on the **Stochastic RSI** oscillator:
 
 ### The Slanted L Pattern
 
@@ -49,21 +54,30 @@ StochRSI
     |   /
     |  /
 0.8 | /
-    |/___________  <- Flat zone (oversold/overbought)
-    |             
+    |/___________  <- Flat zone (overbought)
+    |
 0.2 |
     |______________
 ```
 
-The pattern has three phases:
+**Three phases:**
 
-1. **Slope** — Raw StochRSI makes a sharp directional move (drops from high zone or rises from low zone)
-2. **Flat** — Raw StochRSI goes flat near the oversold zone (≤0.20) or overbought zone (≥0.80) for at least 3 ticks
-3. **Breakout** — Raw StochRSI suddenly reverses by ≥0.10 in a single tick
+1. **Slope** - Raw StochRSI makes a sharp directional move (drops from high or rises from low)
+2. **Flat** - Raw StochRSI goes flat near oversold (<=0.20) or overbought (>=0.80) for >=3 ticks
+3. **Breakout** - Raw StochRSI suddenly reverses by >=0.15 in a single tick
 
-### Why Raw StochRSI (not smoothed K)?
+### Signal to Trade Mapping
 
-The original implementation used SMA(3)-smoothed K values for detection. This **erased the sharp corner** of the L-shape, making the pattern invisible to the bot. TradingView shows the raw StochRSI line where the L-shape is clearly visible — the bot now uses the same data.
+| Pattern | Signal | Deriv Contract |
+|---------|--------|----------------|
+| Flat low + breakout UP | `HIGHER` (LONG) | CALL with barrier |
+| Flat high + breakout DOWN | `LOWER` (SHORT) | PUT with barrier |
+
+### Why Raw StochRSI?
+
+The original implementation used SMA(3)-smoothed K values, which **erased the sharp corner** of the L-shape. TradingView shows the raw StochRSI line where the L-shape is clearly visible - the bot now uses the same data.
+
+### Detection Parameters
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
@@ -71,357 +85,121 @@ The original implementation used SMA(3)-smoothed K values for detection. This **
 | `RAW_LEVEL_HIGH` | 0.80 | Overbought zone threshold |
 | `RAW_FLAT_LOOKBACK` | 3 ticks | Minimum flat duration (6 seconds at R_25) |
 | `RAW_FLAT_THRESHOLD` | 0.08 | Max variance during flat zone |
-| `RAW_BREAKOUT_MIN` | 0.10 | Minimum single-tick reversal magnitude |
+| `RAW_BREAKOUT_MIN` | 0.15 | Minimum single-tick reversal magnitude |
 | `RAW_SLOPE_MIN` | -0.15 | Minimum downward slope threshold |
 | `RAW_SLOPE_MAX` | 0.15 | Minimum upward slope threshold |
 
-### Signal → Trade Mapping
+---
 
-| Pattern | Signal | Deriv Contract |
-|---------|--------|----------------|
-| Flat low + breakout UP | `HIGHER` (LONG) | CALL with barrier -0.23 |
-| Flat high + breakout DOWN | `LOWER` (SHORT) | PUT with barrier +0.23 |
+## Strategy Filters
+
+The bot applies **6 configurable filters** after detecting an L-shape signal. All signals must pass ALL filters to trigger a trade.
+
+### Filter 1: Loss-Streak Circuit Breaker
+
+Stops trading after N consecutive losses to prevent cascade losses.
+
+| Parameter | Default | Env Var | Description |
+|-----------|---------|---------|-------------|
+| `--max-loss-streak` | 2 | `FILTER_LOSS_STREAK_MAX` | Max consecutive losses before stop |
+
+**Evidence:** In testing, 3 consecutive losses (trades 19->20->21) would have been saved by this filter, improving the session from +$1.56 to +$3.56.
+
+### Filter 2: RSI Trend Alignment
+
+Requires RSI to be in extreme zones before entering. Prevents counter-trend trades.
+
+| Direction | RSI Must Be | Env Var |
+|-----------|-------------|---------|
+| LONG (HIGHER) | < `--rsi-long-max` (default 35) | `FILTER_RSI_LONG_MAX` |
+| SHORT (LOWER) | > `--rsi-short-min` (default 75) | `FILTER_RSI_SHORT_MIN` |
+
+**Evidence:** 4 out of 5 losses in session 1 were LONG trades with RSI between 21-33. Raising the threshold to <35 filters the weakest of these.
+
+### Filter 3: SRSI Peak Check
+
+Requires the SRSI to have reached extreme levels during the flat zone before the signal fires.
+
+| Direction | SRSI Must Reach | Env Var |
+|-----------|----------------|---------|
+| SHORT | > `--srsi-short-peak` (default 0.90) | `FILTER_SRSI_SHORT_PEAK_MIN` |
+| LONG | < `--srsi-long-peak` (default 0.10) | `FILTER_SRSI_LONG_PEAK_MAX` |
+
+**Evidence:** The losing SHORT trade at RSI=91.1 had SRSI peaking at only 0.648 - not high enough for a reliable reversal.
+
+### Filter 4: Reversal Confirmation
+
+Requires N consecutive ticks moving in the trade direction before entry.
+
+| Parameter | Default | Env Var | Description |
+|-----------|---------|---------|-------------|
+| `--reversal-ticks` | 3 | `FILTER_REVERSAL_TICKS` | Consecutive ticks needed |
+
+**Evidence:** 5 out of 6 losses were "was winning then reversed" - the trade entered before price actually committed to the reversal.
+
+### Filter 5: Adaptive Flat Duration Cap
+
+Requires a stronger breakout when the flat zone was long (stale signal).
+
+| Parameter | Default | Env Var | Description |
+|-----------|---------|---------|-------------|
+| `--adaptive-flat-max` | 8 | `FILTER_ADAPTIVE_FLAT_MAX` | Flat ticks threshold |
+| `--adaptive-breakout-min` | 0.20 | `FILTER_ADAPTIVE_BREAKOUT_MIN` | Min breakout for stale signals |
+
+**Logic:** If flat > 8 ticks, breakout must be >= 0.20 (vs normal 0.15).
+
+**Evidence:** Loss #16 had flat=13t with breakout=0.127 - a stale signal that would be filtered.
+
+### Filter 6: Price Direction Check
+
+Requires >=N of the last 5 ticks to be moving in the trade direction.
+
+| Parameter | Default | Env Var | Description |
+|-----------|---------|---------|-------------|
+| `--price-dir-min` | 3 | `FILTER_PRICE_DIR_MIN` | Min ticks in trade direction (of 5) |
+
+**Evidence:** Catches "falling knife" LONG entries where 4+ of the last 5 ticks were DOWN.
+
+### Historical Filter Results
+
+Retroactive analysis on 29 trades (7 losses) across 2 sessions:
+
+| Filters Applied | Losses Caught | Projected Win Rate |
+|----------------|---------------|-------------------|
+| None | 0/7 | 76% |
+| + Min breakout 0.15 | 3/7 | 86% |
+| + RSI thresholds | 5/7 | 92% |
+| + SRSI peak check | 6/7 | 96% |
+| + Price direction | **7/7** | **100%** |
 
 ---
 
-## Architecture
+## Adaptive Barrier System
 
-```
-Deriv-Stochrsi-Video-Bot.py   ← Standalone Python bot
-        │
-        ├── PAT Mode ──────────→ REST API (api.derivws.com) → OTP WS URL → WebSocket
-        │
-        └── Bridge Mode ───────→ localhost:3000/api/deriv/bot-session → OTP WS URL → WebSocket
-                                        │
-                                        └── Next.js web app (OAuth session cookie)
-```
+The barrier offset adjusts based on signal strength (RSI value):
 
-### Authentication Flow
+| Signal Strength | Condition | Default Barrier | Payout |
+|----------------|-----------|-----------------|--------|
+| **Strong** | RSI < 25 (LONG) or > 85 (SHORT) | `--barrier-strong` = -0.20 | ~$1.40 |
+| **Normal** | RSI 25-35 or 65-85 | `--barrier-weak` = -0.30 | ~$1.18 |
 
-**PAT Mode** (recommended for local testing):
-1. Bot calls `GET /trading/v1/options/accounts` with PAT token
-2. Bot calls `POST /trading/v1/options/accounts/{id}/otp` to get OTP WebSocket URL
-3. Bot connects to WebSocket and subscribes to ticks
+Strong signals get a tighter barrier for better payout. Weaker signals get a wider barrier for more room.
 
-**Bridge Mode** (shares web app's login):
-1. Bot calls `GET localhost:3000/api/deriv/bot-session`
-2. Bridge endpoint reads `dtrader_session` cookie from OAuth login
-3. Bridge calls Deriv API with OAuth headers, returns OTP WebSocket URL
-4. Bot connects to WebSocket
-
-### Data Flow
-
-```
-Tick (every ~2s)
-    → RSI(14) calculation
-        → StochRSI(14) calculation
-            → Raw SRSI detection state machine
-                → L-shape signal? → Place trade
-            → SMA(3) K/D smoothing (display only)
-    → Terminal UI update
-```
+**CLI args:** `--barrier-strong`, `--barrier-weak`  
+**Env vars:** `BARRIER_STRONG`, `BARRIER_WEAK`
 
 ---
 
-## Prerequisites
+## Entry Delay Confirmation
 
-- **Python 3.9+** with `pip`
-- **Deriv account** (demo or real)
-- For Bridge mode: **Node.js** with the Next.js web app running
+After all 6 filters pass, the signal is **queued** for N ticks. During this delay:
 
-### Python Dependencies
+- The bot monitors whether price is actually moving in the trade direction
+- If price confirms (moves right way) -> places trade with adaptive barrier
+- If price reverses (moves wrong way) -> **ABORTED** - no trade, no loss
 
-```bash
-pip install websockets aiohttp
-```
+| Parameter | Default | Env Var |
+|-----------|---------|---------|
+| `--entry-delay` | 2 | `FILTER_ENTRY_DELAY` |
 
----
-
-## Quick Start
-
-### Option 1: PAT Mode (Easiest)
-
-1. Get a Personal Access Token from [Deriv API Dashboard](https://app.deriv.com/account/api-token)
-   - Enable **Read** and **Trade** permissions
-
-2. Set environment variables:
-
-   ```bash
-   # Linux/Mac
-   export USE_BRIDGE=0
-   export PAT_TOKEN="pat_your_token_here"
-   export DERIV_APP_ID="your_app_id"
-   ```
-
-   ```powershell
-   # Windows PowerShell
-   $env:USE_BRIDGE="0"
-   $env:PAT_TOKEN="pat_your_token_here"
-   $env:DERIV_APP_ID="your_app_id"
-   ```
-
-   Or add to `.env.local`:
-   ```
-   USE_BRIDGE=0
-   PAT_TOKEN=pat_your_token_here
-   DERIV_APP_ID=your_app_id
-   ```
-
-3. Run the bot:
-   ```bash
-   python Deriv-Stochrsi-Video-Bot.py
-   ```
-
-### Option 2: Bridge Mode
-
-1. Start the Next.js web app:
-   ```bash
-   npm run dev
-   ```
-
-2. Log in via the browser at `http://localhost:3000`
-
-3. In a separate terminal:
-   ```bash
-   python Deriv-Stochrsi-Video-Bot.py
-   ```
-
----
-
-## Authentication Modes
-
-| Feature | PAT Mode | Bridge Mode |
-|---------|----------|-------------|
-| Standalone (no web app) | ✅ | ❌ |
-| Needs PAT token | ✅ | ❌ |
-| Shares web app login | ❌ | ✅ |
-| Works on deployed Vercel | ❌ (bot can't run on Vercel) | ✅ (web app on Vercel, bot on local/PC) |
-| Best for | Local dev/testing | Production with shared auth |
-
-**Note:** Vercel cannot run the bot — it only supports serverless functions that terminate after ~60 seconds. The bot needs a persistent WebSocket connection. Run it on your PC or a VPS.
-
----
-
-## CLI Reference
-
-```
-usage: Deriv-Stochrsi-Video-Bot.py [-h] [-s SYMBOL] [--stake STAKE]
-                                     [--duration DURATION]
-                                     [--barrier-higher BARRIER_HIGHER]
-                                     [--barrier-lower BARRIER_LOWER]
-                                     {--account ACCOUNT} [--dry-run]
-                                     [--record FILE] [--replay FILE]
-                                     [--speed SPEED]
-```
-
-| Flag | Short | Default | Description |
-|------|-------|---------|-------------|
-| `--symbol` | `-s` | `R_25` | Deriv symbol (R_25, R_75, R_100, etc.) |
-| `--stake` | | `1` | Stake amount in USD |
-| `--duration` | | `5` | Contract duration in ticks |
-| `--barrier-higher` | | `-0.23` | Barrier for HIGHER (CALL) contract |
-| `--barrier-lower` | | `+0.23` | Barrier for LOWER (PUT) contract |
-| `--account` | | `demo` | Account type: `demo` or `real` |
-| `--dry-run` | | off | Detect signals but don't place trades |
-| `--record FILE` | | | Save live ticks to JSON for backtesting |
-| `--replay FILE` | | | Replay recorded ticks through detection |
-| `--speed N` | | `1.0` | Replay speed multiplier |
-
-### Priority Chain
-
-CLI args > Environment variables > Defaults
-
-### Examples
-
-```bash
-# Default settings (R_25, $1, demo)
-python Deriv-Stochrsi-Video-Bot.py
-
-# R_75 with $5 stake on real account
-python Deriv-Stochrsi-Video-Bot.py -s R_75 --stake 5 --account real
-
-# Dry run — see signals without trading
-python Deriv-Stochrsi-Video-Bot.py --dry-run
-
-# Record ticks for later backtesting
-python Deriv-Stochrsi-Video-Bot.py --record ticks.json --dry-run
-
-# Replay at 50x speed
-python Deriv-Stochrsi-Video-Bot.py --replay ticks.json --speed 50
-
-# Custom barriers
-python Deriv-Stochrsi-Video-Bot.py --barrier-higher -0.50 --barrier-lower +0.50
-
-### Examples
-
-```bash
-# Default settings (R_25, $1, demo)
-python Deriv-Stochrsi-Video-Bot.py
-
-# R_75 with $5 stake on real account
-python Deriv-Stochrsi-Video-Bot.py -s R_75 --stake 5 --account real
-
-# Dry run — see signals without trading
-python Deriv-Stochrsi-Video-Bot.py --dry-run
-
-# Record ticks for later backtesting
-python Deriv-Stochrsi-Video-Bot.py --record ticks.json --dry-run
-
-# Replay at 50x speed
-python Deriv-Stochrsi-Video-Bot.py --replay ticks.json --speed 50
-
-# Custom barriers
-python Deriv-Stochrsi-Video-Bot.py --barrier-higher -0.50 --barrier-lower +0.50
-```
-
----
-
-## Terminal UI
-
-The bot displays a rich terminal interface with:
-
-- **Header box** — Configuration summary (symbol, stake, duration, barriers, mode)
-- **Tick lines** — `#NNN ^/v price [digit] SRSI:val sparkchart`
-  - `^`/`v`/`-` = price direction (up/down/unchanged)
-  - `[5]` = last digit (green ≥5, red <5)
-  - `SRSI:0.124` = raw StochRSI value
-  - Spark chart = ASCII price visualization
-- **Detection panel** — Raw SRSI, K/D values, signal bar with 0.20/0.80 markers
-- **Phase indicator** — State machine phase: `IDLE → SLOPE DN/UP → FLAT LOW/HIGH → READY-L/S`
-- **Trade panels** — Signal alerts, contract details, progress bar, win/loss results with session stats
-
----
-
-## Recording and Backtesting
-
-### Record Live Ticks
-
-```bash
-python Deriv-Stochrsi-Video-Bot.py --record ticks.json --dry-run
-```
-
-- Records every tick to `ticks.json`
-- Auto-saves every 10 ticks (survives crashes)
-- Output: `{"symbol": "R_25", "ticks": [{"epoch": ..., "quote": ...}], "config": {...}}`
-
-### Replay for Backtesting
-
-```bash
-python Deriv-Stochrsi-Video-Bot.py --replay ticks.json --speed 50
-```
-
-- Replays recorded ticks through the L-shape detector
-- Simulates trade placement and win/loss based on barrier math
-- Shows backtest statistics: signals found, trades, wins, losses, win rate, P&L
-- `--speed 50` = 50x faster than real-time
-
----
-
-## Bridge Endpoint (Next.js)
-
-### `GET /api/deriv/bot-session`
-
-Allows the Python bot to share the web app's OAuth session.
-
-**Query Parameters:**
-- `type` — `demo` (default) or `real`
-- `accountId` — Specific account ID (optional, auto-selects if omitted)
-
-**Response (200):** `{"url": "wss://...?token=...", "accountId": "VR12345", "type": "demo"}`
-
-**Response (401):** `{"error": "Not authenticated. Log in via the web app first."}`
-
-**Requirements:** Next.js app running + user logged in via browser.
-
----
-
-## Configuration Reference
-
-### Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PAT_TOKEN` | PAT mode | Personal Access Token from Deriv |
-| `DERIV_APP_ID` | PAT mode | App ID from Deriv developer portal |
-| `USE_BRIDGE` | No | `1` = bridge (default), `0` = PAT mode |
-| `DTRADER_BRIDGE_URL` | No | Bridge URL (default: `http://localhost:3000`) |
-| `ACCOUNT_TYPE` | No | `demo` (default) or `real` |
-| `SYMBOL` | No | Override default symbol |
-| `STAKE` | No | Override default stake |
-
-### Indicator Parameters (in bot source)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `RAW_LEVEL_LOW` | 0.20 | Oversold zone threshold |
-| `RAW_LEVEL_HIGH` | 0.80 | Overbought zone threshold |
-| `RAW_FLAT_LOOKBACK` | 3 | Min flat ticks before breakout check |
-| `RAW_FLAT_THRESHOLD` | 0.08 | Max variance during flat zone |
-| `RAW_BREAKOUT_MIN` | 0.10 | Min single-tick reversal magnitude |
-| `RAW_SLOPE_MIN` | -0.15 | Min downward slope trigger |
-| `RAW_SLOPE_MAX` | 0.15 | Min upward slope trigger |
-
-### Reconnection Settings
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `MAX_RECONNECT_ATTEMPTS` | 10 | Max retries before exiting |
-| `RECONNECT_BASE_DELAY` | 2 | Base delay (seconds) |
-| `PING_INTERVAL` | 30 | Keepalive ping interval (seconds) |
-
-Backoff: `min(2 * 2^(attempts-1), 60)` seconds
-
----
-
-## Troubleshooting
-
-| Problem | Cause | Fix |
-|---------|-------|-----|
-| "Bridge failed: Not authenticated" | Web app not running/logged in | Run `npm run dev` + log in, or use PAT mode |
-| "No PAT_TOKEN for fallback" | Bridge failed + no PAT set | Set `USE_BRIDGE=0` + `PAT_TOKEN=...` |
-| `ConnectionResetError` / `ConnectionClosedError` | Deriv closed WS (OTP expired) | Auto-reconnects in v3.0. Check network. |
-| No signals fire for a long time | L-shape is rare by design | Try R_75/R_100, use `--dry-run`, record+replay |
-| Windows asyncio errors | Python 3.14+ on Windows | Use Python 3.9-3.13, run with `python -u` |
-
----
-
-## Running 24/7
-
-The bot **cannot run on Vercel** (serverless timeout). Options:
-
-- **Your PC** — `python -u Deriv-Stochrsi-Video-Bot.py` (free)
-- **VPS** — `nohup python -u Deriv-Stochrsi-Video-Bot.py > bot.log 2>&1 &` ($5/mo on DigitalOcean)
-- **Docker** — `FROM python:3.11-slim` + `pip install websockets aiohttp` (on VPS)
-
----
-
-## File Structure
-
-```
-project-root/
-├── Deriv-Stochrsi-Video-Bot.py     # Main bot (~700 lines)
-├── .env.local                        # Credentials (not committed)
-├── .env.example                      # Template for credentials
-├── app/api/deriv/
-│   ├── bot-session/route.ts          # Bridge endpoint for bot auth
-│   └── callback/route.ts             # OAuth callback for web app
-├── lib/deriv-session.ts              # OAuth session management
-├── components/
-│   ├── trading-terminal.tsx          # Web app trading UI
-│   ├── tick-chart.tsx                # TradingView chart
-│   ├── trading-context.tsx           # Shared trading state
-│   └── use-deriv-ws.ts              # WebSocket hook
-└── docs/BOT.md                       # This file
-```
-
-### Git History (bot-related)
-
-```
-25fa0bf Add simulation mode: record ticks and replay for backtesting
-c09e29e Add CLI arguments for symbol, stake, duration, barriers, dry-run
-bd80815 Fix buy request: move symbol to top level per Deriv API spec
-3cbeb0a Upgrade bot to v3.0: raw StochRSI detection + reconnection + keepalive
-71a21b4 Enhance Python bot with rich terminal UI
-7270bf3 Fix bot and bridge endpoint for Deriv snake_case API fields
-559a4b5 Add Python STOCHRSI bot with bridge auth and PAT mode support
-```
+**This is the single most impactful feature.** The barrier analysis showed that 5/6 losses were "was winning then reversed" - the bot entered 1-2 ticks too early. The delay catch
