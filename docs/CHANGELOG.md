@@ -10,7 +10,7 @@ Notable changes to both trading products in this repository, each tracked with i
 | Product | Latest | Full history |
 |---|---|---|
 | **Bots** | [v3.2 - Reliability, Session History & Filter Hardening (2026-09-03)](#v32---reliability-session-history--filter-hardening-2026-09-03) | [Bots](#bots) |
-| **Web App** | [Web v1.0 - Trading WebSocket Reliability & Diagnostics (2026-09-03)](#web-v10---trading-websocket-reliability--diagnostics-2026-09-03) | [Web App](#web-app) |
+| **Web App** | [Web v1.1 - Notifications, Price Alerts & Result Polish (2026-09-03)](#web-v11---notifications-price-alerts--result-polish-2026-09-03) | [Web App](#web-app) |
 
 ---
 
