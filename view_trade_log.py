@@ -6,12 +6,15 @@ Both Deriv-Stochrsi bots append one "session" record whenever they exit
 past runs are easy to review even when the console output was lost.
 
 Usage:
-    python view_trade_log.py [trade_log.json] [--trades] [--max-sessions N] [--trim]
+    python view_trade_log.py [trade_log.json] [--trades] [--max-sessions N] [--trim] [--stats]
 
 The optional --trades flag expands each session's settled contracts.
 --max-sessions N limits the display to the newest N sessions.
 --trim (requires --max-sessions) also deletes the older records from the
 file, keeping only the newest N.
+--stats additionally prints the win/loss band analysis from
+analyze_trade_log.py (overall WR, RSI/SRSI bands, after-loss behavior,
+SHORT misfire watch) using the same trade log.
 """
 
 import argparse
@@ -213,6 +216,8 @@ def main():
                     help="show only the newest N session records")
     ap.add_argument("--trim", action="store_true",
                     help="with --max-sessions N: delete older session records from the file")
+    ap.add_argument("--stats", action="store_true",
+                    help="also print the win/loss band analysis from analyze_trade_log.py")
     args = ap.parse_args()
     if args.max_sessions is not None and args.max_sessions < 1:
         ap.error("--max-sessions must be at least 1")
@@ -221,7 +226,16 @@ def main():
     if args.trim:
         if trim_sessions(args.file, args.max_sessions) is None:
             return 1
-    return print_history(args.file, show_trades=args.trades, max_sessions=args.max_sessions)
+    rc = print_history(args.file, show_trades=args.trades, max_sessions=args.max_sessions)
+    if args.stats:
+        print()
+        try:
+            from analyze_trade_log import print_analysis
+            rc = rc or print_analysis(args.file)
+        except ImportError:
+            print("X analyze_trade_log.py not found - cannot run band analysis")
+            rc = 1
+    return rc
 
 
 if __name__ == "__main__":
