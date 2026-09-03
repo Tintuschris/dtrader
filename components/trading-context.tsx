@@ -738,6 +738,17 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   const isBuyingRef = useRef(false);
   const handlePlaceTrade = useCallback(async () => {
     if (isBuyingRef.current) return;
+    // Never attempt a buy over a dead/reconnecting trading socket: the request
+    // cannot be delivered, and the proposal itself is stale by the time the
+    // connection comes back. Show the real state instead of a confusing failure.
+    if (connectionStatus !== "connected") {
+      setTradeError(
+        connectionStatus === "reconnecting"
+          ? "Trading connection interrupted — reconnecting, please wait…"
+          : "Trading connection unavailable — please reconnect.",
+      );
+      return;
+    }
     const proposal = proposalRef.current;
     if (!proposal) { setTradeError("No active proposal. Wait for pricing."); return; }
     const stakeNum = parseFloat(stake);
@@ -781,7 +792,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
       setIsBuying(false);
       isBuyingRef.current = false;
     }
-  }, [stake, activeContract, buy, balance, balanceCurrency, riskSettings, riskState, duration]);
+  }, [stake, activeContract, buy, balance, balanceCurrency, riskSettings, riskState, duration, connectionStatus]);
 
   /* ---- keyboard shortcuts ---- */
   useEffect(() => {

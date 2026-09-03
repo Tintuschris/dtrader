@@ -512,9 +512,19 @@ if (!isMounted) {
                     <button
                       className="buy-button"
                       onClick={() => void handlePlaceTrade()}
-                      disabled={isBuying || (!currentProposal && !proposalRef.current)}
+                      disabled={
+                        isBuying ||
+                        (!currentProposal && !proposalRef.current) ||
+                        connectionStatus !== "connected"
+                      }
                     >
-                      {isBuying ? "Placing…" : "Buy"}
+                      {isBuying
+                        ? "Placing…"
+                        : connectionStatus === "reconnecting"
+                          ? "Reconnecting…"
+                          : connectionStatus !== "connected"
+                            ? "Offline"
+                            : "Buy"}
                       <span><IconArrowUp size={16} /></span>
                     </button>
                     <button className="sell-button-lg sell-inactive" disabled>SELL</button>

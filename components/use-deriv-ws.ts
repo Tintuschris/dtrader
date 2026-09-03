@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createConnGuard,
+  rejectAllPending,
+  isProposalFresh,
+  findOpenPortfolioContract,
+} from "../lib/ws-lifecycle";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -95,6 +101,7 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const BASE_DELAY = 1000;
 const MAX_DELAY = 30000;
 const PING_INTERVAL_MS = 15_000; // Keep WebSocket alive
+const PROPOSAL_MAX_AGE_MS = 20_000; // A subscribed proposal older than this is stale
 
 function jitteredDelay(attempt: number): number {
   const base = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY);
@@ -122,12 +129,19 @@ export function useDerivTrading() {
   const proposalSeqRef = useRef(0);
   const proposeRef = useRef<(req: ProposalRequest) => Promise<Proposal | null>>(undefined);
   const lastProposalParamsRef = useRef<ProposalRequest | null>(null);
+  const connGuard = useRef(createConnGuard());
+  const proposalTimestampRef = useRef(0);
+  const reconcileOnOpenRef = useRef(false);
+  const activeContractRef = useRef<OpenContract | null>(null);
 
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
   const [balance, setBalance] = useState<number | null>(null);
   const [balanceCurrency, setBalanceCurrency] = useState("USD");
   const [activeContract, setActiveContract] = useState<OpenContract | null>(null);
+  useEffect(() => {
+    activeContractRef.current = activeContract;
+  }, [activeContract]);
   const [lastResult, setLastResult] = useState<TradeResult | null>(null);
   const [tradeHistory, setTradeHistory] = useState<TradeRecord[]>([]);
   const [currentProposal, setCurrentProposal] = useState<Proposal | null>(null);
@@ -205,10 +219,15 @@ export function useDerivTrading() {
         } catch { /* ignore */ }
 
         setConnectionStatus("connecting");
+        // Bump the connection generation BEFORE creating the socket: the
+        // handlers below capture it, so a stale socket's late onclose/onerror
+        // can never act on (or reconnect over) a newer connection.
+        const gen = connGuard.current.begin();
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
+          if (!connGuard.current.isCurrent(gen)) return;
           setConnectionStatus("connected");
           setLastError(null);
           reconnectAttempts.current = 0;
@@ -220,6 +239,51 @@ export function useDerivTrading() {
           // Re-subscribe to proposal if we had active params
           if (lastProposalParamsRef.current) {
             setTimeout(() => resubscribeProposal(), 200);
+          }
+          // Reconcile trades accepted before a disconnect: query the portfolio
+          // and recover any still-open contract (buy response was lost, or we
+          // were tracking an open contract when the socket dropped).
+          if (reconcileOnOpenRef.current) {
+            reconcileOnOpenRef.current = false;
+            if (!pendingPortfolio.current) {
+              ws.send(JSON.stringify({ portfolio: 1, req_id: String(nextReqId++) }));
+              pendingPortfolio.current = (data) => {
+                const open = findOpenPortfolioContract(data ? data.positions : null);
+                if (!open) return;
+                const contract: OpenContract = {
+                  contract_id: String(open.contract_id ?? ""),
+                  status: "open",
+                  contract_type: open.contract_type !== undefined ? String(open.contract_type) : undefined,
+                  underlying:
+                    open.underlying_symbol !== undefined
+                      ? String(open.underlying_symbol)
+                      : open.underlying !== undefined
+                        ? String(open.underlying)
+                        : undefined,
+                  buy_price: open.buy_price != null ? Number(open.buy_price) : undefined,
+                  payout: open.payout != null ? Number(open.payout) : undefined,
+                  tick_count: open.tick_count != null ? Number(open.tick_count) : undefined,
+                  barrier: open.barrier !== undefined ? String(open.barrier) : undefined,
+                };
+                setActiveContract(contract);
+                // Resolve a stranded buy with the recovered contract
+                if (pendingBuys.current.size > 0) {
+                  const entries = Array.from(pendingBuys.current.entries());
+                  const [lastId, lastResolve] = entries[entries.length - 1];
+                  pendingBuys.current.delete(lastId);
+                  lastResolve(contract);
+                }
+                // Track its settlement so the result is still counted
+                ws.send(
+                  JSON.stringify({
+                    proposal_open_contract: 1,
+                    contract_id: String(open.contract_id ?? ""),
+                    subscribe: 1,
+                    req_id: String(nextReqId++),
+                  }),
+                );
+              };
+            }
           }
         };
 
@@ -291,6 +355,7 @@ export function useDerivTrading() {
                 display_name: p.display_name,
               };
               proposalRef.current = proposal;
+              proposalTimestampRef.current = Date.now();
               // Only update React state if values actually changed to avoid
               // unnecessary re-renders that cause payout flickering
               setCurrentProposal((prev) => {
@@ -551,17 +616,36 @@ export function useDerivTrading() {
         };
 
         ws.onerror = (event) => {
+          if (!connGuard.current.isCurrent(gen)) return;
           console.error("Deriv trading WebSocket error:", event);
           setLastError((prev) => prev ?? "WebSocket connection error — check that your account has trading access");
         };
 
         ws.onclose = (event) => {
           stopPing();
+          // A stale socket (superseded by a newer connect()) must not schedule
+          // reconnects or clobber state belonging to the live connection.
+          if (!connGuard.current.isCurrent(gen)) return;
           const code = event.code;
           const reason = event.reason;
           const attempt = reconnectAttempts.current;
           console.log(`WebSocket closed: code=${code} reason=${reason} attempt=${attempt}`);
           setConnectionStatus((prev) => prev === "error" ? prev : "disconnected");
+          // Reject in-flight requests so nothing hangs on the dead socket, and
+          // remember to reconcile after reconnect if a buy was stranded or a
+          // contract was open (its settlement stream died with the socket).
+          const hadPendingBuy = pendingBuys.current.size > 0;
+          const hadOpenContract = !!activeContractRef.current;
+          rejectAllPending([pendingProposals.current, pendingBuys.current]);
+          if (pendingPortfolio.current) {
+            pendingPortfolio.current(null);
+            pendingPortfolio.current = null;
+          }
+          if (pendingProfitTable.current) {
+            pendingProfitTable.current(null);
+            pendingProfitTable.current = null;
+          }
+          if (hadPendingBuy || hadOpenContract) reconcileOnOpenRef.current = true;
           if (code !== 1000 && code !== 1001) {
             if (attempt < MAX_RECONNECT_ATTEMPTS) {
               reconnectAttempts.current = attempt + 1;
@@ -569,6 +653,8 @@ export function useDerivTrading() {
               setConnectionStatus("reconnecting");
               setLastError(`Reconnecting in ${Math.round(delay / 1000)}s… (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`);
               reconnectTimer.current = setTimeout(() => {
+                // Only reconnect if this connection is still the current one
+                if (!connGuard.current.isCurrent(gen)) return;
                 void connect(activeAccountId);
               }, delay);
             } else {
@@ -700,6 +786,16 @@ export function useDerivTrading() {
     (proposalId: string, price: number): Promise<OpenContract | null> => {
       return new Promise((resolve) => {
         setLastError(null);
+        // A proposal that hasn't been refreshed (socket was down) may have
+        // expired server-side — refuse it and re-subscribe for fresh pricing.
+        if (!isProposalFresh(proposalTimestampRef.current, PROPOSAL_MAX_AGE_MS)) {
+          proposalRef.current = null;
+          setCurrentProposal(null);
+          setLastError("Trading connection interrupted — refreshing pricing");
+          resubscribeProposal();
+          resolve(null);
+          return;
+        }
         // Don't clear proposal here — it wastes a re-render while waiting
         // for WS response. Clear it only after buy succeeds (in the msg handler).
         const msg: Record<string, unknown> = {
@@ -722,13 +818,20 @@ export function useDerivTrading() {
         }, 8000);
       });
     },
-    [send],
+    [send, resubscribeProposal],
   );
 
   /* ---- buy (bot — no auto-subscribe, reduces WS traffic) ---- */
   const buyBot = useCallback(
     (proposalId: string, price: number): Promise<OpenContract | null> => {
       return new Promise((resolve) => {
+        if (!isProposalFresh(proposalTimestampRef.current, PROPOSAL_MAX_AGE_MS)) {
+          proposalRef.current = null;
+          setLastError("Trading connection interrupted — refreshing pricing");
+          resubscribeProposal();
+          resolve(null);
+          return;
+        }
         skipAutoSubscribe.current = true;
         const msg: Record<string, unknown> = { buy: proposalId, price };
         const id = send(msg);
@@ -743,7 +846,7 @@ export function useDerivTrading() {
         }, 8000);
       });
     },
-    [send],
+    [send, resubscribeProposal],
   );
 
   /* ---- sell ---- */
@@ -891,6 +994,7 @@ export function useDerivTrading() {
         proposalSubscriptionIdRef.current = null;
       }
       proposalRef.current = null;
+      proposalTimestampRef.current = 0;
       setCurrentProposal(null);
       setProposalLoading(false);
     },
