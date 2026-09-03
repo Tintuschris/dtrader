@@ -20,6 +20,7 @@ import {
   dedupeWsDrops,
   postWsDrops,
   WsDropForwarder,
+  StaleWatchdog,
   type WsCloseLogEntry,
 } from "../lib/ws-lifecycle";
 
@@ -262,19 +263,43 @@ describe("appendWsCloseLog / readWsCloseLog — drop diagnostics", () => {
 /*  Server forwarding — batching, dedupe, id generation                */
 /* ------------------------------------------------------------------ */
 
-function manualTimers() {
+function fakeClock() {
+  let now = 0;
   let nextId = 0;
-  const timers = new Map<number, () => void>();
+  const timers = new Map<number, { cb: () => void; dueAt: number }>();
   return {
-    set: (cb: () => void) => { const id = ++nextId; timers.set(id, cb); return id as unknown as ReturnType<typeof setTimeout>; },
-    clear: (id: ReturnType<typeof setTimeout>) => { timers.delete(id as unknown as number); },
-    runAll: async () => {
-      const cbs = [...timers.values()];
-      timers.clear();
-      for (const cb of cbs) await cb();
+    now: () => now,
+    set: (cb: () => void, ms: number) => {
+      const id = ++nextId;
+      timers.set(id, { cb, dueAt: now + ms });
+      return id as unknown as ReturnType<typeof setTimeout>;
     },
+    clear: (id: ReturnType<typeof setTimeout>) => {
+      timers.delete(id as unknown as number);
+    },
+    advance: async (ms: number) => {
+      now += ms;
+      const due = [...timers.entries()]
+        .filter(([, t]) => t.dueAt <= now)
+        .sort((a, b) => a[1].dueAt - b[1].dueAt);
+      for (const [id, t] of due) {
+        timers.delete(id);
+        await t.cb();
+      }
+    },
+    runAll: async () => { await advance(Number.MAX_SAFE_INTEGER); },
     count: () => timers.size,
   };
+  async function advance(ms: number) {
+    now += ms;
+    const due = [...timers.entries()]
+      .filter(([, t]) => t.dueAt <= now)
+      .sort((a, b) => a[1].dueAt - b[1].dueAt);
+    for (const [id, t] of due) {
+      timers.delete(id);
+      await t.cb();
+    }
+  }
 }
 
 describe("makeDropEntryId / dedupeWsDrops", () => {
@@ -324,7 +349,7 @@ describe("postWsDrops — fire-and-forget", () => {
 
 describe("WsDropForwarder — batched, debounced, retrying", () => {
   it("debounces: sends nothing until the quiet window elapses", async () => {
-    const timers = manualTimers();
+    const timers = fakeClock();
     const send = jest.fn().mockResolvedValue(true);
     const f = new WsDropForwarder({
       send,
@@ -343,7 +368,7 @@ describe("WsDropForwarder — batched, debounced, retrying", () => {
   });
 
   it("flushes immediately once the batch threshold is reached", async () => {
-    const timers = manualTimers();
+    const timers = fakeClock();
     const send = jest.fn().mockResolvedValue(true);
     const f = new WsDropForwarder({
       send,
@@ -358,7 +383,7 @@ describe("WsDropForwarder — batched, debounced, retrying", () => {
   });
 
   it("requeues and retries a failed send, then succeeds", async () => {
-    const timers = manualTimers();
+    const timers = fakeClock();
     const send = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const f = new WsDropForwarder({
       send,
@@ -376,7 +401,7 @@ describe("WsDropForwarder — batched, debounced, retrying", () => {
   });
 
   it("caps the queue at maxQueued", () => {
-    const timers = manualTimers();
+    const timers = fakeClock();
     const send = jest.fn().mockResolvedValue(true);
     const f = new WsDropForwarder({
       send,
@@ -390,7 +415,7 @@ describe("WsDropForwarder — batched, debounced, retrying", () => {
   });
 
   it("dedupes entries pushed twice", async () => {
-    const timers = manualTimers();
+    const timers = fakeClock();
     const send = jest.fn().mockResolvedValue(true);
     const f = new WsDropForwarder({
       send,
@@ -402,5 +427,68 @@ describe("WsDropForwarder — batched, debounced, retrying", () => {
     f.push([e]); // same id — ignored
     await timers.runAll();
     expect(send.mock.calls[0][0]).toEqual([e]);
+  });
+});
+
+
+describe("StaleWatchdog — proactive reconnect on silence", () => {
+  it("fires onStale once the silence window elapses", async () => {
+    const clock = fakeClock();
+    const onStale = jest.fn();
+    const w = new StaleWatchdog({ staleMs: 45_000, onStale, setTimer: clock.set, clearTimer: clock.clear });
+    expect(w.armed).toBe(false);
+    w.arm();
+    expect(w.armed).toBe(true);
+    await clock.advance(44_999);
+    expect(onStale).not.toHaveBeenCalled();
+    await clock.advance(1);
+    expect(onStale).toHaveBeenCalledTimes(1);
+    expect(w.armed).toBe(false); // fired — timer consumed
+  });
+
+  it("does not fire again after firing", async () => {
+    const clock = fakeClock();
+    const onStale = jest.fn();
+    const w = new StaleWatchdog({ staleMs: 10_000, onStale, setTimer: clock.set, clearTimer: clock.clear });
+    w.arm();
+    await clock.advance(10_000);
+    await clock.advance(10_000);
+    expect(onStale).toHaveBeenCalledTimes(1);
+  });
+
+  it("poke (a received message) resets the countdown", async () => {
+    const clock = fakeClock();
+    const onStale = jest.fn();
+    const w = new StaleWatchdog({ staleMs: 10_000, onStale, setTimer: clock.set, clearTimer: clock.clear });
+    w.arm();
+    await clock.advance(9_000); // 9s of silence…
+    w.poke(); // …but a message arrives: countdown restarts
+    await clock.advance(9_000);
+    expect(onStale).not.toHaveBeenCalled(); // extended, not fired at 18s
+    await clock.advance(1_000);
+    expect(onStale).toHaveBeenCalledTimes(1); // fires 10s after the poke
+  });
+
+  it("disarm prevents firing (close/unmount path)", async () => {
+    const clock = fakeClock();
+    const onStale = jest.fn();
+    const w = new StaleWatchdog({ staleMs: 10_000, onStale, setTimer: clock.set, clearTimer: clock.clear });
+    w.arm();
+    w.disarm();
+    expect(w.armed).toBe(false);
+    expect(clock.count()).toBe(0);
+    await clock.advance(60_000);
+    expect(onStale).not.toHaveBeenCalled();
+  });
+
+  it("re-arms cleanly after a fire or disarm", async () => {
+    const clock = fakeClock();
+    const onStale = jest.fn();
+    const w = new StaleWatchdog({ staleMs: 10_000, onStale, setTimer: clock.set, clearTimer: clock.clear });
+    w.arm();
+    await clock.advance(10_000); // fires once
+    w.arm(); // new connection / reopened
+    await clock.advance(10_000);
+    expect(onStale).toHaveBeenCalledTimes(2);
   });
 });

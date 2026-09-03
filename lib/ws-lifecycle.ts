@@ -309,3 +309,61 @@ export class WsDropForwarder {
     }
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  Stale-connection watchdog                                          */
+/* ------------------------------------------------------------------ */
+/**
+ * Fires `onStale` when no message has arrived for `staleMs` while armed.
+ * The caller pokes it on every received message (extending the countdown)
+ * and disarms it on close/unmount. Timers are injectable for tests.
+ *
+ * Used to proactively close a half-dead trading socket instead of waiting
+ * for the server to drop it: pings keep flowing outward, but if responses
+ * stop, the connection is stalled even though TCP looks "open".
+ */
+export class StaleWatchdog {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly staleMs: number;
+  private readonly onStale: () => void;
+  private readonly setTimer: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  private readonly clearTimer: (t: ReturnType<typeof setTimeout>) => void;
+
+  constructor(opts: {
+    staleMs: number;
+    onStale: () => void;
+    setTimer?: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
+    clearTimer?: (t: ReturnType<typeof setTimeout>) => void;
+  }) {
+    this.staleMs = opts.staleMs;
+    this.onStale = opts.onStale;
+    this.setTimer = opts.setTimer ?? ((cb, ms) => setTimeout(cb, ms));
+    this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
+  }
+
+  get armed(): boolean {
+    return this.timer !== null;
+  }
+
+  /** Start (or restart) the silence countdown. */
+  arm(): void {
+    this.disarm();
+    this.timer = this.setTimer(() => {
+      this.timer = null;
+      this.onStale();
+    }, this.staleMs);
+  }
+
+  /** Reset the countdown — call on every received message. */
+  poke(): void {
+    this.arm();
+  }
+
+  /** Stop the countdown — call on close / unmount. */
+  disarm(): void {
+    if (this.timer !== null) {
+      this.clearTimer(this.timer);
+      this.timer = null;
+    }
+  }
+}

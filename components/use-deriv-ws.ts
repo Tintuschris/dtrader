@@ -11,6 +11,7 @@ import {
   makeDropEntryId,
   postWsDrops,
   WsDropForwarder,
+  StaleWatchdog,
   type WsCloseLogEntry,
 } from "../lib/ws-lifecycle";
 
@@ -110,6 +111,10 @@ const PING_INTERVAL_MS = 15_000; // Keep WebSocket alive
 const PROPOSAL_MAX_AGE_MS = 20_000; // A subscribed proposal older than this is stale
 const WS_DROP_LOG_KEY = "freebuff_ws_drops"; // capped ring buffer of socket closes
 const WS_DROP_LOG_MAX = 50;
+// Proactively close + reconnect when no message of any kind (incl. ping
+// responses) arrives for this long while supposedly connected. Pings go out
+// every 15s, so 45s of silence means the socket is half-dead.
+const STALE_CONNECTION_MS = Number(process.env.NEXT_PUBLIC_WS_STALE_MS ?? 45_000) || 45_000;
 
 function jitteredDelay(attempt: number): number {
   const base = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY);
@@ -143,6 +148,7 @@ export function useDerivTrading() {
   const activeContractRef = useRef<OpenContract | null>(null);
   const connectedAtRef = useRef<number | null>(null); // when the current socket opened
   const dropForwarderRef = useRef<WsDropForwarder | null>(null);
+  const staleWatchdogRef = useRef<StaleWatchdog | null>(null); // latest connection's watchdog
 
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -206,6 +212,7 @@ export function useDerivTrading() {
         clearTimeout(reconnectTimer.current);
         reconnectTimer.current = null;
       }
+      staleWatchdogRef.current?.disarm();
 
       setConnectionStatus("authenticating");
       setLastError(null);
@@ -237,6 +244,24 @@ export function useDerivTrading() {
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
+        // Stale-connection watchdog: poke on every message, fire on silence.
+        // Closing with 4000 routes through the normal onclose path (pending
+        // requests rejected, reconnect scheduled, reconciliation armed).
+        const watchdog = new StaleWatchdog({
+          staleMs: STALE_CONNECTION_MS,
+          onStale: () => {
+            // A stale socket's watchdog must never touch a newer connection.
+            if (!connGuard.current.isCurrent(gen)) return;
+            const current = wsRef.current;
+            if (current && current.readyState === WebSocket.OPEN) {
+              console.warn(`[WS] No messages for ${STALE_CONNECTION_MS}ms — closing stale connection`);
+              setLastError("Trading connection stalled — reconnecting…");
+              current.close(4000, "stale connection watchdog");
+            }
+          },
+        });
+        staleWatchdogRef.current = watchdog;
+
         ws.onopen = () => {
           if (!connGuard.current.isCurrent(gen)) return;
           setConnectionStatus("connected");
@@ -245,6 +270,7 @@ export function useDerivTrading() {
           setReconnectAttempt(0);
           connectedAtRef.current = Date.now();
           startPing();
+          watchdog.arm();
           // subscribe to balance
           ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: String(nextReqId++) }));
           // Fetch all accounts linked to this login
@@ -307,6 +333,10 @@ export function useDerivTrading() {
           } catch {
             return;
           }
+
+          // Any message (including ping responses) proves the connection is
+          // alive — extend the stale-connection countdown.
+          watchdog.poke();
 
           // Ignore keepalive ping responses
           if (msg.msg_type === "ping") {
@@ -639,6 +669,7 @@ export function useDerivTrading() {
           // A stale socket (superseded by a newer connect()) must not schedule
           // reconnects or clobber state belonging to the live connection.
           if (!connGuard.current.isCurrent(gen)) return;
+          watchdog.disarm();
           const code = event.code;
           const reason = event.reason;
           const attempt = reconnectAttempts.current;
@@ -935,6 +966,7 @@ export function useDerivTrading() {
     return () => {
       stopPing();
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      staleWatchdogRef.current?.disarm();
       wsRef.current?.close();
     };
   }, [stopPing]);

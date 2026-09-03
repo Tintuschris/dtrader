@@ -75,6 +75,28 @@ interrupted — reconnecting…" if it somehow gets invoked.
 
 Full suite: **108 tests passing**; `tsc --noEmit` clean.
 
+## Stale-connection watchdog (proactive reconnect)
+
+The authenticated trading socket can go half-dead: TCP still "open", pings
+still being sent — but the server has stopped responding. Previously the app
+waited for the server to drop it (which could take minutes of unresponsiveness
+and fail the next Buy). Now a `StaleWatchdog` (in `lib/ws-lifecycle.ts`,
+wired into `use-deriv-ws.ts`) proactively closes and reconnects:
+
+- Armed when the socket opens; **poked (countdown reset) on every received
+  message** — including ping responses, which the hook already sends every
+  15 s.
+- If no message of any kind arrives for **45 s** (default; tune with
+  `NEXT_PUBLIC_WS_STALE_MS`), it closes the socket with code `4000`
+  ("stale connection watchdog").
+- That close routes through the normal drop path: pending requests are
+  rejected, the reconnect (with backoff, shown in the banner as "Reconnecting
+  (attempt N/10)…") is scheduled, and reconciliation recovers any open
+  contract.
+- The watchdog is per-connection and generation-guarded, so a stale socket's
+  watchdog can never close a newer connection. It is disarmed on close and on
+  unmount.
+
 ## Server-side drop log — /api/diag
 
 The same drop entries are forwarded to the server (batched and rate-limited),
@@ -174,4 +196,5 @@ handler.
 - `components/trading-status-banner.tsx` — persistent connection banner
 - `app/api/diag/route.ts` — POST/GET diag endpoint (rate-limited, deduped)
 - `lib/ws-drop-store.ts` — JSONL file store; `lib/ws-rate-limit.ts` — limiter
+- `lib/ws-lifecycle.ts` — `StaleWatchdog` (silence → proactive reconnect)
 - `lib/ws-lifecycle.ts` — `appendWsCloseLog` / `readWsCloseLog` ring buffer
