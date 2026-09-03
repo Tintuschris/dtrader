@@ -1,0 +1,6 @@
+# Canonical line-ending policy: text files are stored with LF in the
+# repository and checked out with LF on every platform. Declaring this in
+# .gitattributes overrides each machine's core.autocrlf / core.eol
+# settings, so worktrees, diffs, and git status are identical everywhere
+# and phantom EOL-only modifications never reappear.
+* text=auto eol=lf

@@ -1,10 +1,15 @@
 # Changelog
 
-All notable changes to the Deriv STOCHRSI L-Shape Bot.
+Notable changes to both trading products in this repository, each tracked with its own version history:
 
-## v3.2 - Reliability, Session History & Web Socket Hardening (2026-09-03)
+- **Bots** - the Deriv STOCHRSI L-Shape Python trading bots (`Deriv-Stochrsi-Video-Bot.py`, `Deriv-Stochrsi-SloppyL-Soft.py`) and their analysis tooling (`view_trade_log.py`, `analyze_trade_log.py`)
+- **Web App** - the DTrader Options Terminal Next.js web trader, including its trading WebSocket reliability & diagnostics work
 
-### Python Bots
+---
+
+## Bots
+
+### v3.2 - Reliability, Session History & Filter Hardening (2026-09-03)
 
 #### New Features
 
@@ -27,33 +32,11 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 - **`--account` flag** now selects real/demo correctly; shutdown saves trades
 - **Open-contract settlement recovered after reconnect** - POC re-subscription restored after a WebSocket drop
 
-### Web App (trading WebSocket reliability) - see `docs/web-ws-reliability.md`
+---
+
+### v3.1 - Strategy Filters + Trade Logging (2026-09-02)
 
 #### New Features
-
-- **Persistent status banner** across the workspace showing trading-socket state (live / reconnecting with attempt N/10 / offline)
-- **Drop diagnostics** - every socket close (code, reason, duration, in-flight requests) logged to a localStorage ring buffer
-- **Server-side drop log** - batched, rate-limited `/api/diag` endpoint writing `data/ws-drops.jsonl`
-- **Stale watchdog** - proactively closes and reconnects when no WS message arrives for 45s (tunable via `NEXT_PUBLIC_WS_STALE_MS`)
-
-#### Bug Fixes
-
-- **Reconnect race** - connection-generation guard so stale sockets can't take over or reconnect over newer connections
-- **Pending requests hung on disconnect** - proposals/buys now reject immediately when the socket closes
-- **No pre-buy freshness check** - stale-proposal guard refuses expired proposals and re-subscribes; Buy disabled while not connected
-- **Lost buy responses** - post-reconnect portfolio reconciliation recovers contracts accepted before the disconnect
-
-### Testing
-
-- WebSocket lifecycle test suite (disconnect during proposal/buy, stale-socket races, lost buy responses, drop-log ring buffer, stale watchdog) - suite grew from 89 to 133 tests, `tsc --noEmit` clean
-
----
-
----
-
-## v3.1 - Strategy Filters + Trade Logging (2026-09-02)
-
-### New Features
 
 - **6 configurable strategy filters** to maximize win rate
 - **Entry delay confirmation** - waits 2 ticks for price confirmation before placing trade
@@ -63,7 +46,7 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 - **All filter thresholds configurable** via CLI args and environment variables
 - **atexit handler** - gracefully saves trade log and recording on bot shutdown
 
-### Strategy Filters Added
+#### Strategy Filters Added
 
 | # | Filter | CLI Arg | Default | Purpose |
 |---|--------|---------|---------|---------|
@@ -74,7 +57,7 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 | 5 | Adaptive Flat Cap | `--adaptive-flat-max` / `--adaptive-breakout-min` | 8 / 0.20 | Stronger breakout for stale signals |
 | 6 | Price Direction | `--price-dir-min` | 3 | Price momentum must align |
 
-### New CLI Args
+#### New CLI Args
 
 | Arg | Env Var | Default | Description |
 |-----|---------|---------|-------------|
@@ -91,7 +74,7 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 | `--barrier-strong` | `BARRIER_STRONG` | -0.20 | Tight barrier for strong signals |
 | `--barrier-weak` | `BARRIER_WEAK` | -0.30 | Wide barrier for weaker signals |
 
-### Bug Fixes
+#### Bug Fixes
 
 - **exit_spot always 0.0000** - Now reads `entry_spot`/`exit_spot` from POC settlement messages (falls back to `entry_tick`/`exit_tick`)
 - **Duplicate trade display** - Tracks `_last_displayed_cid` to prevent showing the same trade result twice
@@ -99,7 +82,7 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 - **Active contract ID lost on reconnect** - Now saves `_active_contract_id` on buy success for POC re-subscription
 - **Infinite crash loop on POC error** - Try/except wrapper ensures `_active_contract_id = None` even if display function crashes
 
-### Internal Changes
+#### Internal Changes
 
 - Added `_l_flat_extreme` state variable to track SRSI peak/trough during flat zone
 - Added `_pending_signal` queue for entry delay mechanism
@@ -116,9 +99,9 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 
 ---
 
-## v3.0 - Raw StochRSI Detection (2026-08-28)
+### v3.0 - Raw StochRSI Detection (2026-08-28)
 
-### Changes
+#### Changes
 
 - Replaced SMA(3)-smoothed K detection with **raw StochRSI** detection
 - Added L-shape state machine (IDLE -> SLOPE -> FLAT -> READY -> SIGNAL)
@@ -129,7 +112,7 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 - Added record/replay mode (`--record`/`--replay`)
 - Added CLI arguments for symbol, stake, duration, barriers, account type
 
-### Detection Parameters
+#### Detection Parameters
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
@@ -143,9 +126,9 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 
 ---
 
-## v2.0 - Enhanced CLI (2026-08-26)
+### v2.0 - Enhanced CLI (2026-08-26)
 
-### Changes
+#### Changes
 
 - Added PAT token authentication mode (standalone, no web app needed)
 - Added Bridge mode (shares web app OAuth session)
@@ -154,11 +137,115 @@ All notable changes to the Deriv STOCHRSI L-Shape Bot.
 
 ---
 
-## v1.0 - Initial Bot (2026-08-24)
+### v1.0 - Initial Bot (2026-08-24)
 
-### Changes
+#### Changes
 
 - Basic bot with SMA(3)-smoothed K detection
 - Deriv WebSocket connection
 - Trade placement and result tracking
 - Bridge endpoint for OAuth authentication
+
+---
+
+## Web App
+
+The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade ticket, and the authenticated Deriv trading WebSocket. Its reliability work is documented in detail in [`docs/web-ws-reliability.md`](web-ws-reliability.md).
+
+### Web v1.0 - Trading WebSocket Reliability & Diagnostics (2026-09-03)
+
+#### New Features
+
+- **Persistent status banner** across the workspace showing trading-socket state (live / reconnecting with attempt N/10 / offline)
+- **Drop diagnostics** - every socket close (code, reason, duration, in-flight requests) logged to a localStorage ring buffer
+- **Server-side drop log** - batched, rate-limited `/api/diag` endpoint writing `data/ws-drops.jsonl`
+- **Stale watchdog** - proactively closes and reconnects when no WS message arrives for 45s (tunable via `NEXT_PUBLIC_WS_STALE_MS`)
+
+#### Bug Fixes
+
+- **Reconnect race** - connection-generation guard so stale sockets can't take over or reconnect over newer connections
+- **Pending requests hung on disconnect** - proposals/buys now reject immediately when the socket closes
+- **No pre-buy freshness check** - stale-proposal guard refuses expired proposals and re-subscribes; Buy disabled while not connected
+- **Lost buy responses** - post-reconnect portfolio reconciliation recovers contracts accepted before the disconnect
+
+#### Testing
+
+- WebSocket lifecycle test suite (disconnect during proposal/buy, stale-socket reconnect races, lost buy responses, drop-log ring buffer, stale watchdog) - suite grew from 89 to 133 tests, `tsc --noEmit` clean
+
+### Web v0.8 - Componentization, Hedge & Resolution Markers (2026-08-31)
+
+- Trading terminal split into composable components managed through `TradingContext`
+- One-click **Hedge** button auto-fills the opposite contract
+- Resolution barrier line and trade tick countdown added to the chart (duration configurable)
+- Historical trade resolution markers with hover tooltips (win/loss, digit, profit)
+- Chart tooltip fixes, proposal reconnection on drop, and buy-button lag fix
+
+---
+
+### Web v0.7 - Trade Ticket & Connection Visibility (2026-08-30)
+
+- Trade ticket rework: 7 UX enhancements, simplification, and buy-flow diagnostics
+- Payout deflicker, sound/vibration feedback, stake confirmation, sell styling
+- Live tick stream stabilized by splitting `ticks_history` from the `ticks` subscription
+- Per-market WS connection status tracking with UI indicators
+- Analyzer recommendations auto-fill the trade ticket; auto-trade interval made configurable
+
+---
+
+### Web v0.6 - Portfolio Accuracy & TradingView Charts (2026-08-29)
+
+- Portfolio and profit table moved to the Core API v3 client-side WebSocket (fixes serverless/WS-pool crashes); fallback chain for trades with reduced settlement delay
+- Payout amount flickering eliminated from the proposal subscription
+- Transfer payloads matched to the actual Deriv schema (UUID `request_id`, platform-compatible preview)
+- Trade result overlay converted from blocking modal to bottom toast; trade resolution marker with exit digit on chart
+- SVG tick chart replaced with TradingView Lightweight Charts v5
+
+---
+
+### Web v0.5 - Centralized State & Performance (2026-08-28)
+
+- Centralized `DerivContext` with React Query; portfolio dashboard migrated to query hooks with auto-refreshing balances
+- Proposal subscription replaces request/response polling
+- Trade placement critical path optimized for faster click response; proposal debounce cut from 250ms to 100ms
+- Jittered exponential backoff with reconnect added across all React Query hooks (including the market analyzer)
+- Shared formatting helpers, error boundaries, and desktop nav redesign with icons
+
+---
+
+### Web v0.4 - Trading Reliability & Auto-Trade (2026-08-27)
+
+- Deriv-style chart with market search and wallet sub-accounts
+- Tick stream reconnection; robust balances/trades APIs with loginId extraction from OAuth
+- Auto-trade engine with configuration panel and UI toggle
+- Instant trade placement with cached proposal fallback
+- Wallet balances via the `account_list` WebSocket (replacing the broken REST API)
+
+---
+
+### Web v0.3 - Dashboards, Analyzer & v3 API Migration (2026-08-26)
+
+- Wallet panel with multi-account balances and fund transfers
+- Portfolio dashboard with P&L charts and trade analytics
+- Risk management panel with stake limits and stop-loss controls
+- Notification system with toast center
+- Market Analyzer UI: TF.js training worker with epoch charts, confusion matrix, model comparison and auto-selection, IndexedDB persistence
+- Trading terminal, Blockly bot execution, and UI integration
+- Deriv endpoints migrated from the Options API to the v3 WebSocket API
+
+---
+
+### Web v0.2 - Workspace Expansion & Bot Builder (2026-08-25)
+
+- Mobile-responsive UI overhaul with workspace navigation and WS stability
+- Live tick chart with skeleton loader and real tick history
+- WebSocket reconnect with jittered exponential backoff
+- Payout-lag and stale-timeout fixes in the trade ticket
+- Bot Builder: Blockly visual editor, XML bot import/export, 16-strategy template library, JS-Interpreter sandbox, strategy save/load, backtesting with tick replay
+- Market Analyzer foundation with ML-based trade recommendations; OAuth-only login (PAT fallback removed)
+
+---
+
+### Web v0.1 - Initial Deriv Trading Pipeline (2026-08-24)
+
+- Full Deriv trading pipeline with OAuth 2.0 login and account list
+- Trading terminal with live ticks and trade placement; auth/session API routes
