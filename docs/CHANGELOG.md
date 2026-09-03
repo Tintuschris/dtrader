@@ -5,6 +5,13 @@ Notable changes to both trading products in this repository, each tracked with i
 - **Bots** - the Deriv STOCHRSI L-Shape Python trading bots (`Deriv-Stochrsi-Video-Bot.py`, `Deriv-Stochrsi-SloppyL-Soft.py`) and their analysis tooling (`view_trade_log.py`, `analyze_trade_log.py`)
 - **Web App** - the DTrader Options Terminal Next.js web trader, including its trading WebSocket reliability & diagnostics work
 
+## Latest Releases
+
+| Product | Latest | Full history |
+|---|---|---|
+| **Bots** | [v3.2 - Reliability, Session History & Filter Hardening (2026-09-03)](#v32---reliability-session-history--filter-hardening-2026-09-03) | [Bots](#bots) |
+| **Web App** | [Web v1.0 - Trading WebSocket Reliability & Diagnostics (2026-09-03)](#web-v10---trading-websocket-reliability--diagnostics-2026-09-03) | [Web App](#web-app) |
+
 ---
 
 ## Bots
