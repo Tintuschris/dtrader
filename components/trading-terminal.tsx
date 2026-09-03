@@ -25,6 +25,7 @@ import type { TradeRecommendation } from "./market-analyzer";
 import RiskManagement, { defaultRiskSettings, createInitialRiskState, type RiskSettings } from "./risk-management";
 import TopBar from "./trading-top-bar";
 import MobileMenu from "./trading-mobile-menu";
+import TradingStatusBanner from "./trading-status-banner";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -100,6 +101,9 @@ if (!isMounted) {
   return (
     <main className="app-shell">
       {resultOverlay}
+
+      {/* ===== TRADING SOCKET STATUS (persistent, sticky) ===== */}
+      <TradingStatusBanner />
 
       {/* ===== TOP BAR ===== */}
       <header className="topbar">

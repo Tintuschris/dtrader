@@ -142,6 +142,7 @@ export function useDerivTrading() {
 
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [balance, setBalance] = useState<number | null>(null);
   const [balanceCurrency, setBalanceCurrency] = useState("USD");
   const [activeContract, setActiveContract] = useState<OpenContract | null>(null);
@@ -237,6 +238,7 @@ export function useDerivTrading() {
           setConnectionStatus("connected");
           setLastError(null);
           reconnectAttempts.current = 0;
+          setReconnectAttempt(0);
           connectedAtRef.current = Date.now();
           startPing();
           // subscribe to balance
@@ -681,6 +683,7 @@ export function useDerivTrading() {
           if (code !== 1000 && code !== 1001) {
             if (attempt < MAX_RECONNECT_ATTEMPTS) {
               reconnectAttempts.current = attempt + 1;
+              setReconnectAttempt(attempt + 1);
               const delay = jitteredDelay(attempt);
               setConnectionStatus("reconnecting");
               setLastError(`Reconnecting in ${Math.round(delay / 1000)}s… (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`);
@@ -690,6 +693,7 @@ export function useDerivTrading() {
                 void connect(activeAccountId);
               }, delay);
             } else {
+              setReconnectAttempt(MAX_RECONNECT_ATTEMPTS);
               setLastError(`Connection lost after ${MAX_RECONNECT_ATTEMPTS} attempts. Try switching accounts or refreshing the page.`);
             }
           }
@@ -1005,6 +1009,7 @@ export function useDerivTrading() {
 
   return {
     connectionStatus,
+    reconnectAttempt,
     balance,
     balanceCurrency,
     activeContract,

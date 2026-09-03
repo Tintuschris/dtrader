@@ -75,6 +75,24 @@ interrupted — reconnecting…" if it somehow gets invoked.
 
 Full suite: **108 tests passing**; `tsc --noEmit` clean.
 
+## Persistent connection-status banner
+
+`components/trading-status-banner.tsx` renders a slim, sticky strip at the
+top of the workspace (mounted in the root layout shell, so it persists across
+all tabs and pages). It always shows the trading-socket state, so a dead
+trading connection can never hide behind a live-looking chart:
+
+- **Live** (green) — "Trading connection live · Demo/Real account"
+- **Reconnecting** (amber) — "Trading connection interrupted — reconnecting
+  (attempt N/10)…" — the attempt count comes from new `reconnectAttempt`
+  state on `useDerivTrading()`
+- **Offline / Error** (red) — trades cannot be placed
+- **Connecting / Authenticating** (neutral) — transient states; before an
+  account is activated the initial "disconnected" state is shown as neutral
+  "Connecting to Deriv…" rather than a false offline alarm
+
+Inline styles only — the component does not touch `globals.css`.
+
 ## Drop diagnostics — every socket close is logged
 
 Every trading-socket close is appended to a capped, newest-first ring buffer
@@ -122,4 +140,5 @@ handler.
 - `components/trading-context.tsx` — connection check in `handlePlaceTrade`
 - `components/trading-terminal.tsx` — Buy disabled/labeled while offline
 - `__tests__/ws-lifecycle.test.ts` — lifecycle tests
+- `components/trading-status-banner.tsx` — persistent connection banner
 - `lib/ws-lifecycle.ts` — `appendWsCloseLog` / `readWsCloseLog` ring buffer

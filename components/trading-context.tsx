@@ -131,6 +131,7 @@ export type TradingContextValue = {
   balance: number | null;
   balanceCurrency: string;
   connectionStatus: string;
+  reconnectAttempt: number;
   lastResult: any;
   clearLastResult: () => void;
   tradeHistory: any[];
@@ -214,6 +215,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
 
   const {
     connectionStatus,
+    reconnectAttempt,
     balance,
     balanceCurrency,
     activeContract,
@@ -903,7 +905,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     handlePlaceTrade, handleUseRecommendation, handleContractGroupChange, handleHedge,
     activateAccount, loadAccounts, formatContractType,
     // From hooks
-    balance, balanceCurrency, connectionStatus, lastResult, clearLastResult,
+    balance, balanceCurrency, connectionStatus, reconnectAttempt, lastResult, clearLastResult,
     tradeHistory, currentProposal, proposalRef, proposalLoading, activeContract, buy, sell,
     setMarkets, authLoading, resolvedTrades,
     subscribeProposal, clearError, lastError, authenticated, login, logout,
