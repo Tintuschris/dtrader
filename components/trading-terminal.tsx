@@ -400,7 +400,7 @@ if (!isMounted) {
                 </div>
                 <div className="digit-strip">
                   {percentages.map((pct, digit) => (
-                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? `resolved ${resolvedOutcome ?? ""}`.trim() : ""}`} onClick={() => setSelectedDigit(digit)}>
+                    <button key={digit} title={percentages[digit] === Math.max(...percentages) ? "Highest-frequency digit" : undefined} className={`digit-ring digit-${digit} ${percentages[digit] === Math.max(...percentages) ? "most-frequent" : ""} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? `resolved ${resolvedOutcome ?? ""}`.trim() : ""}`} onClick={() => setSelectedDigit(digit)}>
                       <strong>{digit}</strong>
                       <span>{pct}%</span>
                     </button>
@@ -429,7 +429,7 @@ if (!isMounted) {
                     </div>
                     <div className="digit-strip">
                       {percentages.map((pct, digit) => (
-                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? `resolved ${resolvedOutcome ?? ""}`.trim() : ""}`} onClick={() => setSelectedDigit(digit)}>
+                        <button key={digit} title={percentages[digit] === Math.max(...percentages) ? "Highest-frequency digit" : undefined} className={`digit-ring digit-${digit} ${percentages[digit] === Math.max(...percentages) ? "most-frequent" : ""} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? `resolved ${resolvedOutcome ?? ""}`.trim() : ""}`} onClick={() => setSelectedDigit(digit)}>
                           <strong>{digit}</strong>
                           <span>{pct}%</span>
                         </button>

@@ -954,3 +954,4 @@
   .scanner-pill-sig{max-width:150px}
   .scanner-cols{grid-template-columns:1fr}
 }
+.digit-ring.most-frequent{outline:2px solid #f0c040;outline-offset:4px;box-shadow:0 0 0 3px rgba(240,192,64,.16),0 0 16px rgba(240,192,64,.22)}
