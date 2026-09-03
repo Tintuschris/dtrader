@@ -37,6 +37,8 @@ parser.add_argument("--record", metavar="FILE",
                     help="Record ticks to JSON for backtesting")
 parser.add_argument("--replay", metavar="FILE",
                     help="Replay recorded ticks for backtesting")
+parser.add_argument("--history", action="store_true",
+                    help="Print saved session history from trade_log.json and exit")
 parser.add_argument("--speed", type=float, default=1.0,
                     help="Replay speed (1.0=real-time, 10=10x)")
 parser.add_argument('--barrier-strong', default=os.environ.get('BARRIER_STRONG', '-0.20'),
@@ -605,7 +607,7 @@ TRADE_LOG_FILE = "trade_log.json"
 
 def save_trade_log():
     """Save signal and settled-trade data for later tuning."""
-    if not _trade_log:
+    if not _trade_log and not _sessions:
         return
     try:
         done = [e for e in _trade_log if e["result"]["status"] in ("won", "lost")]
@@ -623,12 +625,78 @@ def save_trade_log():
             "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         with open(TRADE_LOG_FILE, "w") as f:
-            json.dump({"summary": summary, "trades": _trade_log}, f, indent=2)
+            json.dump({"summary": summary, "trades": _trade_log, "sessions": _sessions}, f, indent=2)
     except Exception as e:
         print(f"  {RED}X Failed to save trade log: {e}{RST}")
 
 
 atexit.register(save_trade_log)
+
+
+# ---- Session history: one summary record per run, appended on exit ----
+SESSION_START_TS = time.time()
+_exit_reason = "process_end"
+_session_finalized = False
+_history_mode = False  # True when --history: view only, do not record a session
+
+
+def _load_existing_sessions():
+    """Load session records left by previous runs that used this trade log file."""
+    try:
+        with open(TRADE_LOG_FILE, "r") as f:
+            return json.load(f).get("sessions", [])
+    except Exception:
+        return []
+
+
+_sessions = _load_existing_sessions()
+
+
+def record_session_end():
+    """Append this run's final summary to the session history (idempotent)."""
+    global _session_finalized
+    if _session_finalized or _history_mode:
+        return
+    _session_finalized = True
+    try:
+        end_ts = time.time()
+        settled = stats["trades"]
+        settled_list = []
+        for e in _trade_log:
+            r = e.get("result", {})
+            if r.get("contract_id") and r.get("status") in ("won", "lost", "cancelled"):
+                settled_list.append({
+                    "contract_id": r.get("contract_id"),
+                    "direction": e.get("direction"),
+                    "status": r.get("status"),
+                    "profit": r.get("profit"),
+                    "settled_at": r.get("settled_at"),
+                })
+        _sessions.append({
+            "session_start": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(SESSION_START_TS)),
+            "session_start_epoch": int(SESSION_START_TS),
+            "session_end": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_ts)),
+            "duration_sec": round(end_ts - SESSION_START_TS, 1),
+            "exit_reason": _exit_reason,
+            "ticks": _tick_count,
+            "signals": len(_trade_log),
+            "summary": {
+                "settled": settled,
+                "wins": stats["wins"],
+                "losses": stats["losses"],
+                "cancelled": stats["cancelled"],
+                "win_rate": round(stats["wins"] / settled * 100, 1) if settled else 0.0,
+                "pnl": round(stats["total_pnl"], 2),
+                "balance": round(stats["balance"], 2),
+            },
+            "settled_trades": settled_list,
+        })
+        save_trade_log()
+    except Exception:
+        pass
+
+
+atexit.register(record_session_end)
 
 
 def log_trade_signal(direction, srsi_val, rsi_val, reason, price, barrier):
@@ -1138,7 +1206,7 @@ async def run_session():
 
 
 async def trading_loop():
-    global _reconnect_count, active_contract
+    global _reconnect_count, active_contract, _exit_reason
     print_header()
     print(f"  {CYN}>{RST} Authenticating...")
     while _reconnect_count < MAX_RECONNECT_ATTEMPTS:
@@ -1172,6 +1240,7 @@ async def trading_loop():
             reset_active_contract()
             reset_l_state()
             await asyncio.sleep(delay)
+    _exit_reason = "max_reconnects"
     print(f"  {RED}X Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) reached. Exiting.{RST}")
 
 
@@ -1246,14 +1315,41 @@ async def process_tick_replay(tick_data, bt):
         active_contract = None
 
 if __name__ == "__main__":
-    try:
-        if args.replay:
-            asyncio.run(replay_loop())
-        else:
-            asyncio.run(trading_loop())
-    except KeyboardInterrupt:
-        print(f"\n\n  {YLW}Bot stopped by user{RST}")
-        if stats["trades"] > 0:
-            wr = stats["wins"] / stats["trades"] * 100
-            print(f"  {DIM}Session: {stats['trades']} trades | {stats['wins']}W {stats['losses']}L | WR: {wr:.0f}% | PnL: ${stats['total_pnl']:+.2f}{RST}")
-        print()
+    if args.history:
+        _history_mode = True
+        print_header()
+        print(f"  {CYN}>{RST} Session history from {TRADE_LOG_FILE}{RST}")
+        try:
+            from view_trade_log import print_history
+            print_history(TRADE_LOG_FILE)
+        except ImportError:
+            print(f"  {RED}X view_trade_log.py not found - cannot render session history{RST}")
+        except Exception as e:
+            print(f"  {RED}X Could not show session history: {e}{RST}")
+            print(f"  {DIM}Run the bot once and let it exit to start recording sessions.{RST}")
+    else:
+        try:
+            if args.replay:
+                asyncio.run(replay_loop())
+            else:
+                asyncio.run(trading_loop())
+        except KeyboardInterrupt:
+            print(f"\n\n  {YLW}Bot stopped by user{RST}", flush=True)
+            _exit_reason = "user_stop"
+            record_session_end()
+            # Force save trade log and recording (atexit may not fire on Windows)
+            try:
+                save_trade_log()
+                save_recording()
+            except Exception:
+                pass
+            # Always print session summary (even with zero settled trades)
+            if stats["trades"] > 0:
+                wr = stats["wins"] / stats["trades"] * 100
+                rc = GRN if stats["total_pnl"] >= 0 else RED
+                print(f"  {DIM}Session:  {stats['trades'] + stats['cancelled']} trades  |  {GRN}{stats['wins']}W{RST} {RED}{stats['losses']}L{RST} {YLW}{stats['cancelled']}C{RST}  |  WR: {wr:.0f}%  |  PnL: {rc}${stats['total_pnl']:+.2f}{RST}")
+            else:
+                print(f"  {DIM}No trades placed this session{RST}")
+                if _trade_log:
+                    print(f"  {DIM}Trade log saved to {TRADE_LOG_FILE}{RST}")
+            print(flush=True)
