@@ -14,6 +14,9 @@ import {
   rejectAllPending,
   isProposalFresh,
   findOpenPortfolioContract,
+  appendWsCloseLog,
+  readWsCloseLog,
+  type WsCloseLogEntry,
 } from "../lib/ws-lifecycle";
 
 /* ------------------------------------------------------------------ */
@@ -165,5 +168,87 @@ describe("findOpenPortfolioContract — reconcile after reconnect", () => {
       buyResult = { contract_id: recovered.contract_id, status: "open" };
     }
     expect(buyResult).toEqual({ contract_id: 777001, status: "open" });
+  });
+});
+
+
+/* ------------------------------------------------------------------ */
+/*  Connection drop diagnostics ring buffer                            */
+/* ------------------------------------------------------------------ */
+
+function fakeStorage(seed?: Record<string, string>) {
+  const store = new Map<string, string>(Object.entries(seed ?? {}));
+  return {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => { store.set(k, v); },
+    dump: () => Object.fromEntries(store),
+  };
+}
+
+const drop = (over: Partial<WsCloseLogEntry> = {}): WsCloseLogEntry => ({
+  at: 1000,
+  code: 1006,
+  reason: "no close frame received or sent",
+  durationMs: 45_000,
+  attempt: 0,
+  inFlight: { proposals: 0, buys: 0, portfolio: false, profitTable: false },
+  hadActiveContract: false,
+  reconcileFlagged: false,
+  ...over,
+});
+
+describe("appendWsCloseLog / readWsCloseLog — drop diagnostics", () => {
+  it("stores closes newest-first", () => {
+    const storage = fakeStorage();
+    appendWsCloseLog(storage, "drops", drop({ at: 1, code: 1006 }));
+    appendWsCloseLog(storage, "drops", drop({ at: 2, code: 1000 }));
+    const log = readWsCloseLog(storage, "drops");
+    expect(log.map((e) => e.at)).toEqual([2, 1]);
+  });
+
+  it("records in-flight requests and contract state at close time", () => {
+    const storage = fakeStorage();
+    appendWsCloseLog(storage, "drops", drop({
+      at: 5,
+      code: 1006,
+      inFlight: { proposals: 1, buys: 1, portfolio: true, profitTable: false },
+      hadActiveContract: true,
+      reconcileFlagged: true,
+    }));
+    const [entry] = readWsCloseLog(storage, "drops");
+    expect(entry).toMatchObject({
+      code: 1006,
+      inFlight: { proposals: 1, buys: 1, portfolio: true, profitTable: false },
+      hadActiveContract: true,
+      reconcileFlagged: true,
+    });
+  });
+
+  it("caps the buffer at maxEntries, dropping the oldest", () => {
+    const storage = fakeStorage();
+    for (let i = 1; i <= 55; i++) appendWsCloseLog(storage, "drops", drop({ at: i }), 50);
+    const log = readWsCloseLog(storage, "drops");
+    expect(log.length).toBe(50);
+    expect(log[0].at).toBe(55);   // newest kept
+    expect(log[49].at).toBe(6);   // oldest kept; at=1..5 trimmed
+  });
+
+  it("survives a corrupted existing record (starts fresh)", () => {
+    const storage = fakeStorage({ drops: "not json {{{" });
+    appendWsCloseLog(storage, "drops", drop({ at: 9 }));
+    expect(readWsCloseLog(storage, "drops").map((e) => e.at)).toEqual([9]);
+  });
+
+  it("returns [] and never throws when storage is unavailable", () => {
+    expect(appendWsCloseLog(null, "drops", drop())).toEqual([]);
+    expect(readWsCloseLog(null, "drops")).toEqual([]);
+  });
+
+  it("never throws when storage writes fail (private mode / quota)", () => {
+    const throwing = {
+      getItem: () => null,
+      setItem: () => { throw new Error("QuotaExceededError"); },
+    };
+    expect(appendWsCloseLog(throwing, "drops", drop())).toEqual([]);
   });
 });

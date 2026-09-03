@@ -73,7 +73,46 @@ interrupted — reconnecting…" if it somehow gets invoked.
 - portfolio reconciliation recovers an open contract (incl. a simulated
   full disconnect → reject → reconnect → resolve flow)
 
-Full suite: **102 tests passing**; `tsc --noEmit` clean.
+Full suite: **108 tests passing**; `tsc --noEmit` clean.
+
+## Drop diagnostics — every socket close is logged
+
+Every trading-socket close is appended to a capped, newest-first ring buffer
+in `localStorage` under **`freebuff_ws_drops`** (last 50 closes). This is the
+data to pull when a future "trade didn't take" report arrives — it tells you
+whether the trading socket actually dropped at that moment and what was
+in flight when it did.
+
+Each entry:
+
+```json
+{
+  "at": 1754312345678,        // epoch ms of the close
+  "code": 1006,               // 1006 = abnormal (no close frame) → genuine drop
+  "reason": "no close frame received or sent",
+  "durationMs": 45000,        // how long the connection was up before closing
+  "attempt": 2,               // reconnect attempt at the time of the close
+  "inFlight": { "proposals": 1, "buys": 1, "portfolio": false, "profitTable": false },
+  "hadActiveContract": true,
+  "reconcileFlagged": true    // a buy was stranded or a contract was open →
+                              // the reconnect will try to recover it
+}
+```
+
+Read it in the browser console:
+
+```js
+JSON.parse(localStorage.getItem("freebuff_ws_drops") || "[]")
+```
+
+or in-app via `getWsDropLog()` from `useDerivTrading()`. If `inFlight.buys`
+was > 0 on a `1006` close, that is exactly the "clicked Buy and it didn't
+take" scenario — and `reconcileFlagged` says whether the post-reconnect
+portfolio reconciliation ran. Deliberate closes (account switch, page unload)
+record normally too, so compare close codes to tell drops from intentional
+disconnects. Logging is best-effort: if `localStorage` is unavailable or full
+(private mode, quota), it silently skips and never interferes with the close
+handler.
 
 ## Files touched
 
@@ -83,3 +122,4 @@ Full suite: **102 tests passing**; `tsc --noEmit` clean.
 - `components/trading-context.tsx` — connection check in `handlePlaceTrade`
 - `components/trading-terminal.tsx` — Buy disabled/labeled while offline
 - `__tests__/ws-lifecycle.test.ts` — lifecycle tests
+- `lib/ws-lifecycle.ts` — `appendWsCloseLog` / `readWsCloseLog` ring buffer

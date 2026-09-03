@@ -6,6 +6,9 @@ import {
   rejectAllPending,
   isProposalFresh,
   findOpenPortfolioContract,
+  appendWsCloseLog,
+  readWsCloseLog,
+  type WsCloseLogEntry,
 } from "../lib/ws-lifecycle";
 
 /* ------------------------------------------------------------------ */
@@ -102,6 +105,8 @@ const BASE_DELAY = 1000;
 const MAX_DELAY = 30000;
 const PING_INTERVAL_MS = 15_000; // Keep WebSocket alive
 const PROPOSAL_MAX_AGE_MS = 20_000; // A subscribed proposal older than this is stale
+const WS_DROP_LOG_KEY = "freebuff_ws_drops"; // capped ring buffer of socket closes
+const WS_DROP_LOG_MAX = 50;
 
 function jitteredDelay(attempt: number): number {
   const base = Math.min(BASE_DELAY * Math.pow(2, attempt), MAX_DELAY);
@@ -133,6 +138,7 @@ export function useDerivTrading() {
   const proposalTimestampRef = useRef(0);
   const reconcileOnOpenRef = useRef(false);
   const activeContractRef = useRef<OpenContract | null>(null);
+  const connectedAtRef = useRef<number | null>(null); // when the current socket opened
 
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -231,6 +237,7 @@ export function useDerivTrading() {
           setConnectionStatus("connected");
           setLastError(null);
           reconnectAttempts.current = 0;
+          connectedAtRef.current = Date.now();
           startPing();
           // subscribe to balance
           ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: String(nextReqId++) }));
@@ -631,10 +638,35 @@ export function useDerivTrading() {
           const attempt = reconnectAttempts.current;
           console.log(`WebSocket closed: code=${code} reason=${reason} attempt=${attempt}`);
           setConnectionStatus((prev) => prev === "error" ? prev : "disconnected");
+          // Record the drop BEFORE rejecting requests so the in-flight counts
+          // reflect what was actually pending on the dead socket.
+          const connectedAt = connectedAtRef.current;
+          connectedAtRef.current = null;
+          const inFlight = {
+            proposals: pendingProposals.current.size,
+            buys: pendingBuys.current.size,
+            portfolio: pendingPortfolio.current != null,
+            profitTable: pendingProfitTable.current != null,
+          };
+          appendWsCloseLog(
+            typeof window !== "undefined" ? window.localStorage : null,
+            WS_DROP_LOG_KEY,
+            {
+              at: Date.now(),
+              code,
+              reason,
+              durationMs: connectedAt ? Date.now() - connectedAt : 0,
+              attempt,
+              inFlight,
+              hadActiveContract: !!activeContractRef.current,
+              reconcileFlagged: inFlight.buys > 0 || !!activeContractRef.current,
+            },
+            WS_DROP_LOG_MAX,
+          );
           // Reject in-flight requests so nothing hangs on the dead socket, and
           // remember to reconcile after reconnect if a buy was stranded or a
           // contract was open (its settlement stream died with the socket).
-          const hadPendingBuy = pendingBuys.current.size > 0;
+          const hadPendingBuy = inFlight.buys > 0;
           const hadOpenContract = !!activeContractRef.current;
           rejectAllPending([pendingProposals.current, pendingBuys.current]);
           if (pendingPortfolio.current) {
@@ -964,6 +996,12 @@ export function useDerivTrading() {
 
   const clearLastResult = useCallback(() => setLastResult(null), []);
   const clearError = useCallback(() => setLastError(null), []);
+  const getWsDropLog = useCallback((): WsCloseLogEntry[] => {
+    return readWsCloseLog(
+      typeof window !== "undefined" ? window.localStorage : null,
+      WS_DROP_LOG_KEY,
+    );
+  }, []);
 
   return {
     connectionStatus,
@@ -1001,5 +1039,6 @@ export function useDerivTrading() {
     accounts,
     clearLastResult,
     clearError,
+    getWsDropLog,
   };
 }

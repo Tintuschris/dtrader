@@ -111,3 +111,70 @@ export function findOpenPortfolioContract(
   }
   return null;
 }
+
+
+/* ------------------------------------------------------------------ */
+/*  Connection drop diagnostics                                        */
+/* ------------------------------------------------------------------ */
+export type WsCloseLogEntry = {
+  at: number; // epoch ms when the socket closed
+  code: number; // WebSocket close code (1006 = abnormal, no close frame)
+  reason: string; // close reason string
+  durationMs: number; // how long the connection was up before closing
+  attempt: number; // reconnect attempt at the time of the close
+  inFlight: {
+    proposals: number;
+    buys: number;
+    portfolio: boolean;
+    profitTable: boolean;
+  };
+  hadActiveContract: boolean;
+  reconcileFlagged: boolean;
+};
+
+type KvStore = Pick<Storage, "getItem" | "setItem"> | null;
+
+/**
+ * Append a close event to a capped, newest-first ring buffer in a key/value
+ * store (localStorage). Returns the new list, or [] if the store is
+ * unavailable or the write fails (private mode / quota) — logging must never
+ * throw into the socket close path.
+ */
+export function appendWsCloseLog(
+  storage: KvStore,
+  key: string,
+  entry: WsCloseLogEntry,
+  maxEntries = 50,
+): WsCloseLogEntry[] {
+  if (!storage) return [];
+  try {
+    let list: WsCloseLogEntry[] = [];
+    const raw = storage.getItem(key);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) list = parsed as WsCloseLogEntry[];
+      } catch {
+        /* corrupted record — start fresh */
+      }
+    }
+    list = [entry, ...list].slice(0, maxEntries);
+    storage.setItem(key, JSON.stringify(list));
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+/** Read the logged close events, newest first. Never throws. */
+export function readWsCloseLog(storage: KvStore, key: string): WsCloseLogEntry[] {
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as WsCloseLogEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
