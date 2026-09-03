@@ -185,6 +185,7 @@ _l_flat_count = 0
 _l_flat_val_sum = 0.0
 _l_direction = None
 _l_flat_extreme = 0.0
+_signal_ctx = {}  # pattern context captured at signal fire (survives reset_l_state)
 _consecutive_losses = 0
 _loss_cooldown_until = 0.0
 _trade_log = []
@@ -258,7 +259,7 @@ def reset_active_contract():
 
 
 def detect_l_shape(srsi_now, srsi_prev):
-    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction, _l_flat_extreme
+    global _l_phase, _l_slope_start_val, _l_flat_count, _l_flat_val_sum, _l_direction, _l_flat_extreme, _signal_ctx
     if srsi_now is None or srsi_prev is None:
         return None
     delta = srsi_now - srsi_prev
@@ -333,6 +334,7 @@ def detect_l_shape(srsi_now, srsi_prev):
             flat_avg = _l_flat_val_sum / _l_flat_count
             reason = (f"SRSI dropped from {_l_slope_start_val:.3f} to {flat_avg:.3f} "
                      f"(flat {_l_flat_count}t), broke UP +{delta:.3f}")
+            _signal_ctx = {"flat_extreme": _l_flat_extreme, "flat_count": _l_flat_count, "flat_avg": flat_avg}
             reset_l_state()
             return ("higher", reason)
         if abs(delta) < RAW_FLAT_THRESHOLD:
@@ -348,6 +350,7 @@ def detect_l_shape(srsi_now, srsi_prev):
             flat_avg = _l_flat_val_sum / _l_flat_count
             reason = (f"SRSI rose from {_l_slope_start_val:.3f} to {flat_avg:.3f} "
                      f"(flat {_l_flat_count}t), broke DOWN {delta:.3f}")
+            _signal_ctx = {"flat_extreme": _l_flat_extreme, "flat_count": _l_flat_count, "flat_avg": flat_avg}
             reset_l_state()
             return ("lower", reason)
         if abs(delta) < RAW_FLAT_THRESHOLD:
@@ -810,7 +813,7 @@ def log_trade_signal(direction, srsi_val, rsi_val, flat_count, flat_avg, breakou
             "flat_duration": flat_count,
             "flat_avg_srsi": round(flat_avg, 4),
             "breakout_delta": round(breakout, 4),
-            "flat_extreme": round(_l_flat_extreme, 4),
+            "flat_extreme": round(_signal_ctx.get("flat_extreme", 0.0), 4),
             "reason": reason,
         },
         "market": {
@@ -1040,6 +1043,7 @@ async def process_tick(ws, tick_data, last_trade_time):
     result = detect_l_shape(srsi_now, srsi_prev)
     if result:
         direction, reason = result
+        flat_extreme = _signal_ctx.get("flat_extreme", 0.0)
         delta = srsi_now - srsi_prev
 
         # === FILTER 1: LOSS-STREAK CIRCUIT BREAKER + TIME COOLDOWN ===
@@ -1070,12 +1074,12 @@ async def process_tick(ws, tick_data, last_trade_time):
             return now
 
         # === FILTER 3: SRSI PEAK CHECK ===
-        if direction == "lower" and _l_flat_extreme < FILTER_SRSI_SHORT_PEAK_MIN:
-            print(_skip("srsi_peak_low", f"  {YLW}! SKIPPED: SRSI max={_l_flat_extreme:.3f} < {FILTER_SRSI_SHORT_PEAK_MIN:.2f}, not high enough overbought{RST}"))
+        if direction == "lower" and flat_extreme < FILTER_SRSI_SHORT_PEAK_MIN:
+            print(_skip("srsi_peak_low", f"  {YLW}! SKIPPED: SRSI max={flat_extreme:.3f} < {FILTER_SRSI_SHORT_PEAK_MIN:.2f}, not high enough overbought{RST}"))
             reset_l_state()
             return now
-        if direction == "higher" and _l_flat_extreme > FILTER_SRSI_LONG_PEAK_MAX:
-            print(_skip("srsi_trough_high", f"  {YLW}! SKIPPED: SRSI min={_l_flat_extreme:.3f} > {FILTER_SRSI_LONG_PEAK_MAX:.2f}, not deep enough oversold{RST}"))
+        if direction == "higher" and flat_extreme > FILTER_SRSI_LONG_PEAK_MAX:
+            print(_skip("srsi_trough_high", f"  {YLW}! SKIPPED: SRSI min={flat_extreme:.3f} > {FILTER_SRSI_LONG_PEAK_MAX:.2f}, not deep enough oversold{RST}"))
             reset_l_state()
             return now
 
@@ -1156,8 +1160,8 @@ async def process_tick(ws, tick_data, last_trade_time):
             return now
         barrier = _calc_barrier(direction, rsi_now)
         active_contract = {"direction": direction, "entry_price": price, "barrier": barrier}
-        flat_avg = _l_flat_val_sum / _l_flat_count if _l_flat_count > 0 else 0
-        log_trade_signal(direction, srsi_now, rsi_now, _l_flat_count, flat_avg, abs(delta), reason, price, barrier)
+        flat_avg = _signal_ctx.get("flat_avg", 0.0)
+        log_trade_signal(direction, srsi_now, rsi_now, _signal_ctx.get("flat_count", 0), flat_avg, abs(delta), reason, price, barrier)
         if DRY_RUN:
             print(f"  {DIM}[DRY RUN] Would place {direction} trade with barrier {barrier}{RST}")
         else:
