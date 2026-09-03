@@ -159,6 +159,12 @@ Notable changes to both trading products in this repository, each tracked with i
 
 The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade ticket, and the authenticated Deriv trading WebSocket. Its reliability work is documented in detail in [`docs/web-ws-reliability.md`](web-ws-reliability.md).
 
+### Web v1.1 - Notifications, Price Alerts & Result Polish (2026-09-03)
+
+- **Notification feed persistence** - the bell panel, unread state, and timestamps now survive page refreshes via localStorage (`dtrader_notifications`), without replaying old notifications as toasts
+
+---
+
 ### Web v1.0 - Trading WebSocket Reliability & Diagnostics (2026-09-03)
 
 #### New Features

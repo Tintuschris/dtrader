@@ -13,6 +13,12 @@ import {
   IconTarget,
   IconClock,
 } from "@tabler/icons-react";
+import {
+  loadNotifications,
+  saveNotifications,
+  numericId,
+  NOTIFICATION_CAP,
+} from "../lib/notification-store";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -39,6 +45,7 @@ export type NotificationSettings = {
   soundEnabled: boolean;
 };
 
+
 /* ------------------------------------------------------------------ */
 /*  Internal state (singleton)                                         */
 /* ------------------------------------------------------------------ */
@@ -46,30 +53,69 @@ export type NotificationSettings = {
 let globalNotifications: Notification[] = [];
 let globalListeners: Set<() => void> = new Set();
 let nextId = 1;
+let hydrated = false;
+let toastFloorId = 0; // persisted items at/below this id must never replay as toasts
+
+function getStorage(): Storage | null {
+  if (typeof window === "undefined") return null; // SSR / tests
+  try {
+    return window.localStorage;
+  } catch {
+    return null; // storage disabled (private mode / permissions)
+  }
+}
+
+/**
+ * Load the persisted feed once, after mount. Runs lazily (never at module
+ * import) so SSR renders the same empty state as the first client paint,
+ * and the bell panel is only filled on a post-hydration re-render.
+ */
+function hydrateFromStorage() {
+  if (hydrated) return;
+  hydrated = true;
+  const stored = loadNotifications(getStorage());
+  if (stored.length === 0) return;
+  let maxId = 0;
+  for (const n of stored) maxId = Math.max(maxId, numericId(n.id));
+  toastFloorId = maxId;      // history fills the bell, not the toast stack
+  nextId = maxId + 1;        // fresh ids continue after persisted ones
+  globalNotifications = stored as Notification[];
+  notify();
+}
+
+function persist() {
+  saveNotifications(getStorage(), globalNotifications);
+}
 
 function notify() {
   for (const l of globalListeners) l();
 }
 
 export function pushNotification(n: Omit<Notification, "id" | "timestamp" | "read">) {
+  hydrateFromStorage();
   const full: Notification = {
     ...n,
     id: `n-${nextId++}`,
     timestamp: Date.now(),
     read: false,
   };
-  globalNotifications = [full, ...globalNotifications].slice(0, 100);
+  globalNotifications = [full, ...globalNotifications].slice(0, NOTIFICATION_CAP);
+  persist();
   notify();
   return full;
 }
 
 export function markAllRead() {
+  hydrateFromStorage();
   globalNotifications = globalNotifications.map((n) => ({ ...n, read: true }));
+  persist();
   notify();
 }
 
 export function clearNotifications() {
+  hydrateFromStorage();
   globalNotifications = [];
+  persist();
   notify();
 }
 
@@ -78,6 +124,7 @@ function useNotifications() {
   useEffect(() => {
     const handler = () => forceUpdate((c) => c + 1);
     globalListeners.add(handler);
+    hydrateFromStorage(); // notify() inside triggers forceUpdate above
     return () => { globalListeners.delete(handler); };
   }, []);
   return globalNotifications;
@@ -141,15 +188,18 @@ export function ToastContainer() {
   useEffect(() => {
     let lastCount = 0;
     const handler = () => {
-      if (globalNotifications.length > lastCount) {
-        const newOnes = globalNotifications.slice(0, globalNotifications.length - lastCount);
-        for (const n of newOnes) {
-          setToasts((prev) => [...prev, n]);
-        }
+      // Persisted history (ids <= toastFloorId) fills the bell panel but must
+      // not replay as toasts after a page refresh — only genuinely new pushes
+      // (ids > floor) show up in the toast stack.
+      const fresh = globalNotifications.filter((n) => numericId(n.id) > toastFloorId);
+      if (fresh.length > lastCount) {
+        const newOnes = fresh.slice(0, fresh.length - lastCount);
+        setToasts((prev) => [...prev, ...newOnes]);
       }
-      lastCount = globalNotifications.length;
+      lastCount = fresh.length;
     };
     globalListeners.add(handler);
+    hydrateFromStorage(); // hydrate AFTER subscribing: floor filter keeps history out of toasts
     return () => { globalListeners.delete(handler); };
   }, []);
 
