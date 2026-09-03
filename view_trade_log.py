@@ -6,9 +6,12 @@ Both Deriv-Stochrsi bots append one "session" record whenever they exit
 past runs are easy to review even when the console output was lost.
 
 Usage:
-    python view_trade_log.py [trade_log.json] [--trades]
+    python view_trade_log.py [trade_log.json] [--trades] [--max-sessions N] [--trim]
 
 The optional --trades flag expands each session's settled contracts.
+--max-sessions N limits the display to the newest N sessions.
+--trim (requires --max-sessions) also deletes the older records from the
+file, keeping only the newest N.
 """
 
 import argparse
@@ -77,9 +80,47 @@ def get_sum(s, key, default=0):
         return default
 
 
-def print_history(file="trade_log.json", show_trades=False):
+def trim_sessions(file="trade_log.json", max_sessions=1):
+    """Delete all but the newest max_sessions records from a trade log.
+
+    Rewrites the file, preserving its other keys (summary/trades/note).
+    Returns the number of records removed, or None if the file is missing
+    or could not be read/written.
+    """
+    try:
+        with open(file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"X No trade log found at: {file}")
+        return None
+    except Exception as e:
+        print(f"X Could not read {file}: {e}")
+        return None
+    sessions = data.get("sessions") or []
+    if len(sessions) <= max_sessions:
+        return 0
+    try:
+        keyed = sorted(enumerate(sessions), key=lambda t: t[1].get("session_start_epoch", 0) or 0)
+    except Exception:
+        keyed = list(enumerate(sessions))
+    keep_pos = {i for i, _ in keyed[-max_sessions:]}
+    kept = [s for i, s in enumerate(sessions) if i in keep_pos]
+    removed = len(sessions) - len(kept)
+    data["sessions"] = kept
+    try:
+        with open(file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"X Could not write {file}: {e}")
+        return None
+    print(f"Trimmed {removed} old session record(s); kept the newest {len(kept)} in {file}.")
+    return removed
+
+
+def print_history(file="trade_log.json", show_trades=False, max_sessions=None):
     """Render the session history from a bot trade log to stdout.
 
+    max_sessions limits the display to the newest N sessions (None = all).
     Returns 0 on success, 1 when the file is missing or unreadable.
     """
     if not os.path.exists(file):
@@ -110,6 +151,9 @@ def print_history(file="trade_log.json", show_trades=False):
         sessions = sorted(sessions, key=lambda s: s.get("session_start_epoch", 0) or 0, reverse=True)
     except Exception:
         pass
+    total_sessions = len(sessions)
+    if max_sessions and total_sessions > max_sessions:
+        sessions = sessions[:max_sessions]
 
     print(header())
     totals = {"n": 0, "settled": 0, "wins": 0, "losses": 0, "cancelled": 0, "pnl": 0.0}
@@ -156,6 +200,8 @@ def print_history(file="trade_log.json", show_trades=False):
     print(f"TOTALS  {tot['n']} session(s) | {tot['settled']} settled | "
           f"{tot['wins']}W-{tot['losses']}L-{tot['cancelled']}C | WR {wr_all:.1f}% | "
           f"PnL {tot['pnl']:+.2f}")
+    if max_sessions and total_sessions > max_sessions:
+        print(f"  (newest {tot['n']} of {total_sessions} sessions shown)")
     return 0
 
 
@@ -163,8 +209,19 @@ def main():
     ap = argparse.ArgumentParser(description="Print session history from a bot trade log.")
     ap.add_argument("file", nargs="?", default="trade_log.json", help="path to trade_log.json")
     ap.add_argument("--trades", action="store_true", help="list settled contracts per session")
+    ap.add_argument("--max-sessions", type=int, metavar="N",
+                    help="show only the newest N session records")
+    ap.add_argument("--trim", action="store_true",
+                    help="with --max-sessions N: delete older session records from the file")
     args = ap.parse_args()
-    return print_history(args.file, show_trades=args.trades)
+    if args.max_sessions is not None and args.max_sessions < 1:
+        ap.error("--max-sessions must be at least 1")
+    if args.trim and not args.max_sessions:
+        ap.error("--trim requires --max-sessions N")
+    if args.trim:
+        if trim_sessions(args.file, args.max_sessions) is None:
+            return 1
+    return print_history(args.file, show_trades=args.trades, max_sessions=args.max_sessions)
 
 
 if __name__ == "__main__":

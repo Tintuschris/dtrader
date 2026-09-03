@@ -39,6 +39,10 @@ parser.add_argument("--replay", metavar="FILE",
                     help="Replay recorded ticks for backtesting")
 parser.add_argument("--history", action="store_true",
                     help="Print saved session history from trade_log.json and exit")
+parser.add_argument("--max-sessions", type=int, metavar="N",
+                    help="With --history: show only the newest N session records")
+parser.add_argument("--trim", action="store_true",
+                    help="With --history and --max-sessions N: delete older session records from the file")
 parser.add_argument("--speed", type=float, default=1.0,
                     help="Replay speed (1.0=real-time, 10=10x)")
 parser.add_argument('--barrier-strong', default=os.environ.get('BARRIER_STRONG', '-0.20'),
@@ -610,6 +614,8 @@ TRADE_LOG_FILE = "trade_log.json"
 
 def save_trade_log():
     """Save signal and settled-trade data for later tuning."""
+    if _history_mode:
+        return  # --history is view/trim only; never rewrite the file here
     if not _trade_log and not _sessions:
         return
     try:
@@ -1383,15 +1389,22 @@ if __name__ == "__main__":
     if args.history:
         _history_mode = True
         print_header()
-        print(f"  {CYN}>{RST} Session history from {TRADE_LOG_FILE}{RST}")
-        try:
-            from view_trade_log import print_history
-            print_history(TRADE_LOG_FILE)
-        except ImportError:
-            print(f"  {RED}X view_trade_log.py not found - cannot render session history{RST}")
-        except Exception as e:
-            print(f"  {RED}X Could not show session history: {e}{RST}")
-            print(f"  {DIM}Run the bot once and let it exit to start recording sessions.{RST}")
+        if args.trim and not args.max_sessions:
+            print(f"  {RED}X --trim requires --max-sessions N{RST}")
+        elif args.max_sessions is not None and args.max_sessions < 1:
+            print(f"  {RED}X --max-sessions must be at least 1{RST}")
+        else:
+            print(f"  {CYN}>{RST} Session history from {TRADE_LOG_FILE}{RST}")
+            try:
+                from view_trade_log import print_history, trim_sessions
+                if args.trim:
+                    trim_sessions(TRADE_LOG_FILE, args.max_sessions)
+                print_history(TRADE_LOG_FILE, max_sessions=args.max_sessions)
+            except ImportError:
+                print(f"  {RED}X view_trade_log.py not found - cannot render session history{RST}")
+            except Exception as e:
+                print(f"  {RED}X Could not show session history: {e}{RST}")
+                print(f"  {DIM}Run the bot once and let it exit to start recording sessions.{RST}")
     else:
         try:
             if args.replay:
