@@ -39,12 +39,19 @@ parser.add_argument("--replay", metavar="FILE",
                     help="Replay recorded ticks for backtesting")
 parser.add_argument("--history", action="store_true",
                     help="Print saved session history from trade_log.json and exit")
+parser.add_argument("--max-sessions", type=int, metavar="N",
+                    help="With --history: show only the newest N session records")
+parser.add_argument("--trim", action="store_true",
+                    help="With --history and --max-sessions N: delete older session records from the file")
 parser.add_argument("--speed", type=float, default=1.0,
                     help="Replay speed (1.0=real-time, 10=10x)")
 # Filter threshold args
 parser.add_argument("--max-loss-streak", type=int,
-                    default=int(os.environ.get("FILTER_LOSS_STREAK_MAX", "2")),
-                    help="Max consecutive losses before circuit breaker (default: 2)")
+                    default=int(os.environ.get("FILTER_LOSS_STREAK_MAX", "1")),
+                    help="Consecutive losses before trading pauses (default: 1 - pause after the first loss)")
+parser.add_argument("--loss-cooldown", type=int,
+                    default=int(os.environ.get("FILTER_LOSS_COOLDOWN_SECONDS", "60")),
+                    help="Seconds to pause after hitting the loss streak limit (default: 60)")
 parser.add_argument("--rsi-long-max", type=float,
                     default=float(os.environ.get("FILTER_RSI_LONG_MAX", "35")),
                     help="RSI must be below this for LONG signals (default: 35)")
@@ -115,6 +122,7 @@ RAW_SLOPE_MAX = 0.15
 
 # === Filter thresholds (configurable via CLI or env vars) ===
 FILTER_LOSS_STREAK_MAX = args.max_loss_streak
+FILTER_LOSS_COOLDOWN_SECONDS = args.loss_cooldown
 FILTER_RSI_LONG_MAX = args.rsi_long_max
 FILTER_RSI_SHORT_MIN = args.rsi_short_min
 FILTER_SRSI_SHORT_PEAK_MIN = args.srsi_short_peak
@@ -174,6 +182,7 @@ _l_flat_val_sum = 0.0
 _l_direction = None
 _l_flat_extreme = 0.0
 _consecutive_losses = 0
+_loss_cooldown_until = 0.0
 _trade_log = []
 _last_displayed_cid = None
 _pending_signal = None
@@ -524,6 +533,7 @@ def print_balance(amount):
 
 
 def print_trade_result_analyzed(status, profit, entry_price, exit_price, direction, contract_id, barrier_val, poc):
+    global _consecutive_losses, _loss_cooldown_until
     profit = float(profit) if profit else 0.0
     is_cancelled = status in ("cancelled", "sold") and profit <= 0
     
@@ -540,8 +550,10 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
         stats["total_pnl"] += profit
         if is_win:
             stats["wins"] += 1
+            _consecutive_losses = 0
         else:
             stats["losses"] += 1
+            _consecutive_losses += 1
     wr = (stats["wins"] / stats["trades"] * 100) if stats["trades"] > 0 else 0
 
     entry_spot = poc.get("entry_spot", poc.get("entry_tick", entry_price))
@@ -712,6 +724,48 @@ def record_session_end():
 atexit.register(record_session_end)
 
 
+# ---- Skip / market tracking (captured into the session record at exit) ----
+_skips = []  # why signals were skipped, newest last
+_market_state = {"samples": 0, "rsi_min": None, "rsi_max": None, "rsi_sum": 0.0,
+                 "srsi_min": None, "srsi_max": None, "srsi_sum": 0.0, "phases": {}}
+
+
+def _plain(text):
+    """Strip ANSI color codes from a console string."""
+    import re as _re
+    return _re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _skip(category, text):
+    """Log a skipped signal (category + text) and return the text to print."""
+    try:
+        if len(_skips) > 500:
+            _skips.pop(0)
+        detail = _plain(text).replace("! SKIPPED:", "skipped").strip()
+        _skips.append({"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "category": category, "detail": detail})
+    except Exception:
+        pass
+    return text
+
+
+def _track_market(rsi, raw):
+    """Accumulate per-tick RSI/SRSI/phase stats for the session record."""
+    try:
+        ms = _market_state
+        ms["samples"] += 1
+        ms["rsi_min"] = rsi if ms["rsi_min"] is None else min(ms["rsi_min"], rsi)
+        ms["rsi_max"] = rsi if ms["rsi_max"] is None else max(ms["rsi_max"], rsi)
+        ms["rsi_sum"] += rsi
+        ms["srsi_min"] = raw if ms["srsi_min"] is None else min(ms["srsi_min"], raw)
+        ms["srsi_max"] = raw if ms["srsi_max"] is None else max(ms["srsi_max"], raw)
+        ms["srsi_sum"] += raw
+        key = _l_phase if _l_phase else "idle"
+        ms["phases"][key] = ms["phases"].get(key, 0) + 1
+    except Exception:
+        pass
+
+
 def log_trade_signal(direction, srsi_val, rsi_val, flat_count, flat_avg, breakout, reason, price, barrier):
     """Log a trade signal with full context when it fires."""
     entry = {
@@ -737,7 +791,7 @@ def log_trade_signal(direction, srsi_val, rsi_val, flat_count, flat_avg, breakou
             "tick_count": _tick_count,
         },
         "filters_passed": {
-            "circuit_breaker": _consecutive_losses < 2,
+            "circuit_breaker": _consecutive_losses < FILTER_LOSS_STREAK_MAX,
             "rsi_alignment": True,
             "srsi_peak": True,
             "reversal_confirm": True,
@@ -877,6 +931,7 @@ async def place_trade(ws, direction, barrier):
 
 async def process_tick(ws, tick_data, last_trade_time):
     global _tick_count, _in_cooldown, active_contract
+    global _consecutive_losses, _loss_cooldown_until
     _tick_count += 1
     price = tick_data["quote"]
     closes.append(price)
@@ -959,30 +1014,36 @@ async def process_tick(ws, tick_data, last_trade_time):
         direction, reason = result
         delta = srsi_now - srsi_prev
 
-        # === FILTER 1: LOSS-STREAK CIRCUIT BREAKER ===
+        # === FILTER 1: LOSS-STREAK CIRCUIT BREAKER + TIME COOLDOWN ===
         if _consecutive_losses >= FILTER_LOSS_STREAK_MAX:
-            print(f"  {YLW}! SKIPPED: Loss streak ({_consecutive_losses}L) >= {FILTER_LOSS_STREAK_MAX} - cooling down{RST}")
-            reset_l_state()
-            return now
+            if _loss_cooldown_until == 0:
+                _loss_cooldown_until = now + FILTER_LOSS_COOLDOWN_SECONDS
+            remaining = _loss_cooldown_until - now
+            if remaining > 0:
+                print(_skip("loss_streak", f"  {YLW}! SKIPPED: Loss streak ({_consecutive_losses}L) - {int(remaining)}s cooldown{RST}"))
+                reset_l_state()
+                return now
+            _consecutive_losses = 0
+            _loss_cooldown_until = 0
 
         # === FILTER 2: RSI TREND ALIGNMENT ===
         rsi_now = rsi_vals[-1] if rsi_vals else 50
         if direction == "higher" and rsi_now > FILTER_RSI_LONG_MAX:
-            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > {FILTER_RSI_LONG_MAX}, not strongly oversold{RST}")
+            print(_skip("rsi_not_oversold", f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > {FILTER_RSI_LONG_MAX}, not strongly oversold{RST}"))
             reset_l_state()
             return now
         if direction == "lower" and rsi_now < FILTER_RSI_SHORT_MIN:
-            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < {FILTER_RSI_SHORT_MIN}, not strongly overbought{RST}")
+            print(_skip("rsi_not_overbought", f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < {FILTER_RSI_SHORT_MIN}, not strongly overbought{RST}"))
             reset_l_state()
             return now
 
         # === FILTER 3: SRSI PEAK CHECK ===
         if direction == "lower" and _l_flat_extreme < FILTER_SRSI_SHORT_PEAK_MIN:
-            print(f"  {YLW}! SKIPPED: SRSI max={_l_flat_extreme:.3f} < {FILTER_SRSI_SHORT_PEAK_MIN:.2f}, not high enough overbought{RST}")
+            print(_skip("srsi_peak_low", f"  {YLW}! SKIPPED: SRSI max={_l_flat_extreme:.3f} < {FILTER_SRSI_SHORT_PEAK_MIN:.2f}, not high enough overbought{RST}"))
             reset_l_state()
             return now
         if direction == "higher" and _l_flat_extreme > FILTER_SRSI_LONG_PEAK_MAX:
-            print(f"  {YLW}! SKIPPED: SRSI min={_l_flat_extreme:.3f} > {FILTER_SRSI_LONG_PEAK_MAX:.2f}, not deep enough oversold{RST}")
+            print(_skip("srsi_trough_high", f"  {YLW}! SKIPPED: SRSI min={_l_flat_extreme:.3f} > {FILTER_SRSI_LONG_PEAK_MAX:.2f}, not deep enough oversold{RST}"))
             reset_l_state()
             return now
 
