@@ -84,7 +84,8 @@ RAW_SLOPE_MAX = 0.15
 
 # === Soft risk controls ===
 # These keep the original sloppy-L detector intact while allowing more signals.
-MAX_CONSECUTIVE_LOSSES = int(os.environ.get("SOFT_MAX_CONSECUTIVE_LOSSES", "2"))
+# Loss policy (same as main bot): pause after the first loss for LOSS_COOLDOWN_SECONDS.
+MAX_CONSECUTIVE_LOSSES = int(os.environ.get("SOFT_MAX_CONSECUTIVE_LOSSES", "1"))
 LOSS_COOLDOWN_SECONDS = int(os.environ.get("SOFT_LOSS_COOLDOWN_SECONDS", "60"))
 RSI_LONG_MAX = float(os.environ.get("SOFT_RSI_LONG_MAX", "45"))
 RSI_SHORT_MIN = float(os.environ.get("SOFT_RSI_SHORT_MIN", "65"))
