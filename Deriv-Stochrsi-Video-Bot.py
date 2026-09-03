@@ -158,6 +158,7 @@ stats = {"trades": 0, "wins": 0, "losses": 0, "cancelled": 0, "total_pnl": 0.0, 
 active_contract = None
 pending_proposal = None  # {proposal_id, direction, barrier, entry_price}
 _active_contract_id = None  # Persists across reconnects for POC re-subscription
+_active_contract_snapshot = None  # Full open-contract context kept across reconnects for settle recovery
 _tick_count = 0
 _in_cooldown = False
 _reconnect_count = 0
@@ -232,10 +233,11 @@ def reset_l_state():
 
 
 def reset_active_contract():
-    """Clear active contract and pending proposal, saving contract_id for re-subscription."""
-    global active_contract, pending_proposal, _active_contract_id
+    """Clear active contract and pending proposal, saving contract context for re-subscription."""
+    global active_contract, pending_proposal, _active_contract_id, _active_contract_snapshot
     if active_contract and active_contract.get("contract_id"):
         _active_contract_id = active_contract["contract_id"]
+        _active_contract_snapshot = dict(active_contract)
     active_contract = None
     pending_proposal = None
 
@@ -1071,7 +1073,7 @@ async def handle_message(ws, data, last_trade_time):
     if _mt not in ("tick", "balance", "ping"):
         print(f"  {DIM}[MSG] msg_type={_mt}{RST}")
     global pending_proposal
-    global active_contract
+    global active_contract, _active_contract_id, _active_contract_snapshot, _last_displayed_cid
     if data.get("msg_type") == "tick":
         tick = data.get("tick", {})
         if tick:
@@ -1109,6 +1111,7 @@ async def handle_message(ws, data, last_trade_time):
                 active_contract = {"direction": direction, "entry_price": pending_proposal.get("entry_price", 0), "contract_id": cid, "barrier": pending_proposal.get("barrier", BARRIER_HIGHER)}
             pending_proposal = None
             _active_contract_id = cid
+            _active_contract_snapshot = dict(active_contract) if active_contract else None
             print_trade_placed(cid, direction, cost, payout)
             await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": cid, "subscribe": 1}))
             print(f"  {DIM}[DEBUG] Sent POC subscribe for contract {cid}{RST}")
@@ -1127,10 +1130,16 @@ async def handle_message(ws, data, last_trade_time):
             if (_last_displayed_cid != cid) and ("audit_details" in poc) and (poc.get("exit_spot") is not None and float(poc.get("exit_spot", 0) or 0) > 0):
                 direction = "?"
                 entry_price = entry
-                if active_contract:
-                    direction = active_contract["direction"]
-                    entry_price = active_contract["entry_price"]
-                barrier_val = active_contract.get("barrier", BARRIER_HIGHER) if active_contract and direction != "?" else (BARRIER_HIGHER if direction == "higher" else (BARRIER_LOWER if direction == "lower" else "0.23"))
+                ctx = active_contract
+                if ctx is None and _active_contract_snapshot and _active_contract_snapshot.get("contract_id") == cid:
+                    ctx = _active_contract_snapshot  # Contract recovered after reconnect
+                if ctx:
+                    direction = ctx.get("direction", "?")
+                    entry_price = ctx.get("entry_price") or entry
+                if ctx and direction != "?":
+                    barrier_val = ctx.get("barrier", BARRIER_HIGHER)
+                else:
+                    barrier_val = BARRIER_HIGHER if direction == "higher" else (BARRIER_LOWER if direction == "lower" else "0.23")
                 print(f"  {DIM}[POC] status={status} profit={profit} cid={cid}{RST}")
                 try:
                     profit_f = float(profit)
@@ -1144,9 +1153,11 @@ async def handle_message(ws, data, last_trade_time):
                                 float(poc.get("payout", 0)), stats["balance"])
                 reset_active_contract()
                 _active_contract_id = None
+                _active_contract_snapshot = None
+                _last_displayed_cid = cid
                 last_trade_time = time.time()
             elif status == "open" and "audit_details" not in poc and total:
-                direction = active_contract["direction"] if active_contract else "?"
+                direction = active_contract["direction"] if active_contract else (_active_contract_snapshot.get("direction", "?") if _active_contract_snapshot else "?")
                 barrier_val = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
                 print_trade_progress(cur, total, entry, barrier_val)
     elif data.get("msg_type") == "balance":
