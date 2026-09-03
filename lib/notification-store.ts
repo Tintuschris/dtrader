@@ -98,3 +98,132 @@ export function numericId(id: string): number {
 }
 
 
+/* ------------------------------------------------------------------ */
+/*  Notification settings (category + sound toggles)                   */
+/* ------------------------------------------------------------------ */
+
+export const NOTIFICATION_SETTINGS_KEY = "dtrader_notification_settings";
+
+export type NotificationSettings = {
+  tradeResults: boolean;
+  balanceChanges: boolean;
+  priceAlerts: boolean;
+  riskWarnings: boolean;
+  soundEnabled: boolean;
+};
+
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  tradeResults: true,
+  balanceChanges: true,
+  priceAlerts: true,
+  riskWarnings: true,
+  soundEnabled: true,
+};
+
+const SETTING_KEYS: (keyof NotificationSettings)[] = [
+  "tradeResults",
+  "balanceChanges",
+  "priceAlerts",
+  "riskWarnings",
+  "soundEnabled",
+];
+
+/**
+ * Merge a stored payload over the defaults, keeping only boolean values for
+ * known keys. Corrupt JSON simply yields the defaults.
+ */
+export function parseNotificationSettings(raw: string | null | undefined): NotificationSettings {
+  const out: NotificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS };
+  if (!raw) return out;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") return out;
+    for (const key of SETTING_KEYS) {
+      if (typeof parsed[key] === "boolean") out[key] = parsed[key] as boolean;
+    }
+  } catch {
+    // corrupt payload -> defaults
+  }
+  return out;
+}
+
+export function loadNotificationSettings(storage: StorageLike): NotificationSettings {
+  if (!storage) return { ...DEFAULT_NOTIFICATION_SETTINGS };
+  try {
+    return parseNotificationSettings(storage.getItem(NOTIFICATION_SETTINGS_KEY));
+  } catch {
+    return { ...DEFAULT_NOTIFICATION_SETTINGS };
+  }
+}
+
+export function saveNotificationSettings(
+  storage: StorageLike,
+  settings: NotificationSettings,
+): boolean {
+  if (!storage) return false;
+  try {
+    storage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(settings));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Price alerts (one-shot, per market, crossed on live/simulated tick)*/
+/* ------------------------------------------------------------------ */
+
+export const PRICE_ALERT_STORAGE_KEY = "dtrader_price_alerts";
+export const PRICE_ALERT_CAP = 20;
+
+export type PriceAlert = {
+  id: string;
+  symbol: string;
+  direction: "above" | "below";
+  price: number;
+  createdAt: number;
+};
+
+export function isPriceAlert(v: unknown): v is PriceAlert {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.id === "string" &&
+    typeof o.symbol === "string" &&
+    (o.direction === "above" || o.direction === "below") &&
+    typeof o.price === "number" &&
+    Number.isFinite(o.price) &&
+    o.price > 0 &&
+    typeof o.createdAt === "number"
+  );
+}
+
+export function parsePriceAlerts(raw: string | null | undefined): PriceAlert[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isPriceAlert).slice(0, PRICE_ALERT_CAP);
+  } catch {
+    return [];
+  }
+}
+
+export function loadPriceAlerts(storage: StorageLike): PriceAlert[] {
+  if (!storage) return [];
+  try {
+    return parsePriceAlerts(storage.getItem(PRICE_ALERT_STORAGE_KEY));
+  } catch {
+    return [];
+  }
+}
+
+export function savePriceAlerts(storage: StorageLike, alerts: PriceAlert[]): boolean {
+  if (!storage) return false;
+  try {
+    storage.setItem(PRICE_ALERT_STORAGE_KEY, JSON.stringify(alerts.slice(0, PRICE_ALERT_CAP)));
+    return true;
+  } catch {
+    return false;
+  }
+}

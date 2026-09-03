@@ -9,12 +9,24 @@
 import {
   NOTIFICATION_STORAGE_KEY,
   NOTIFICATION_CAP,
+  NOTIFICATION_SETTINGS_KEY,
+  PRICE_ALERT_STORAGE_KEY,
+  PRICE_ALERT_CAP,
+  DEFAULT_NOTIFICATION_SETTINGS,
   loadNotifications,
   saveNotifications,
   parseNotifications,
   isStoredNotification,
   numericId,
+  loadNotificationSettings,
+  saveNotificationSettings,
+  parseNotificationSettings,
+  loadPriceAlerts,
+  savePriceAlerts,
+  parsePriceAlerts,
+  isPriceAlert,
   type StoredNotification,
+  type PriceAlert,
 } from "../lib/notification-store";
 
 function fakeStorage(seed?: Record<string, string>) {
@@ -135,5 +147,89 @@ describe("isStoredNotification / numericId", () => {
     expect(numericId("n-7")).toBe(7);
     expect(numericId("junk")).toBe(0);
     expect(numericId("n--3")).toBe(0);
+  });
+});
+
+describe("notification settings — parse/load/save", () => {
+  it("applies defaults when nothing is stored", () => {
+    expect(loadNotificationSettings(fakeStorage())).toEqual(DEFAULT_NOTIFICATION_SETTINGS);
+  });
+
+  it("round-trips a customized setting set", () => {
+    const storage = fakeStorage();
+    const custom = { ...DEFAULT_NOTIFICATION_SETTINGS, tradeResults: false, soundEnabled: false };
+    expect(saveNotificationSettings(storage, custom)).toBe(true);
+    expect(loadNotificationSettings(storage)).toEqual(custom);
+    expect(storage.dump()).toHaveProperty(NOTIFICATION_SETTINGS_KEY);
+  });
+
+  it("merges partial / corrupt payloads over the defaults, ignoring junk values", () => {
+    const partial = JSON.stringify({ soundEnabled: false, priceAlerts: "nope", bogus: true });
+    const loaded = parseNotificationSettings(partial);
+    expect(loaded.soundEnabled).toBe(false);
+    expect(loaded.priceAlerts).toBe(true);   // non-boolean ignored -> default
+    expect(loaded.tradeResults).toBe(true);
+    expect(parseNotificationSettings("not json {{")).toEqual(DEFAULT_NOTIFICATION_SETTINGS);
+    expect(parseNotificationSettings('{"a":1}')).toEqual(DEFAULT_NOTIFICATION_SETTINGS);
+  });
+
+  it("never throws when storage is unavailable or write fails", () => {
+    expect(loadNotificationSettings(null)).toEqual(DEFAULT_NOTIFICATION_SETTINGS);
+    expect(saveNotificationSettings(null, DEFAULT_NOTIFICATION_SETTINGS)).toBe(false);
+    const throwing = { getItem: () => null, setItem: () => { throw new Error("QuotaExceededError"); } };
+    expect(loadNotificationSettings(throwing)).toEqual(DEFAULT_NOTIFICATION_SETTINGS);
+    expect(saveNotificationSettings(throwing, DEFAULT_NOTIFICATION_SETTINGS)).toBe(false);
+  });
+});
+
+describe("price alerts — persistence and validation", () => {
+  const alert = (over: Partial<PriceAlert> = {}): PriceAlert => ({
+    id: "pa-1",
+    symbol: "R_25",
+    direction: "above",
+    price: 100.5,
+    createdAt: 1_000,
+    ...over,
+  });
+
+  it("round-trips alerts through storage", () => {
+    const storage = fakeStorage();
+    const alerts = [
+      alert({ id: "pa-2", direction: "below", price: 99 }),
+      alert({ id: "pa-1", direction: "above", price: 101 }),
+    ];
+    expect(savePriceAlerts(storage, alerts)).toBe(true);
+    expect(loadPriceAlerts(storage)).toEqual(alerts);
+    expect(storage.dump()).toHaveProperty(PRICE_ALERT_STORAGE_KEY);
+  });
+
+  it("rejects malformed alerts (bad direction, non-positive price, junk)", () => {
+    const raw = JSON.stringify([
+      alert({ id: "pa-ok" }),
+      { ...alert({ id: "pa-bad-dir" }), direction: "sideways" },
+      { ...alert({ id: "pa-zero" }), price: 0 },
+      { ...alert({ id: "pa-neg" }), price: -5 },
+      { ...alert({ id: "pa-str" }), price: "100" },
+      "not-an-alert",
+    ]);
+    expect(parsePriceAlerts(raw).map((a) => a.id)).toEqual(["pa-ok"]);
+    expect(isPriceAlert(alert())).toBe(true);
+    expect(isPriceAlert(null)).toBe(false);
+  });
+
+  it("caps alerts at PRICE_ALERT_CAP on load and save", () => {
+    const storage = fakeStorage();
+    const many = Array.from({ length: PRICE_ALERT_CAP + 5 }, (_, i) => alert({ id: `pa-${i}` }));
+    savePriceAlerts(storage, many);
+    const saved = JSON.parse(storage.dump()[PRICE_ALERT_STORAGE_KEY]) as PriceAlert[];
+    expect(saved.length).toBe(PRICE_ALERT_CAP);
+    expect(loadPriceAlerts(storage).length).toBe(PRICE_ALERT_CAP);
+  });
+
+  it("handles missing storage and corrupt payloads", () => {
+    expect(loadPriceAlerts(fakeStorage())).toEqual([]);
+    expect(loadPriceAlerts(fakeStorage({ [PRICE_ALERT_STORAGE_KEY]: "garbage" }))).toEqual([]);
+    expect(loadPriceAlerts(null)).toEqual([]);
+    expect(savePriceAlerts(null, [alert()])).toBe(false);
   });
 });

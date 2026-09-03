@@ -10,6 +10,16 @@ import { getGlobalAnalyzer } from "../lib/market-analyzer";
 import type { TradeRecommendation } from "./market-analyzer";
 import { defaultRiskSettings, createInitialRiskState, checkRiskLimits, updateRiskState, type RiskSettings, type RiskState } from "./risk-management";
 import { pushNotification } from "./notification-system";
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  loadNotificationSettings,
+  saveNotificationSettings,
+  loadPriceAlerts,
+  savePriceAlerts,
+  PRICE_ALERT_CAP,
+  type NotificationSettings,
+  type PriceAlert,
+} from "../lib/notification-store";
 import { digitFromQuote } from "../lib/format-utils";
 import { getAutoTradeEngine } from "../lib/auto-trade";
 
@@ -103,6 +113,11 @@ export type TradingContextValue = {
   setRiskSettings: (s: RiskSettings | ((s: RiskSettings) => RiskSettings)) => void;
   riskState: RiskState;
   setRiskState: (s: RiskState | ((s: RiskState) => RiskState)) => void;
+  notifSettings: NotificationSettings;
+  setNotifSettings: (s: NotificationSettings | ((s: NotificationSettings) => NotificationSettings)) => void;
+  priceAlerts: PriceAlert[];
+  addPriceAlert: (price: number, direction: "above" | "below") => void;
+  removePriceAlert: (id: string) => void;
   resolvedDigit: number | null;
   setResolvedDigit: (d: number | null) => void;
   contractTickElapsed: number;
@@ -212,6 +227,32 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   const tickReconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentSymbolRef = useRef(symbol);
   const queryClient = useQueryClient();
+
+  /* ---- notification settings (persisted) ---- */
+  const [notifSettings, setNotifSettings] = useState<NotificationSettings>(() => {
+    if (typeof window === "undefined") return { ...DEFAULT_NOTIFICATION_SETTINGS };
+    try { return loadNotificationSettings(window.localStorage); } catch { return { ...DEFAULT_NOTIFICATION_SETTINGS }; }
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    saveNotificationSettings(window.localStorage, notifSettings);
+  }, [notifSettings]);
+
+  /* ---- price alerts (one-shot, persisted per market) ---- */
+  const [priceAlerts, setPriceAlerts] = useState<PriceAlert[]>(() => {
+    if (typeof window === "undefined") return [];
+    try { return loadPriceAlerts(window.localStorage); } catch { return []; }
+  });
+  const priceAlertsRef = useRef(priceAlerts);
+  useEffect(() => {
+    priceAlertsRef.current = priceAlerts;
+    if (typeof window === "undefined") return;
+    savePriceAlerts(window.localStorage, priceAlerts);
+  }, [priceAlerts]);
+
+  /* ---- balance watcher: last own-trade action timestamp for suppression ---- */
+  const lastTradeActionAtRef = useRef(0);
+  const prevBalanceRef = useRef<number | null>(null);
 
   const {
     connectionStatus,
@@ -465,6 +506,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
                 const tickPipSize = tick.pip_size ?? 2;
                 setTicks((prev) => [...prev.slice(-99), { value: Number(tick.quote), digit: digitFromQuote(tick.quote ?? 0, tickPipSize) }]);
                 try { getGlobalAnalyzer().addTick(sym, { quote: Number(tick.quote), epoch: 0 }); } catch { /* analyzer may not be mounted */ }
+                evaluateAlertsRef.current(Number(tick.quote));
               }
             }
 
@@ -561,6 +603,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
       lastSimTickRef.current = newTick.value;
       setTicks((current) => [...current.slice(-55), newTick]);
       try { getGlobalAnalyzer().addTick(symbol, { quote: newTick.value, epoch: 0 }); } catch { /* ok */ }
+      evaluateAlertsRef.current(newTick.value);
     }, 1200);
     return () => window.clearInterval(timer);
   }, [running, streamMode]);
@@ -581,6 +624,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     if (!tick || tick === lastContractTickRef.current) return;
     lastContractTickRef.current = tick;
     setTicks((prev) => [...prev.slice(-99), { value: tick, digit: digitFromQuote(tick, 2) }]);
+    evaluateAlertsRef.current(tick);
   }, [activeContract?.current_tick]);
 
   /* ---- auto-dismiss errors after a few seconds ---- */
@@ -593,6 +637,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   /* ---- trade result sound/vibration ---- */
   useEffect(() => {
     if (!lastResult) return;
+    if (!notifSettings.soundEnabled) return; // sound & vibration toggle
     try {
       if (navigator.vibrate) {
         navigator.vibrate(lastResult.status === "won" ? 100 : [50, 30, 50]);
@@ -609,25 +654,97 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
       osc.stop(ctx.currentTime + 0.25);
     } catch { /* audio not available */ }
-  }, [lastResult]);
+  }, [lastResult, notifSettings.soundEnabled]);
   /* ---- notifications for trade results ---- */
   useEffect(() => {
     if (!lastResult) return;
-    pushNotification({
-      type: "trade",
-      title: lastResult.status === "won" ? "Trade Won!" : "Trade Lost",
-      message: lastResult.status === "won"
-        ? `You won $${Math.abs(lastResult.profit).toFixed(2)} on your trade!`
-        : `You lost $${Math.abs(lastResult.profit).toFixed(2)} on your trade.`,
-      profit: lastResult.profit,
-      severity: lastResult.status === "won" ? "success" : "error",
-    });
+    lastTradeActionAtRef.current = Date.now(); // suppress the balance-change toast for this settle
+    if (notifSettings.tradeResults) {
+      pushNotification({
+        type: "trade",
+        title: lastResult.status === "won" ? "Trade Won!" : "Trade Lost",
+        message: lastResult.status === "won"
+          ? `You won $${Math.abs(lastResult.profit).toFixed(2)} on your trade!`
+          : `You lost $${Math.abs(lastResult.profit).toFixed(2)} on your trade.`,
+        profit: lastResult.profit,
+        severity: lastResult.status === "won" ? "success" : "error",
+      });
+    }
     // Update risk state
     setRiskState((prev) => updateRiskState(prev, riskSettings, lastResult));
     // Auto-refresh wallet balances after trade settles
     queryClient.invalidateQueries({ queryKey: ["deriv", "wallets"] });
     queryClient.invalidateQueries({ queryKey: ["deriv", "platformAccounts"] });
-  }, [lastResult, riskSettings, queryClient]);
+  }, [lastResult, riskSettings, queryClient, notifSettings.tradeResults]);
+
+  /* ---- balance-change notifications (own buy/settle deltas suppressed) ---- */
+  useEffect(() => {
+    if (balance === null) {
+      prevBalanceRef.current = null;
+      return;
+    }
+    const prev = prevBalanceRef.current;
+    prevBalanceRef.current = balance;
+    if (prev === null || !notifSettings.balanceChanges) return;
+    const delta = balance - prev;
+    if (Math.abs(delta) < 0.005) return; // no real change (duplicate feed value)
+    // A fresh buy or settlement already toasts its own result — don't double-notify.
+    if (Date.now() - lastTradeActionAtRef.current < 4000) return;
+    const up = delta > 0;
+    pushNotification({
+      type: "balance",
+      title: up ? "Balance increased" : "Balance decreased",
+      message: `Balance ${up ? "rose" : "fell"} by ${up ? "+" : "-"}${Math.abs(delta).toFixed(2)} ${balanceCurrency} to ${balance.toFixed(2)}`,
+      profit: delta,
+      severity: up ? "success" : "warning",
+    });
+  }, [balance, balanceCurrency, notifSettings.balanceChanges]);
+
+  /* ---- price alert management ---- */
+  const addPriceAlert = useCallback((price: number, direction: "above" | "below") => {
+    if (!Number.isFinite(price) || price <= 0) return;
+    const alert: PriceAlert = {
+      id: `pa-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+      symbol,
+      direction,
+      price,
+      createdAt: Date.now(),
+    };
+    setPriceAlerts((prev) => [alert, ...prev].slice(0, PRICE_ALERT_CAP));
+    pushNotification({
+      type: "system",
+      title: "Price alert set",
+      message: `${symbol} — notify when price moves ${direction === "above" ? "above" : "below"} ${fmt(price)}`,
+      severity: "info",
+    });
+  }, [symbol]);
+
+  const removePriceAlert = useCallback((id: string) => {
+    setPriceAlerts((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  /* ---- evaluate one-shot alerts on each fresh tick (never on backfill) ---- */
+  const evaluateAlerts = useCallback((price: number) => {
+    if (!notifSettings.priceAlerts) return; // disabled — alerts stay armed
+    const list = priceAlertsRef.current;
+    const fired = list.filter(
+      (a) => a.symbol === symbol && (a.direction === "above" ? price >= a.price : price <= a.price),
+    );
+    if (fired.length === 0) return;
+    setPriceAlerts((prev) => prev.filter((a) => !fired.some((f) => f.id === a.id)));
+    for (const a of fired) {
+      pushNotification({
+        type: "alert",
+        title: "Price alert triggered",
+        message: `${a.symbol} ${a.direction === "above" ? "rose above" : "fell below"} ${fmt(a.price)} (now ${fmt(price)})`,
+        severity: "info",
+      });
+    }
+  }, [notifSettings.priceAlerts, symbol]);
+  const evaluateAlertsRef = useRef(evaluateAlerts);
+  useEffect(() => {
+    evaluateAlertsRef.current = evaluateAlerts;
+  });
 
   /* ---- resolved digit indicator on digit strip ---- */
   useEffect(() => {
@@ -760,7 +877,9 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     const riskCheck = checkRiskLimits(riskSettings, riskState, stakeNum);
     if (!riskCheck.allowed) {
       setTradeError(riskCheck.reason);
-      pushNotification({ type: "risk", title: "Trade Blocked", message: riskCheck.reason, severity: "warning" });
+      if (notifSettings.riskWarnings) {
+        pushNotification({ type: "risk", title: "Trade Blocked", message: riskCheck.reason, severity: "warning" });
+      }
       return;
     }
     // Balance validation
@@ -780,13 +899,14 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     isBuyingRef.current = true;
     setTradeError(null);
     // For 1-tick trades, provide immediate visual feedback
-    if (duration === 1) {
+    if (duration === 1 && notifSettings.tradeResults) {
       pushNotification({ type: "trade", title: "Placing Trade", message: "1-tick trade submitting…", severity: "info" });
     }
     try {
       console.log("[Trade] Buying proposal:", proposal.id, "price:", proposal.ask_price, "stake:", stakeNum);
       const result = await buy(proposal.id, proposal.ask_price);
       console.log("[Trade] Buy result:", result ? "contract_id=" + result.contract_id : "null", "status:", result?.status);
+      if (result) lastTradeActionAtRef.current = Date.now(); // suppress balance toast for this buy
       if (!result) setTradeError("Buy request failed — check console for details.");
     } catch (e) {
       setTradeError(`Trade failed: ${String(e)}`);
@@ -794,7 +914,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
       setIsBuying(false);
       isBuyingRef.current = false;
     }
-  }, [stake, activeContract, buy, balance, balanceCurrency, riskSettings, riskState, duration, connectionStatus]);
+  }, [stake, activeContract, buy, balance, balanceCurrency, riskSettings, riskState, duration, connectionStatus, notifSettings.riskWarnings, notifSettings.tradeResults]);
 
   /* ---- keyboard shortcuts ---- */
   useEffect(() => {
@@ -898,6 +1018,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     showNotificationCenter, setShowNotificationCenter, riskSettings, setRiskSettings,
     riskState, setRiskState, resolvedDigit, setResolvedDigit, contractTickElapsed,
     indicatorDuration, setIndicatorDuration, isBuying, setIsBuying,
+    notifSettings, setNotifSettings, priceAlerts, addPriceAlert, removePriceAlert,
     // Derived
     current, priceDelta, priceChangePct, symbolLabel, percentages,
     subOptions, needsBarrier, isDemo, stakeNum, activeAccount,

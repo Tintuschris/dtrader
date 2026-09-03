@@ -163,6 +163,10 @@ The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade
 
 - **Notification feed persistence** - the bell panel, unread state, and timestamps now survive page refreshes via localStorage (`dtrader_notifications`), without replaying old notifications as toasts
 
+- **Balance-change notifications** - watched on the live balance stream (own-trade deltas suppressed) and pushed with the delta and new balance
+- **Price alerts** - one-shot, per-market levels that fire when price crosses on any live or simulated tick, managed from the Settings tab and persisted locally
+- **Notification settings** - the Settings tab gains working toggles for trade results, balance changes, price alerts, risk warnings, and sound & vibration
+
 ---
 
 ### Web v1.0 - Trading WebSocket Reliability & Diagnostics (2026-09-03)

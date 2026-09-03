@@ -46,6 +46,42 @@ export type { ActiveTab };
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
+function ToggleRow({ label, desc, checked, onChange }: { label: string; desc: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "7px 0" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 500, fontSize: 13 }}>{label}</div>
+        <div className="muted" style={{ fontSize: 11 }}>{desc}</div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        style={{
+          width: 40, height: 22, borderRadius: 11, flexShrink: 0, cursor: "pointer", position: "relative",
+          border: "1px solid var(--border)", background: checked ? "rgba(70,211,189,.22)" : "#0c141f",
+        }}
+      >
+        <span style={{
+          position: "absolute", top: 2, left: checked ? 20 : 2, width: 16, height: 16, borderRadius: "50%",
+          background: checked ? "var(--teal)" : "#5a6b7d", transition: "left .15s",
+        }} />
+      </button>
+    </div>
+  );
+}
+
+const alertFieldStyle = {
+  background: "#0c141f",
+  border: "1px solid var(--border)",
+  borderRadius: 7,
+  color: "var(--text)",
+  padding: "7px 9px",
+  fontSize: 12,
+  fontFamily: "inherit",
+};
+
 export default function TradingTerminal({ initialTab = "workspace" }: { initialTab?: ActiveTab }) {
   return (
     <TradingProvider initialTab={initialTab}>
@@ -67,6 +103,7 @@ function TradingTerminalInner() {
     marketSearch, setMarketSearch, markets, marketsLoading, showWallet, setShowWallet,
     showNotificationCenter, setShowNotificationCenter, riskSettings, setRiskSettings,
     riskState, setRiskState, resolvedDigit, contractTickElapsed, indicatorDuration,
+    notifSettings, setNotifSettings, priceAlerts, addPriceAlert, removePriceAlert,
     current, priceDelta, priceChangePct, symbolLabel, percentages,
     subOptions, needsBarrier, isDemo, stakeNum, activeAccount,
     handlePlaceTrade, handleUseRecommendation, handleContractGroupChange, handleHedge,
@@ -77,6 +114,10 @@ function TradingTerminalInner() {
     activeContract, setMarkets, loadAccounts, authLoading, isBuying, setIsBuying,
     activateAccount, setIndicatorDuration, propose, buyBot, subscribeToContract, unsubscribeFromContract,
   } = t;
+
+  /* ---- price alert draft form (Settings tab) ---- */
+  const [alertDir, setAlertDir] = useState<"above" | "below">("above");
+  const [alertPrice, setAlertPrice] = useState("");
 
 if (!isMounted) {
     return <main className="app-shell terminal-loading">Preparing trading workspace…</main>;
@@ -701,6 +742,97 @@ if (!isMounted) {
                 </div>
                 <p className="muted" style={{ marginTop: 6, fontSize: 11 }}>How long the WIN/LOSS marker and resolved digit highlight stay visible on the chart after a trade settles.</p>
               </div>
+            </div>
+            <div className="settings-section">
+              <h3>Notifications</h3>
+              <p className="muted" style={{ fontSize: 11, marginBottom: 10 }}>What gets pushed as toasts and into the notification center. Toggles save locally and apply instantly.</p>
+              <ToggleRow
+                label="Trade results"
+                desc="Win/loss popups and settlement feedback"
+                checked={notifSettings.tradeResults}
+                onChange={(v) => setNotifSettings((s) => ({ ...s, tradeResults: v }))}
+              />
+              <ToggleRow
+                label="Balance changes"
+                desc="Deposits, transfers and other moves that aren't your own trades"
+                checked={notifSettings.balanceChanges}
+                onChange={(v) => setNotifSettings((s) => ({ ...s, balanceChanges: v }))}
+              />
+              <ToggleRow
+                label="Price alerts"
+                desc="One-shot alerts when price crosses a level you set"
+                checked={notifSettings.priceAlerts}
+                onChange={(v) => setNotifSettings((s) => ({ ...s, priceAlerts: v }))}
+              />
+              <ToggleRow
+                label="Risk warnings"
+                desc="Trades blocked by the risk management limits"
+                checked={notifSettings.riskWarnings}
+                onChange={(v) => setNotifSettings((s) => ({ ...s, riskWarnings: v }))}
+              />
+              <ToggleRow
+                label="Sound &amp; vibration"
+                desc="Beep and haptic feedback when a trade settles"
+                checked={notifSettings.soundEnabled}
+                onChange={(v) => setNotifSettings((s) => ({ ...s, soundEnabled: v }))}
+              />
+            </div>
+            <div className="settings-section">
+              <h3>Price Alerts</h3>
+              <p className="muted" style={{ fontSize: 11, marginBottom: 10 }}>
+                Fires once when the {symbolLabel} price reaches your level — evaluated on every live or simulated tick. Pause alerting with the “Price alerts” toggle above.
+              </p>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <select
+                  value={alertDir}
+                  onChange={(e) => setAlertDir(e.target.value as "above" | "below")}
+                  style={alertFieldStyle}
+                  aria-label="Alert direction"
+                >
+                  <option value="above">Above</option>
+                  <option value="below">Below</option>
+                </select>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  placeholder="Price level"
+                  value={alertPrice}
+                  onChange={(e) => setAlertPrice(e.target.value)}
+                  style={{ ...alertFieldStyle, flex: 1, minWidth: 0 }}
+                  aria-label="Alert price level"
+                />
+                <button
+                  className="settings-btn"
+                  style={{ marginTop: 0, whiteSpace: "nowrap" }}
+                  disabled={!(parseFloat(alertPrice) > 0)}
+                  onClick={() => {
+                    addPriceAlert(parseFloat(alertPrice), alertDir);
+                    setAlertPrice("");
+                  }}
+                >
+                  + Add alert
+                </button>
+              </div>
+              {priceAlerts.length === 0 ? (
+                <p className="muted" style={{ fontSize: 12 }}>No alerts yet — add one to be notified when price crosses a level.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {priceAlerts.map((a) => (
+                    <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "#0c141f", border: "1px solid var(--border)", borderRadius: 7, padding: "7px 10px", fontSize: 12 }}>
+                      <span className="trade-row-type">{a.symbol}</span>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color: a.direction === "above" ? "#8de7d9" : "#f08080" }}>
+                        {a.direction === "above" ? <IconArrowUp size={13} /> : <IconArrowDown size={13} />}
+                        {a.direction === "above" ? "above" : "below"}
+                      </span>
+                      <b style={{ fontFamily: "Space Grotesk", fontWeight: 600 }}>{fmt(a.price)}</b>
+                      <button className="icon-button" style={{ marginLeft: "auto", color: "var(--muted)" }} aria-label={`Remove ${a.symbol} ${a.direction} ${fmt(a.price)} alert`} onClick={() => removePriceAlert(a.id)}>
+                        <IconX size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </section>

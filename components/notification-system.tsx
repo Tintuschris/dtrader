@@ -37,14 +37,7 @@ export type Notification = {
   severity?: "info" | "success" | "warning" | "error";
 };
 
-export type NotificationSettings = {
-  tradeResults: boolean;
-  balanceChanges: boolean;
-  priceAlerts: boolean;
-  riskWarnings: boolean;
-  soundEnabled: boolean;
-};
-
+export type { NotificationSettings } from "../lib/notification-store";
 
 /* ------------------------------------------------------------------ */
 /*  Internal state (singleton)                                         */
