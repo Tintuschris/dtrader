@@ -120,6 +120,7 @@ export type TradingContextValue = {
   removePriceAlert: (id: string) => void;
   resolvedDigit: number | null;
   setResolvedDigit: (d: number | null) => void;
+  resolvedOutcome: "won" | "lost" | null;
   contractTickElapsed: number;
   indicatorDuration: number;
   setIndicatorDuration: (d: number) => void;
@@ -211,6 +212,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   const [riskSettings, setRiskSettings] = useState<RiskSettings>(defaultRiskSettings);
   const [riskState, setRiskState] = useState<RiskState>(createInitialRiskState);
   const [resolvedDigit, setResolvedDigit] = useState<number | null>(null);
+  const [resolvedOutcome, setResolvedOutcome] = useState<"won" | "lost" | null>(null);
   const [resolvedTrades, setResolvedTrades] = useState<ResolvedTrade[]>([]);
   const [contractTickElapsed, setContractTickElapsed] = useState(0);
   const [indicatorDuration, setIndicatorDuration] = useState(() => {
@@ -746,14 +748,18 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     evaluateAlertsRef.current = evaluateAlerts;
   });
 
-  /* ---- resolved digit indicator on digit strip ---- */
+  /* ---- resolved digit indicator on digit strip (colored by win/loss) ---- */
   useEffect(() => {
     if (!lastResult) return;
     const lastTick = ticks.at(-1);
     if (lastTick) {
       setResolvedDigit(lastTick.digit);
+      setResolvedOutcome(lastResult.status === "won" ? "won" : "lost");
     }
-    const timer = setTimeout(() => setResolvedDigit(null), indicatorDuration * 1000);
+    const timer = setTimeout(() => {
+      setResolvedDigit(null);
+      setResolvedOutcome(null);
+    }, indicatorDuration * 1000);
     return () => clearTimeout(timer);
   }, [lastResult, ticks, indicatorDuration]);
 
@@ -1017,7 +1023,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     marketSearch, setMarketSearch, markets, marketsLoading, showWallet, setShowWallet,
     showNotificationCenter, setShowNotificationCenter, riskSettings, setRiskSettings,
     riskState, setRiskState, resolvedDigit, setResolvedDigit, contractTickElapsed,
-    indicatorDuration, setIndicatorDuration, isBuying, setIsBuying,
+    resolvedOutcome, indicatorDuration, setIndicatorDuration, isBuying, setIsBuying,
     notifSettings, setNotifSettings, priceAlerts, addPriceAlert, removePriceAlert,
     // Derived
     current, priceDelta, priceChangePct, symbolLabel, percentages,

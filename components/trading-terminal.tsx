@@ -102,7 +102,7 @@ function TradingTerminalInner() {
     showMobileMenu, setShowMobileMenu, showMarketPicker, setShowMarketPicker,
     marketSearch, setMarketSearch, markets, marketsLoading, showWallet, setShowWallet,
     showNotificationCenter, setShowNotificationCenter, riskSettings, setRiskSettings,
-    riskState, setRiskState, resolvedDigit, contractTickElapsed, indicatorDuration,
+    riskState, setRiskState, resolvedDigit, resolvedOutcome, contractTickElapsed, indicatorDuration,
     notifSettings, setNotifSettings, priceAlerts, addPriceAlert, removePriceAlert,
     current, priceDelta, priceChangePct, symbolLabel, percentages,
     subOptions, needsBarrier, isDemo, stakeNum, activeAccount,
@@ -396,7 +396,7 @@ if (!isMounted) {
                 </div>
                 <div className="digit-strip">
                   {percentages.map((pct, digit) => (
-                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? "resolved" : ""}`} onClick={() => setSelectedDigit(digit)}>
+                    <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? `resolved ${resolvedOutcome ?? ""}`.trim() : ""}`} onClick={() => setSelectedDigit(digit)}>
                       <strong>{digit}</strong>
                       <span>{pct}%</span>
                     </button>
@@ -425,7 +425,7 @@ if (!isMounted) {
                     </div>
                     <div className="digit-strip">
                       {percentages.map((pct, digit) => (
-                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? "resolved" : ""}`} onClick={() => setSelectedDigit(digit)}>
+                        <button key={digit} className={`digit-ring digit-${digit} ${digit === current.digit ? "current" : ""} ${digit === selectedDigit && needsBarrier ? "chosen" : ""} ${digit === resolvedDigit ? `resolved ${resolvedOutcome ?? ""}`.trim() : ""}`} onClick={() => setSelectedDigit(digit)}>
                           <strong>{digit}</strong>
                           <span>{pct}%</span>
                         </button>

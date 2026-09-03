@@ -167,6 +167,8 @@ The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade
 - **Price alerts** - one-shot, per-market levels that fire when price crosses on any live or simulated tick, managed from the Settings tab and persisted locally
 - **Notification settings** - the Settings tab gains working toggles for trade results, balance changes, price alerts, risk warnings, and sound & vibration
 
+- **Resolved digit colored by outcome** - the exit-digit ring on the digit strip pulses green on wins and red on losses, matching the chart markers
+
 ---
 
 ### Web v1.0 - Trading WebSocket Reliability & Diagnostics (2026-09-03)
