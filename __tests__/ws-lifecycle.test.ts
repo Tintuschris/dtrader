@@ -16,6 +16,10 @@ import {
   findOpenPortfolioContract,
   appendWsCloseLog,
   readWsCloseLog,
+  makeDropEntryId,
+  dedupeWsDrops,
+  postWsDrops,
+  WsDropForwarder,
   type WsCloseLogEntry,
 } from "../lib/ws-lifecycle";
 
@@ -250,5 +254,153 @@ describe("appendWsCloseLog / readWsCloseLog — drop diagnostics", () => {
       setItem: () => { throw new Error("QuotaExceededError"); },
     };
     expect(appendWsCloseLog(throwing, "drops", drop())).toEqual([]);
+  });
+});
+
+
+/* ------------------------------------------------------------------ */
+/*  Server forwarding — batching, dedupe, id generation                */
+/* ------------------------------------------------------------------ */
+
+function manualTimers() {
+  let nextId = 0;
+  const timers = new Map<number, () => void>();
+  return {
+    set: (cb: () => void) => { const id = ++nextId; timers.set(id, cb); return id as unknown as ReturnType<typeof setTimeout>; },
+    clear: (id: ReturnType<typeof setTimeout>) => { timers.delete(id as unknown as number); },
+    runAll: async () => {
+      const cbs = [...timers.values()];
+      timers.clear();
+      for (const cb of cbs) await cb();
+    },
+    count: () => timers.size,
+  };
+}
+
+describe("makeDropEntryId / dedupeWsDrops", () => {
+  it("generates unique ids", () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 100; i++) ids.add(makeDropEntryId());
+    expect(ids.size).toBe(100);
+  });
+
+  it("dedupes by id, keeping the first occurrence", () => {
+    const a = drop({ id: "id-1", at: 1 });
+    const b = drop({ id: "id-1", at: 2 }); // duplicate id, different data
+    const c = drop({ id: "id-2", at: 3 });
+    const out = dedupeWsDrops([a, b, c]);
+    expect(out).toEqual([a, c]);
+  });
+
+  it("falls back to at:code when id is missing", () => {
+    const a = drop({ at: 10, code: 1006 });
+    const b = drop({ at: 10, code: 1006 }); // same at+code → duplicate
+    const c = drop({ at: 10, code: 1000 });
+    expect(dedupeWsDrops([a, b, c])).toEqual([a, c]);
+  });
+});
+
+describe("postWsDrops — fire-and-forget", () => {
+  it("resolves true on an ok response", async () => {
+    const fetchFn = jest.fn().mockResolvedValue({ ok: true });
+    const ok = await postWsDrops("/api/diag", [drop()], fetchFn as unknown as typeof fetch);
+    expect(ok).toBe(true);
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(url).toBe("/api/diag");
+    expect(init.method).toBe("POST");
+    expect(init.keepalive).toBe(true);
+  });
+
+  it("resolves false on a non-ok response", async () => {
+    const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 429 });
+    expect(await postWsDrops("/api/diag", [drop()], fetchFn as unknown as typeof fetch)).toBe(false);
+  });
+
+  it("never throws when the network fails", async () => {
+    const fetchFn = jest.fn().mockRejectedValue(new Error("offline"));
+    expect(await postWsDrops("/api/diag", [drop()], fetchFn as unknown as typeof fetch)).toBe(false);
+  });
+});
+
+describe("WsDropForwarder — batched, debounced, retrying", () => {
+  it("debounces: sends nothing until the quiet window elapses", async () => {
+    const timers = manualTimers();
+    const send = jest.fn().mockResolvedValue(true);
+    const f = new WsDropForwarder({
+      send,
+      flushDelayMs: 10_000,
+      setTimer: timers.set,
+      clearTimer: timers.clear,
+    });
+    f.push([drop({ at: 1 })]);
+    f.push([drop({ at: 2 })]);
+    expect(send).not.toHaveBeenCalled();
+    expect(timers.count()).toBe(1); // single debounce timer for both pushes
+    await timers.runAll();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].map((e: WsCloseLogEntry) => e.at)).toEqual([1, 2]);
+    expect(f.pending).toBe(0);
+  });
+
+  it("flushes immediately once the batch threshold is reached", async () => {
+    const timers = manualTimers();
+    const send = jest.fn().mockResolvedValue(true);
+    const f = new WsDropForwarder({
+      send,
+      maxBatch: 3,
+      setTimer: timers.set,
+      clearTimer: timers.clear,
+    });
+    f.push([drop({ at: 1 }), drop({ at: 2 }), drop({ at: 3 })]);
+    await new Promise((r) => setTimeout(r, 0)); // let the async flush complete
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(f.pending).toBe(0);
+  });
+
+  it("requeues and retries a failed send, then succeeds", async () => {
+    const timers = manualTimers();
+    const send = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const f = new WsDropForwarder({
+      send,
+      flushDelayMs: 5_000,
+      setTimer: timers.set,
+      clearTimer: timers.clear,
+    });
+    f.push([drop({ at: 1 })]);
+    await timers.runAll(); // first flush → send fails → requeued + rescheduled
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(f.pending).toBe(1); // batch kept for retry
+    await timers.runAll(); // retry → succeeds
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(f.pending).toBe(0);
+  });
+
+  it("caps the queue at maxQueued", () => {
+    const timers = manualTimers();
+    const send = jest.fn().mockResolvedValue(true);
+    const f = new WsDropForwarder({
+      send,
+      maxQueued: 3,
+      flushDelayMs: 10_000,
+      setTimer: timers.set,
+      clearTimer: timers.clear,
+    });
+    f.push([drop({ at: 1 }), drop({ at: 2 }), drop({ at: 3 }), drop({ at: 4 }), drop({ at: 5 })]);
+    expect(f.pending).toBe(3); // newest 3 kept (dedupe keeps first — all unique here)
+  });
+
+  it("dedupes entries pushed twice", async () => {
+    const timers = manualTimers();
+    const send = jest.fn().mockResolvedValue(true);
+    const f = new WsDropForwarder({
+      send,
+      setTimer: timers.set,
+      clearTimer: timers.clear,
+    });
+    const e = drop({ id: "dup", at: 1 });
+    f.push([e]);
+    f.push([e]); // same id — ignored
+    await timers.runAll();
+    expect(send.mock.calls[0][0]).toEqual([e]);
   });
 });

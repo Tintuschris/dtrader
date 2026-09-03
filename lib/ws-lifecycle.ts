@@ -117,6 +117,7 @@ export function findOpenPortfolioContract(
 /*  Connection drop diagnostics                                        */
 /* ------------------------------------------------------------------ */
 export type WsCloseLogEntry = {
+  id?: string; // stable unique id (for server-side dedupe across sessions)
   at: number; // epoch ms when the socket closed
   code: number; // WebSocket close code (1006 = abnormal, no close frame)
   reason: string; // close reason string
@@ -176,5 +177,135 @@ export function readWsCloseLog(storage: KvStore, key: string): WsCloseLogEntry[]
     return Array.isArray(parsed) ? (parsed as WsCloseLogEntry[]) : [];
   } catch {
     return [];
+  }
+}
+
+
+/* ------------------------------------------------------------------ */
+/*  Server forwarding (batched, rate-limited)                          */
+/* ------------------------------------------------------------------ */
+/** Generate a stable unique id for a drop entry (crypto UUID when available). */
+export function makeDropEntryId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    /* fall through to random fallback */
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+}
+
+/** Drop duplicate entries within a list, keyed by id (or at:code fallback). */
+export function dedupeWsDrops(entries: WsCloseLogEntry[]): WsCloseLogEntry[] {
+  const seen = new Set<string>();
+  const out: WsCloseLogEntry[] = [];
+  for (const e of entries) {
+    const key = e.id ?? `${e.at}:${e.code}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
+}
+
+/** POST a batch to the diag endpoint. Fire-and-forget: never throws. */
+export async function postWsDrops(
+  url: string,
+  entries: WsCloseLogEntry[],
+  fetchFn: typeof fetch = fetch,
+): Promise<boolean> {
+  try {
+    const res = await fetchFn(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries }),
+      keepalive: true,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export type DropSender = (entries: WsCloseLogEntry[]) => Promise<boolean>;
+
+/**
+ * Batches drop entries and forwards them to the server: flushes either when
+ * `maxBatch` entries accumulate (immediate) or after `flushDelayMs` of quiet
+ * (debounced). Failed sends are requeued (deduped, capped) for a later retry.
+ * Timers are injectable so tests can drive them manually.
+ */
+export class WsDropForwarder {
+  private queue: WsCloseLogEntry[] = [];
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private readonly send: DropSender;
+  private readonly flushDelayMs: number;
+  private readonly maxBatch: number;
+  private readonly maxQueued: number;
+  private readonly setTimer: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  private readonly clearTimer: (t: ReturnType<typeof setTimeout>) => void;
+
+  constructor(opts: {
+    send: DropSender;
+    flushDelayMs?: number;
+    maxBatch?: number;
+    maxQueued?: number;
+    setTimer?: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
+    clearTimer?: (t: ReturnType<typeof setTimeout>) => void;
+  }) {
+    this.send = opts.send;
+    this.flushDelayMs = opts.flushDelayMs ?? 10_000;
+    this.maxBatch = opts.maxBatch ?? 8;
+    this.maxQueued = opts.maxQueued ?? 100;
+    this.setTimer = opts.setTimer ?? ((cb, ms) => setTimeout(cb, ms));
+    this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
+  }
+
+  get pending(): number {
+    return this.queue.length;
+  }
+
+  push(entries: WsCloseLogEntry[]): void {
+    if (entries.length === 0) return;
+    this.queue = dedupeWsDrops([...this.queue, ...entries]).slice(0, this.maxQueued);
+    if (this.queue.length >= this.maxBatch) {
+      void this.flush();
+      return;
+    }
+    this.schedule();
+  }
+
+  private schedule(): void {
+    if (this.timer !== null) return;
+    this.timer = this.setTimer(() => {
+      this.timer = null;
+      void this.flush();
+    }, this.flushDelayMs);
+  }
+
+  async flush(): Promise<void> {
+    if (this.timer !== null) {
+      this.clearTimer(this.timer);
+      this.timer = null;
+    }
+    const batch = this.queue.slice(0, this.maxBatch);
+    if (batch.length === 0) return;
+    this.queue = this.queue.slice(batch.length);
+    const ok = await this.send(batch);
+    if (!ok) {
+      // keep the batch for a later retry (deduped, capped)
+      this.queue = dedupeWsDrops([...batch, ...this.queue]).slice(0, this.maxQueued);
+      this.schedule();
+    }
+  }
+
+  dispose(): void {
+    if (this.timer !== null) {
+      this.clearTimer(this.timer);
+      this.timer = null;
+    }
   }
 }

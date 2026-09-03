@@ -75,6 +75,37 @@ interrupted — reconnecting…" if it somehow gets invoked.
 
 Full suite: **108 tests passing**; `tsc --noEmit` clean.
 
+## Server-side drop log — /api/diag
+
+The same drop entries are forwarded to the server (batched and rate-limited),
+so drops from every session can be reviewed without console access.
+
+**Client** (`WsDropForwarder` in `lib/ws-lifecycle.ts`, wired into
+`use-deriv-ws.ts`): entries accumulate in a queue and POST to `/api/diag`
+either when 8 accumulate (immediate) or after 10s of quiet (debounced).
+Failed sends are requeued for a later retry; the queue is capped at 100.
+A one-time backfill on page load forwards drops recorded in `localStorage`
+before this session, and the pending batch is flushed on unload. Each entry
+gets a stable `id`, so re-sends are idempotent.
+
+**Server** (`app/api/diag/route.ts`):
+- `POST` — validates/normalizes entries (max 200 per batch, 1 MB body),
+  dedupes by id, appends to `data/ws-drops.jsonl` (JSONL, one entry per line;
+  path overridable via `WS_DROP_LOG_FILE`). Returns `{ ok, stored,
+  duplicates }`.
+- `GET /api/diag?limit=N` — returns the newest N entries (default 100, max
+  500), newest first.
+- Rate limited per client IP: 30 requests/minute (override with
+  `WS_DIAG_MAX_PER_MIN`); excess gets `429`.
+
+Review from the command line:
+
+```bash
+curl "http://localhost:3000/api/diag?limit=50"
+```
+
+`data/ws-drops.jsonl` is gitignored (runtime data only).
+
 ## Persistent connection-status banner
 
 `components/trading-status-banner.tsx` renders a slim, sticky strip at the
@@ -141,4 +172,6 @@ handler.
 - `components/trading-terminal.tsx` — Buy disabled/labeled while offline
 - `__tests__/ws-lifecycle.test.ts` — lifecycle tests
 - `components/trading-status-banner.tsx` — persistent connection banner
+- `app/api/diag/route.ts` — POST/GET diag endpoint (rate-limited, deduped)
+- `lib/ws-drop-store.ts` — JSONL file store; `lib/ws-rate-limit.ts` — limiter
 - `lib/ws-lifecycle.ts` — `appendWsCloseLog` / `readWsCloseLog` ring buffer

@@ -8,6 +8,9 @@ import {
   findOpenPortfolioContract,
   appendWsCloseLog,
   readWsCloseLog,
+  makeDropEntryId,
+  postWsDrops,
+  WsDropForwarder,
   type WsCloseLogEntry,
 } from "../lib/ws-lifecycle";
 
@@ -139,6 +142,7 @@ export function useDerivTrading() {
   const reconcileOnOpenRef = useRef(false);
   const activeContractRef = useRef<OpenContract | null>(null);
   const connectedAtRef = useRef<number | null>(null); // when the current socket opened
+  const dropForwarderRef = useRef<WsDropForwarder | null>(null);
 
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -650,21 +654,24 @@ export function useDerivTrading() {
             portfolio: pendingPortfolio.current != null,
             profitTable: pendingProfitTable.current != null,
           };
+          const dropEntry: WsCloseLogEntry = {
+            id: makeDropEntryId(),
+            at: Date.now(),
+            code,
+            reason,
+            durationMs: connectedAt ? Date.now() - connectedAt : 0,
+            attempt,
+            inFlight,
+            hadActiveContract: !!activeContractRef.current,
+            reconcileFlagged: inFlight.buys > 0 || !!activeContractRef.current,
+          };
           appendWsCloseLog(
             typeof window !== "undefined" ? window.localStorage : null,
             WS_DROP_LOG_KEY,
-            {
-              at: Date.now(),
-              code,
-              reason,
-              durationMs: connectedAt ? Date.now() - connectedAt : 0,
-              attempt,
-              inFlight,
-              hadActiveContract: !!activeContractRef.current,
-              reconcileFlagged: inFlight.buys > 0 || !!activeContractRef.current,
-            },
+            dropEntry,
             WS_DROP_LOG_MAX,
           );
+          dropForwarderRef.current?.push([dropEntry]);
           // Reject in-flight requests so nothing hangs on the dead socket, and
           // remember to reconcile after reconnect if a buy was stranded or a
           // contract was open (its settlement stream died with the socket).
@@ -769,6 +776,31 @@ export function useDerivTrading() {
       }
     };
   }, [send]);
+
+  /* ---- batched, rate-limited drop forwarding to /api/diag ---- */
+  useEffect(() => {
+    const forwarder = new WsDropForwarder({
+      send: (entries) => postWsDrops("/api/diag", entries),
+    });
+    dropForwarderRef.current = forwarder;
+    // One-time backfill of drops recorded before this session so the server
+    // has the full picture; the server dedupes by entry id.
+    const backlog = readWsCloseLog(
+      typeof window !== "undefined" ? window.localStorage : null,
+      WS_DROP_LOG_KEY,
+    );
+    if (backlog.length > 0) forwarder.push(backlog);
+    const flushOnUnload = () => {
+      void forwarder.flush();
+    };
+    window.addEventListener("beforeunload", flushOnUnload);
+    return () => {
+      window.removeEventListener("beforeunload", flushOnUnload);
+      void forwarder.flush();
+      forwarder.dispose();
+      dropForwarderRef.current = null;
+    };
+  }, []);
 
   /* ---- propose ---- */
   const propose = useCallback(
