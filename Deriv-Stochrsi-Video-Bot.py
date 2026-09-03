@@ -55,6 +55,9 @@ parser.add_argument("--loss-cooldown", type=int,
 parser.add_argument("--rsi-long-max", type=float,
                     default=float(os.environ.get("FILTER_RSI_LONG_MAX", "35")),
                     help="RSI must be below this for LONG signals (default: 35)")
+parser.add_argument("--rsi-long-min", type=float,
+                    default=float(os.environ.get("FILTER_RSI_LONG_MIN", "20")),
+                    help="RSI must be above this for LONG signals (default: 20 - skip knife-catching deep oversold)")
 parser.add_argument("--rsi-short-min", type=float,
                     default=float(os.environ.get("FILTER_RSI_SHORT_MIN", "75")),
                     help="RSI must be above this for SHORT signals (default: 75)")
@@ -124,6 +127,7 @@ RAW_SLOPE_MAX = 0.15
 FILTER_LOSS_STREAK_MAX = args.max_loss_streak
 FILTER_LOSS_COOLDOWN_SECONDS = args.loss_cooldown
 FILTER_RSI_LONG_MAX = args.rsi_long_max
+FILTER_RSI_LONG_MIN = args.rsi_long_min
 FILTER_RSI_SHORT_MIN = args.rsi_short_min
 FILTER_SRSI_SHORT_PEAK_MIN = args.srsi_short_peak
 FILTER_SRSI_LONG_PEAK_MAX = args.srsi_long_peak
@@ -1054,6 +1058,10 @@ async def process_tick(ws, tick_data, last_trade_time):
         rsi_now = rsi_vals[-1] if rsi_vals else 50
         if direction == "higher" and rsi_now > FILTER_RSI_LONG_MAX:
             print(_skip("rsi_not_oversold", f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > {FILTER_RSI_LONG_MAX}, not strongly oversold{RST}"))
+            reset_l_state()
+            return now
+        if direction == "higher" and rsi_now < FILTER_RSI_LONG_MIN:
+            print(_skip("rsi_too_deep", f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < {FILTER_RSI_LONG_MIN:.0f}, oversold too deep (knife-catching){RST}"))
             reset_l_state()
             return now
         if direction == "lower" and rsi_now < FILTER_RSI_SHORT_MIN:

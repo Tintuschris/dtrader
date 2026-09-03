@@ -92,6 +92,7 @@ RAW_SLOPE_MAX = 0.15
 MAX_CONSECUTIVE_LOSSES = int(os.environ.get("SOFT_MAX_CONSECUTIVE_LOSSES", "1"))
 LOSS_COOLDOWN_SECONDS = int(os.environ.get("SOFT_LOSS_COOLDOWN_SECONDS", "60"))
 RSI_LONG_MAX = float(os.environ.get("SOFT_RSI_LONG_MAX", "45"))
+RSI_LONG_MIN = float(os.environ.get("SOFT_RSI_LONG_MIN", "20"))  # RSI floor for LONG: skip knife-catching deep oversold
 RSI_SHORT_MIN = float(os.environ.get("SOFT_RSI_SHORT_MIN", "65"))
 
 # === Trend filters ===
@@ -992,6 +993,10 @@ async def process_tick(ws, tick_data, last_trade_time):
         rsi_now = rsi_vals[-1] if rsi_vals else 50
         if direction == "higher" and rsi_now > RSI_LONG_MAX:
             print(_skip("rsi_not_oversold", f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > {RSI_LONG_MAX:.0f}, not oversold enough{RST}"))
+            reset_l_state()
+            return now
+        if direction == "higher" and rsi_now < RSI_LONG_MIN:
+            print(_skip("rsi_too_deep", f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < {RSI_LONG_MIN:.0f}, oversold too deep (knife-catching){RST}"))
             reset_l_state()
             return now
         if direction == "lower" and rsi_now < RSI_SHORT_MIN:
