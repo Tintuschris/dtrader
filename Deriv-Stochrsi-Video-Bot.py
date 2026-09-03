@@ -43,6 +43,10 @@ parser.add_argument("--max-sessions", type=int, metavar="N",
                     help="With --history: show only the newest N session records")
 parser.add_argument("--trim", action="store_true",
                     help="With --history and --max-sessions N: delete older session records from the file")
+parser.add_argument("--stats", action="store_true",
+                    help="With --history: also print the win/loss band analysis from analyze_trade_log.py")
+parser.add_argument("--since", metavar="YYYY-MM-DD HH:MM:SS",
+                    help="With --history --stats: only analyze trades at/after this timestamp")
 parser.add_argument("--speed", type=float, default=1.0,
                     help="Replay speed (1.0=real-time, 10=10x)")
 # Filter threshold args
@@ -1496,6 +1500,8 @@ if __name__ == "__main__":
             print(f"  {RED}X --trim requires --max-sessions N{RST}")
         elif args.max_sessions is not None and args.max_sessions < 1:
             print(f"  {RED}X --max-sessions must be at least 1{RST}")
+        elif args.since and not args.stats:
+            print(f"  {RED}X --since requires --stats (band analysis){RST}")
         else:
             print(f"  {CYN}>{RST} Session history from {TRADE_LOG_FILE}{RST}")
             try:
@@ -1508,6 +1514,13 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"  {RED}X Could not show session history: {e}{RST}")
                 print(f"  {DIM}Run the bot once and let it exit to start recording sessions.{RST}")
+            if args.stats:
+                print()
+                try:
+                    from analyze_trade_log import print_analysis
+                    print_analysis(TRADE_LOG_FILE, since=args.since)
+                except ImportError:
+                    print(f"  {RED}X analyze_trade_log.py not found - cannot run band analysis{RST}")
     else:
         try:
             if args.replay:
