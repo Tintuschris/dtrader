@@ -2,6 +2,53 @@
 
 All notable changes to the Deriv STOCHRSI L-Shape Bot.
 
+## v3.2 - Reliability, Session History & Web Socket Hardening (2026-09-03)
+
+### Python Bots
+
+#### New Features
+
+- **SloppyL-Soft bot** (`Deriv-Stochrsi-SloppyL-Soft.py`) - softer L-shape variant with enhanced filters
+- **RSI floor for LONG signals** - `--rsi-long-min` / `SOFT_RSI_LONG_MIN` (default 20) skips knife-catching oversold longs (logged RSI<20 longs were 0W/3L, while 20-30 was 5W/0L)
+- **Per-run session records** in `trade_log.json` - start time, duration, exit reason, settled trades, win rate, PnL
+- **`--history` flag** on both bots - prints saved session records and exits without trading
+- **`--trim` / `--max-sessions`** - limit the display or trim old session records
+- **`view_trade_log.py`** - session-history viewer with `--stats` for combined history + band analysis
+- **`analyze_trade_log.py`** - repeatable band analysis: overall WR, LONG/SHORT loss rates by RSI/SRSI band, after-loss behavior, SHORT misfire watch, `--since` post-restart window
+- **`--stats` / `--since`** forwarded through both bots' `--history` - one command shows history plus analysis
+- **Skip reasons + market stats** captured in session records, so every skipped signal is auditable
+
+#### Bug Fixes
+
+- **LOWER contract barrier sign** - barrier for LOWER trades now computed with the correct sign (was inverted, making LOWER wins much harder)
+- **Loss-streak circuit breaker now actually engages** - main bot pauses after the first loss with a 60s cooldown
+- **Soft bot loss policy tightened** - same first-loss pause applied by default
+- **SRSI peak check fixed in the main bot** - flat-extreme context is now captured *before* `reset_l_state()`, so SHORT signals (overbought flat >= 0.90) are actually evaluated instead of silently skipped
+- **`--account` flag** now selects real/demo correctly; shutdown saves trades
+- **Open-contract settlement recovered after reconnect** - POC re-subscription restored after a WebSocket drop
+
+### Web App (trading WebSocket reliability) - see `docs/web-ws-reliability.md`
+
+#### New Features
+
+- **Persistent status banner** across the workspace showing trading-socket state (live / reconnecting with attempt N/10 / offline)
+- **Drop diagnostics** - every socket close (code, reason, duration, in-flight requests) logged to a localStorage ring buffer
+- **Server-side drop log** - batched, rate-limited `/api/diag` endpoint writing `data/ws-drops.jsonl`
+- **Stale watchdog** - proactively closes and reconnects when no WS message arrives for 45s (tunable via `NEXT_PUBLIC_WS_STALE_MS`)
+
+#### Bug Fixes
+
+- **Reconnect race** - connection-generation guard so stale sockets can't take over or reconnect over newer connections
+- **Pending requests hung on disconnect** - proposals/buys now reject immediately when the socket closes
+- **No pre-buy freshness check** - stale-proposal guard refuses expired proposals and re-subscribes; Buy disabled while not connected
+- **Lost buy responses** - post-reconnect portfolio reconciliation recovers contracts accepted before the disconnect
+
+### Testing
+
+- WebSocket lifecycle test suite (disconnect during proposal/buy, stale-socket races, lost buy responses, drop-log ring buffer, stale watchdog) - suite grew from 89 to 133 tests, `tsc --noEmit` clean
+
+---
+
 ---
 
 ## v3.1 - Strategy Filters + Trade Logging (2026-09-02)
