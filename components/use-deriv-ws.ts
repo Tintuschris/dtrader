@@ -670,6 +670,12 @@ export function useDerivTrading() {
           // reconnects or clobber state belonging to the live connection.
           if (!connGuard.current.isCurrent(gen)) return;
           watchdog.disarm();
+          // A proposal received on this socket must not survive a disconnect;
+          // its server-side id may expire before the replacement socket is
+          // ready, even if the UI still shows the old price.
+          proposalRef.current = null;
+          proposalTimestampRef.current = 0;
+          setCurrentProposal(null);
           const code = event.code;
           const reason = event.reason;
           const attempt = reconnectAttempts.current;
@@ -748,12 +754,28 @@ export function useDerivTrading() {
   /* ---- proposal subscription ---- */
   const subscribeProposal = useCallback(
     (req: ProposalRequest) => {
+      const previous = lastProposalParamsRef.current;
+      const paramsChanged = !previous ||
+        previous.contract_type !== req.contract_type ||
+        previous.symbol !== req.symbol ||
+        previous.amount !== req.amount ||
+        previous.currency !== req.currency ||
+        previous.duration_ticks !== req.duration_ticks ||
+        previous.barrier !== req.barrier;
       lastProposalParamsRef.current = req;
       if (proposalSubscriptionIdRef.current) {
         send({ forget: proposalSubscriptionIdRef.current });
         proposalSubscriptionIdRef.current = null;
       }
-      if (!proposalRef.current) setProposalLoading(true);
+      // Never leave the previous market/contract's price buyable while a new
+      // proposal is being requested. This is especially important after a
+      // scanner toast opens a different market on a slower mobile connection.
+      if (paramsChanged) {
+        proposalRef.current = null;
+        proposalTimestampRef.current = 0;
+        setCurrentProposal(null);
+      }
+      setProposalLoading(true);
       setLastError(null);
       const subMsg: Record<string, unknown> = {
         proposal: 1,
@@ -783,6 +805,9 @@ export function useDerivTrading() {
       send({ forget: proposalSubscriptionIdRef.current });
       proposalSubscriptionIdRef.current = null;
     }
+    proposalRef.current = null;
+    proposalTimestampRef.current = 0;
+    setCurrentProposal(null);
     const subMsg: Record<string, unknown> = {
       proposal: 1,
       subscribe: 1,

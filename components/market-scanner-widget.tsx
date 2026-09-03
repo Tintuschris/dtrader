@@ -28,6 +28,7 @@ const LOOKBACK_KEY = "freebuff_scanner_lookback";
 const ALERTS_KEY = "freebuff_scanner_alerts";
 const ALERT_COOLDOWN_MS = 60_000;
 const ALERT_BATCH_MS = 1200;
+const ALERT_BATCH_MOBILE_MS = 450;
 const PILL_H = 46; // used until the real pill is measured
 
 type Pos = { x: number; y: number };
@@ -133,7 +134,7 @@ export default function MarketScannerWidget({
   const suppressedWhileOpenRef = useRef<Set<string>>(new Set());
   const alertTimesRef = useRef<Map<string, number>>(new Map());
   const pendingAlertsRef = useRef<Map<string, string>>(new Map());
-  const pendingAlertActionsRef = useRef<Map<string, { symbol: string; rule: RuleKey }>>(new Map());
+  const pendingAlertActionsRef = useRef<Map<string, { symbol: string; rule: RuleKey; firedAt: number }>>(new Map());
   const alertBatchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [status, setStatus] = useState<ScannerStatus>(EMPTY_STATUS);
   const [symbolStatuses, setSymbolStatuses] = useState<Map<string, ScannerSymbolStatus>>(new Map());
@@ -204,12 +205,13 @@ export default function MarketScannerWidget({
           ? `8 ${pct1(signal.under8Freq.d8)}, 9 ${pct1(signal.under8Freq.d9)}`
           : `0 ${pct1(signal.over1Freq.d0)}, 1 ${pct1(signal.over1Freq.d1)}`})`,
       );
-      pendingAlertActionsRef.current.set(key, { symbol, rule });
+      pendingAlertActionsRef.current.set(key, { symbol, rule, firedAt: signal.updatedAt });
       if (!alertBatchTimerRef.current) {
+        const batchDelay = isMobile ? ALERT_BATCH_MOBILE_MS : ALERT_BATCH_MS;
         alertBatchTimerRef.current = setTimeout(() => {
           alertBatchTimerRef.current = null;
           const entries = Array.from(pendingAlertsRef.current.values());
-          const firstAction = pendingAlertActionsRef.current.values().next().value as { symbol: string; rule: RuleKey } | undefined;
+          const firstAction = pendingAlertActionsRef.current.values().next().value as { symbol: string; rule: RuleKey; firedAt: number } | undefined;
           const pendingKeys = Array.from(pendingAlertsRef.current.keys());
           pendingAlertsRef.current.clear();
           pendingAlertActionsRef.current.clear();
@@ -250,7 +252,7 @@ export default function MarketScannerWidget({
       suppressedWhileOpenRef.current.clear();
     }
     previousQualifyingRef.current = qualifying;
-  }, [signals, alertsEnabled, open]);
+  }, [signals, alertsEnabled, open, isMobile]);
 
   useEffect(() => () => {
     if (alertBatchTimerRef.current) clearTimeout(alertBatchTimerRef.current);
@@ -259,9 +261,21 @@ export default function MarketScannerWidget({
   /* ---- actionable scanner toast clicks ---- */
   useEffect(() => {
     const onScannerTrade = (event: Event) => {
-      const detail = (event as CustomEvent<{ symbol?: string; rule?: RuleKey }>).detail;
+      const detail = (event as CustomEvent<{ symbol?: string; rule?: RuleKey; firedAt?: number }>).detail;
       const market = SCANNER_MARKETS.find((m) => m.symbol === detail?.symbol);
       if (!market || (detail?.rule !== "under8" && detail?.rule !== "over1") || !onTrade) return;
+      const liveSignal = getGlobalScanner().getSignals().find((signal) => signal.symbol === market.symbol);
+      const stillQualifies = detail.rule === "under8" ? liveSignal?.under8 : liveSignal?.over1;
+      if (!stillQualifies) {
+        const age = typeof detail.firedAt === "number" ? Math.max(0, Date.now() - detail.firedAt) : null;
+        pushNotification({
+          type: "alert",
+          severity: "warning",
+          title: "Scanner signal expired",
+          message: `${detail.rule === "under8" ? "Under 8" : "Over 1"} on ${market.symbol} is no longer qualified${age !== null ? ` (${Math.round(age / 1000)}s old)` : ""}. The trade ticket was not opened.`,
+        });
+        return;
+      }
       onTrade({
         symbol: market.symbol,
         name: market.name,
@@ -372,7 +386,7 @@ export default function MarketScannerWidget({
     if (e.button !== 0) return;
     const pill = pillRef.current;
     if (!pill) return;
-    pill.setPointerCapture(e.pointerId);
+    try { pill.setPointerCapture(e.pointerId); } catch { /* synthetic pointers may not support capture */ }
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,

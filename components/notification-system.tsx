@@ -35,7 +35,13 @@ export type Notification = {
   read: boolean;
   profit?: number;
   severity?: "info" | "success" | "warning" | "error";
-  action?: { type: "scanner-trade"; symbol: string; rule: "under8" | "over1" };
+  action?: {
+    type: "scanner-trade";
+    symbol: string;
+    rule: "under8" | "over1";
+    /** Timestamp of the scanner tick that caused this alert. */
+    firedAt?: number;
+  };
 };
 
 export type { NotificationSettings } from "../lib/notification-store";
