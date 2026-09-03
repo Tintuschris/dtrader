@@ -624,8 +624,11 @@ export function useDerivTrading() {
                   };
                   return [record, ...prev].slice(0, 20);
                 });
-                // Reduced settle delay: 800ms for 1-tick trades (just enough to see result), 2s for multi-tick
-                const settleDelay = (oc.tick_count && oc.tick_count <= 1) ? 800 : 2000;
+                // A one-tick contract is already settled on the next tick;
+                // release the trade controls immediately so the next trade
+                // can be submitted in the following tick window. Keep the
+                // visual active-contract hold for longer contracts.
+                const settleDelay = (oc.tick_count && oc.tick_count <= 1) ? 0 : 2000;
                 setTimeout(() => { console.log("[WS] Clearing active contract after", settleDelay, "ms"); setActiveContract(null); }, settleDelay);
                 // Pre-warm proposal re-subscription immediately from WS handler
                 // instead of waiting for React effect cycle (saves ~200-400ms)
@@ -671,6 +674,21 @@ export function useDerivTrading() {
             const errorMsg = message ?? details ?? (code ? `Deriv error: ${code}` : `Deriv error: ${JSON.stringify(err)}`);
             console.error("Deriv WS error:", code, message, err);
             setLastError(errorMsg);
+            // Buy/proposal errors are not guaranteed to include a msg_type;
+            // Deriv may route them here with only req_id + error. Resolve the
+            // matching promise immediately instead of leaving the UI stuck in
+            // "Placing Trade" until the 8-second timeout.
+            const errorReqId = msg.req_id != null ? String(msg.req_id) : undefined;
+            const pendingBuy = errorReqId ? pendingBuys.current.get(errorReqId) : undefined;
+            if (pendingBuy) {
+              pendingBuys.current.delete(errorReqId!);
+              pendingBuy(null);
+            }
+            const pendingProposal = errorReqId ? pendingProposals.current.get(errorReqId) : undefined;
+            if (pendingProposal) {
+              pendingProposals.current.delete(errorReqId!);
+              pendingProposal(null);
+            }
           }
         };
 

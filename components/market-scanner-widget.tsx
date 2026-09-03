@@ -152,6 +152,7 @@ export default function MarketScannerWidget({
   const [isMobile, setIsMobile] = useState(false);
 
   const pillRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number; moved: boolean } | null>(null);
 
   /* ---- live subscriptions to the shared scanner ---- */
@@ -349,6 +350,18 @@ export default function MarketScannerWidget({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
+  /* ---- close when focus moves outside the floating scanner ---- */
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDownOutside = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && (pillRef.current?.contains(target) || panelRef.current?.contains(target))) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDownOutside);
+    return () => document.removeEventListener("pointerdown", onPointerDownOutside);
+  }, [open]);
+
   /* ---- derived data ---- */
   const suggestions = useMemo(
     () => {
@@ -511,7 +524,7 @@ export default function MarketScannerWidget({
       {open && (
         <>
           <div className="scanner-backdrop" onClick={() => setOpen(false)} />
-          <div className="scanner-panel" style={panelStyle} role="dialog" aria-label="Market scanner suggestions">
+          <div ref={panelRef} className="scanner-panel" style={panelStyle} role="dialog" aria-label="Market scanner suggestions">
             <div className="scanner-panel-head">
               <div>
                 <p className="scanner-eyebrow">MARKET SCANNER</p>

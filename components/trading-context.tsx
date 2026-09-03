@@ -798,6 +798,11 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     const stakeNum = parseFloat(stake);
     if (isNaN(stakeNum) || stakeNum <= 0) return;
     if (proposeTimer.current) clearTimeout(proposeTimer.current);
+    // After a settlement the old proposal has already been invalidated, so
+    // request the next price immediately. Keep the short debounce for ordinary
+    // parameter edits to avoid pricing storms while the user is configuring a
+    // trade.
+    const proposalDelay = lastResult?.contract_id ? 0 : 100;
     proposeTimer.current = setTimeout(() => {
       subscribeProposal({
         contract_type: subToApiType(subContract),
@@ -807,7 +812,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
         duration_ticks: duration,
         barrier: subNeedsBarrier(subContract) ? String(selectedDigit) : undefined,
       });
-    }, 100);
+    }, proposalDelay);
     return () => {
       if (proposeTimer.current) clearTimeout(proposeTimer.current);
     };

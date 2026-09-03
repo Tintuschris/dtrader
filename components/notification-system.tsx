@@ -140,10 +140,14 @@ function Toast({ notification, onDismiss }: { notification: Notification; onDism
 
   useEffect(() => {
     requestAnimationFrame(() => setVisible(true));
+    // Trade results are transient feedback; keep the toast brief so it does
+    // not cover the trade controls during rapid one-tick trading. Other
+    // notifications retain the normal reading time.
+    const visibleDuration = notification.type === "trade" ? 650 : 4500;
     timerRef.current = setTimeout(() => {
       setVisible(false);
       setTimeout(onDismiss, 300);
-    }, 4500);
+    }, visibleDuration);
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [onDismiss]);
 
