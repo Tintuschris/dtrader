@@ -10,7 +10,7 @@ Notable changes to both trading products in this repository, each tracked with i
 | Product | Latest | Full history |
 |---|---|---|
 | **Bots** | [v3.2 - Reliability, Session History & Filter Hardening (2026-09-03)](#v32---reliability-session-history--filter-hardening-2026-09-03) | [Bots](#bots) |
-| **Web App** | [Web v1.1 - Notifications, Price Alerts & Result Polish (2026-09-03)](#web-v11---notifications-price-alerts--result-polish-2026-09-03) | [Web App](#web-app) |
+| **Web App** | [Web v1.3 - Mobile Scanner Alert Reliability (2026-09-03)](#web-v13---mobile-scanner-alert-reliability-2026-09-03) | [Web App](#web-app) |
 
 ---
 
@@ -158,6 +158,22 @@ Notable changes to both trading products in this repository, each tracked with i
 ## Web App
 
 The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade ticket, and the authenticated Deriv trading WebSocket. Its reliability work is documented in detail in [`docs/web-ws-reliability.md`](web-ws-reliability.md).
+
+### Web v1.3 - Mobile Scanner Alert Reliability (2026-09-03)
+
+#### Notifications and trade safety
+
+- Faster compact/mobile scanner alert batching (about 450ms) keeps notifications responsive without showing one toast per rapidly changing tick.
+- Actionable scanner toasts revalidate the selected Under 8/Over 1 condition against the latest market snapshot before opening the trade ticket.
+- Expired conditions show a warning instead of loading a stale market recommendation.
+- Proposal subscriptions clear the previous market/contract proposal while new parameters are being requested.
+- Proposals are invalidated on disconnect/reconnect and cannot be bought until fresh pricing arrives.
+
+#### Documentation
+
+- Added the mobile batching, signal revalidation, and fresh-proposal behavior to `docs/SCANNER.md`.
+
+---
 
 ### Web v1.1 - Notifications, Price Alerts & Result Polish (2026-09-03)
 

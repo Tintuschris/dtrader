@@ -35,10 +35,12 @@ Scanner alerts are rising-edge alerts: a rule must change from not-qualified to 
 - Alerts are silent while the scanner panel is open and focused.
 - Signals that appear while the panel is open are remembered and delivered once when the panel is closed, if they are still valid.
 - Rapid signals are grouped into one digest toast and one two-note sound.
+- On compact/mobile layouts, the digest waits only about 450ms so alerts feel timely while still collapsing a burst of ticks; larger layouts use a 1.2s grouping window.
 - Each market/rule has a 60-second alert cooldown.
 - The scanner bell button persists mute/unmute state under `freebuff_scanner_alerts`.
 - Sound follows the global Settings → Sound & vibration preference and is skipped when the browser tab is hidden or audio is blocked.
-- Clicking an actionable scanner toast loads its market and selects the matching Under 8 or Over 1 trade ticket. For a grouped toast, the first listed signal is opened.
+- Clicking an actionable scanner toast re-checks the market against the latest scanner snapshot before loading it. If the condition has moved, a small expiry warning is shown and no stale trade ticket is opened. For a grouped toast, the first listed signal is checked and opened.
+- After a scanner selection, the trader clears the previous proposal immediately and waits for a fresh price for the new market/contract. Proposals received before a disconnect or older than the freshness window cannot be bought.
 - The global toast stack keeps only the newest four visible; the complete notification history remains in the notification center.
 
 ## Live connection behavior
