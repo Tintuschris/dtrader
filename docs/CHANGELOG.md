@@ -169,6 +169,17 @@ The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade
 
 - **Resolved digit colored by outcome** - the exit-digit ring on the digit strip pulses green on wins and red on losses, matching the chart markers
 
+### Web v1.2 - Market Scanner Tracking & Alerts (2026-09-03)
+
+- **Volatility market scanner** - continuously watches five Volatility 1s markets and identifies Under 8 / Over 1 conditions from exact live tick digits
+- **Per-market danger thresholds** - choose below 10%, 8%, or 5% independently for each market; choices persist locally
+- **Next-tick signal ledger** - records every qualifying signal and settles it against the actual next tick, showing wins, bets, hit rate, streak, and recent outcomes
+- **Scanner backtest helper** - `simulateRuleHits()` replays the same incremental settle/re-arm semantics used by live tracking
+- **Qualification alerts** - grouped toast and sound notifications for new rising-edge signals, with cooldown and persisted mute control
+- **Focus-aware notifications** - scanner alerts wait while the scanner panel is open and deliver still-valid suppressed signals when it closes
+- **Actionable alerts** - clicking a scanner toast loads the market and matching trade ticket; grouped alerts open the first listed signal
+- **Toast burst protection** - the global visible toast stack is capped at four while notification history remains available in the notification center
+
 ---
 
 ### Web v1.0 - Trading WebSocket Reliability & Diagnostics (2026-09-03)
