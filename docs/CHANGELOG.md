@@ -10,7 +10,7 @@ Notable changes to both trading products in this repository, each tracked with i
 | Product | Latest | Full history |
 |---|---|---|
 | **Bots** | [v3.2 - Reliability, Session History & Filter Hardening (2026-09-03)](#v32---reliability-session-history--filter-hardening-2026-09-03) | [Bots](#bots) |
-| **Web App** | [Web v1.3 - Mobile Scanner Alert Reliability (2026-09-03)](#web-v13---mobile-scanner-alert-reliability-2026-09-03) | [Web App](#web-app) |
+| **Web App** | [Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)](#web-v14---settlement-details--next-trade-refresh-2026-09-03) | [Web App](#web-app) |
 
 ---
 
@@ -158,6 +158,22 @@ Notable changes to both trading products in this repository, each tracked with i
 ## Web App
 
 The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade ticket, and the authenticated Deriv trading WebSocket. Its reliability work is documented in detail in [`docs/web-ws-reliability.md`](web-ws-reliability.md).
+
+### Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)
+
+#### Trade results
+
+- Preserve Deriv's exact entry and exit quotes through the settlement result model.
+- Calculate and display the actual resolved digit from the settlement quote.
+- Show settlement digit and quote in the result popup, trade notification, recent-trade history, and chart markers.
+- Stop using the latest unrelated market tick as a substitute for the contract's exit tick.
+
+#### Post-trade reliability
+
+- Clear the settled proposal immediately and request one clean replacement proposal for the next trade.
+- Prevent repeated final contract messages from repeatedly resetting proposal state and causing next-trade lag.
+
+---
 
 ### Web v1.3 - Mobile Scanner Alert Reliability (2026-09-03)
 

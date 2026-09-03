@@ -55,6 +55,19 @@ The scanner uses one public Options API WebSocket per market. Each socket:
 
 Each market has its own status, so one stalled market does not hide the state of the others.
 
+## Trade settlement and next-trade refresh
+
+When Deriv sends the final `proposal_open_contract` update, the trader keeps the
+contract's actual `entry_tick` and `exit_tick`. The resolved digit is calculated
+from the exact exit quote and the active market precision; it is not inferred
+from whichever normal market tick happens to arrive last.
+
+The result popup, trade notification, recent-trade row, and chart marker can
+therefore show the settlement digit and quote. The previous proposal is cleared
+immediately after settlement. A single fresh proposal subscription then loads
+the next price, while repeated final settlement messages are ignored so they
+cannot reset or delay the next-trade flow.
+
 ## Main implementation files
 
 - `lib/market-scanner.ts` — digit windows, classification, thresholds, ledger, persistence, live sockets, and backtest helper.
