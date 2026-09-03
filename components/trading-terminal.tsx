@@ -26,6 +26,7 @@ import RiskManagement, { defaultRiskSettings, createInitialRiskState, type RiskS
 import TopBar from "./trading-top-bar";
 import MobileMenu from "./trading-mobile-menu";
 import TradingStatusBanner from "./trading-status-banner";
+import MarketScannerWidget from "./market-scanner-widget";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -896,6 +897,11 @@ if (!isMounted) {
         <span>© 2026 DTrader</span>
         <span>Responsible trading · Help</span>
       </footer>
+
+      {/* ===== FLOATING MARKET SCANNER — persistent across every page ===== */}
+      <MarketScannerWidget
+        onTrade={(s) => handleUseRecommendation({ subContract: s.subContract, digit: s.digit, symbol: s.symbol })}
+      />
     </main>
   );
 }

@@ -35,6 +35,7 @@ export type Notification = {
   read: boolean;
   profit?: number;
   severity?: "info" | "success" | "warning" | "error";
+  action?: { type: "scanner-trade"; symbol: string; rule: "under8" | "over1" };
 };
 
 export type { NotificationSettings } from "../lib/notification-store";
@@ -154,8 +155,14 @@ function Toast({ notification, onDismiss }: { notification: Notification; onDism
 
   return (
     <div
-      className={`toast ${severity} ${visible ? "toast-visible" : ""}`}
-      onClick={() => { setVisible(false); setTimeout(onDismiss, 300); }}
+      className={`toast ${severity} ${visible ? "toast-visible" : ""} ${notification.action ? "toast-actionable" : ""}`}
+      onClick={() => {
+        if (notification.action && typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("dtrader:scanner-trade", { detail: notification.action }));
+        }
+        setVisible(false);
+        setTimeout(onDismiss, 300);
+      }}
     >
       <div className={`toast-icon ${severity}`}>
         {icons[notification.type]}
@@ -187,7 +194,10 @@ export function ToastContainer() {
       const fresh = globalNotifications.filter((n) => numericId(n.id) > toastFloorId);
       if (fresh.length > lastCount) {
         const newOnes = fresh.slice(0, fresh.length - lastCount);
-        setToasts((prev) => [...prev, ...newOnes]);
+        // Keep the workspace clear during bursts (for example, when several
+        // scanner markets qualify together). The full history remains in the
+        // notification center; only the newest four stay visible as toasts.
+        setToasts((prev) => [...prev, ...newOnes].slice(-4));
       }
       lastCount = fresh.length;
     };
