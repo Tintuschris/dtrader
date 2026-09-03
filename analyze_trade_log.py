@@ -2,18 +2,23 @@
 """analyze_trade_log.py - repeatable win/loss analysis over trade_log.json.
 
 Scans the signal log written by the Deriv bots and prints:
-  * overall settled win rate
+  * overall settled win rate (optionally from a --since cutoff onward)
   * LONG/SHORT loss rates by RSI and SRSI band
   * what tends to follow a loss (same vs opposite direction)
   * whether "similar" same-direction re-entries lose more than divergent ones
+  * a SHORT misfire watch: LOWER signals taken from below-mid SRSI, with a
+    recommendation once enough post-fix data has accumulated
 
 Usage:
-    python analyze_trade_log.py [trade_log.json]
+    python analyze_trade_log.py [trade_log.json] [--since "YYYY-MM-DD HH:MM:SS"]
 """
 
 import argparse
 import json
 import sys
+
+MISFIRE_SRSI = 0.50   # LOWER signal with entry SRSI below this = misfire band
+MISFIRE_MIN_N = 5     # post-fix LOWER signals needed before judging
 
 
 def load(path):
@@ -122,22 +127,63 @@ def similarity(trades):
         print("    {:<16}{}".format(lab, fmt(len(grp), sum(1 for r in grp if r[2] == "W"))))
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Analyze Deriv bot results from trade_log.json")
-    ap.add_argument("file", nargs="?", default="trade_log.json")
-    args = ap.parse_args()
+def misfire_watch(trades):
+    """Watch for SHORT signals taken from below-mid SRSI (weak short premise)."""
+    lows = []
+    for t in trades:
+        if t.get("direction") != "lower":
+            continue
+        o = outcome(t)
+        sig = t.get("signal") or {}
+        srsi = sig.get("srsi_value")
+        if not o or srsi is None:
+            continue
+        srsi = float(srsi)
+        if srsi < MISFIRE_SRSI:
+            lows.append((t.get("id"), t.get("timestamp", "?"), srsi, o))
+    total_lower = sum(1 for t in trades if t.get("direction") == "lower" and outcome(t))
+    print("  LOWER signals in this window: {}".format(total_lower))
+    if not lows:
+        print("  misfires (entry SRSI < {:.2f}): none".format(MISFIRE_SRSI))
+        if total_lower >= MISFIRE_MIN_N:
+            print("  -> pattern does NOT hold over {} LOWER signals; no SRSI floor needed yet".format(total_lower))
+        else:
+            print("  -> need {} post-fix LOWER signals to judge; currently {}".format(MISFIRE_MIN_N, total_lower))
+        return
+    print("  misfires (entry SRSI < {:.2f}):".format(MISFIRE_SRSI))
+    for tid, ts, srsi, o in lows:
+        print("    #{}  {}  srsi={:.3f}  -> {}".format(tid, ts, srsi, "WON" if o == "W" else "LOST"))
+    wr = 100.0 * sum(1 for _, _, _, o in lows if o == "W") / len(lows)
+    if len(lows) >= 3 and wr < 50.0:
+        print("  -> pattern holds: {}/{} misfires lost. Consider SOFT_SRSI_SHORT_MIN=0.50".format(
+            sum(1 for _, _, _, o in lows if o == "L"), len(lows)))
+    else:
+        print("  -> need more data to confirm ({} misfire(s), WR {:.0f}%). "
+              "Re-run after a few more sessions.".format(len(lows), wr))
+
+
+def print_analysis(file="trade_log.json", since=None):
+    """Render the full win/loss analysis report to stdout.
+
+    since: optional "YYYY-MM-DD HH:MM:SS" cutoff; only trades at/after it are
+    considered (use your last bot-restart time for post-fix analysis).
+    Returns 0 on success, 1 when the file is missing or unreadable.
+    """
     try:
-        data = load(args.file)
+        data = load(file)
     except Exception as exc:
-        print("error: cannot read {}: {}".format(args.file, exc))
-        sys.exit(1)
+        print("error: cannot read {}: {}".format(file, exc))
+        return 1
     trades = data.get("trades", [])
+    if since:
+        trades = [t for t in trades if str(t.get("timestamp", "")) >= since]
+        print("window: trades at/after {}".format(since))
     results = [(t, outcome(t)) for t in trades if outcome(t)]
     if not results:
-        print("no settled trades found in {}".format(args.file))
-        sys.exit(0)
+        print("no settled trades found in {} (window: {})".format(file, since or "all"))
+        return 0
     wins = sum(1 for _, o in results if o == "W")
-    print("file: {}".format(args.file))
+    print("file: {}".format(file))
     print("signals logged: {} | settled: {}".format(len(trades), len(results)))
     print("overall: {}".format(fmt(len(results), wins)))
     print()
@@ -150,7 +196,20 @@ def main():
     print()
     print("same-direction re-entries by setup difference:")
     similarity(trades)
+    print()
+    print("SHORT misfire watch:")
+    misfire_watch(trades)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Analyze Deriv bot results from trade_log.json")
+    ap.add_argument("file", nargs="?", default="trade_log.json")
+    ap.add_argument("--since", metavar="YYYY-MM-DD HH:MM:SS",
+                    help="only consider trades at/after this timestamp (e.g. your last bot restart)")
+    args = ap.parse_args()
+    return print_analysis(args.file, since=args.since)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
