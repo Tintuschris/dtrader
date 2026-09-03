@@ -135,6 +135,9 @@ if (!isMounted) {
           {lastResult.profit >= 0 ? "+" : ""}${fmt(lastResult.profit)}
         </div>
         <div className="result-detail">Stake: ${fmt(lastResult.buy_price)} · Payout: ${fmt(lastResult.payout)}</div>
+        {lastResult.exit_tick != null && (
+          <div className="result-detail">Settlement: digit {resolvedDigit ?? "—"} · tick {lastResult.exit_tick}</div>
+        )}
         <button className="result-dismiss" onClick={clearLastResult}>Dismiss</button>
       </div>
     </div>
@@ -389,7 +392,7 @@ if (!isMounted) {
                       <div className="chart-skeleton-shimmer" />
                     </div>
                   )}
-                  <TickChart ticks={ticks} activeContract={activeContract} displayDuration={indicatorDuration * 1000} tickElapsed={contractTickElapsed} tickTotal={activeContract?.tick_count} />
+                  <TickChart ticks={ticks} activeContract={activeContract} resolvedTrades={resolvedTrades} displayDuration={indicatorDuration * 1000} tickElapsed={contractTickElapsed} tickTotal={activeContract?.tick_count} />
                 </div>
                 <div className="digit-strip-heading">
                   <span>Digit frequency</span>
@@ -416,7 +419,7 @@ if (!isMounted) {
                         <div className="chart-skeleton-shimmer" />
                       </div>
                     )}
-                    <TickChart ticks={ticks} activeContract={activeContract} displayDuration={indicatorDuration * 1000} tickElapsed={contractTickElapsed} tickTotal={activeContract?.tick_count} />
+                    <TickChart ticks={ticks} activeContract={activeContract} resolvedTrades={resolvedTrades} displayDuration={indicatorDuration * 1000} tickElapsed={contractTickElapsed} tickTotal={activeContract?.tick_count} />
                   </div>
                   {/* Slide 2: Digit strip */}
                   <div className="digit-strip-slide">
@@ -604,6 +607,8 @@ if (!isMounted) {
                         <div className="trade-row-main">
                           <span className="trade-row-type">{formatContractType(t.contract_type)}</span>
                           <span className="trade-row-digit">#{t.digit_prediction}</span>
+                          {t.resolved_digit != null && <span className="trade-row-digit">→ {t.resolved_digit}</span>}
+                          {t.exit_tick != null && <span className="muted">@ {t.exit_tick}</span>}
                         </div>
                         <div className="trade-row-secondary">
                           <span className={`trade-row-status ${t.status}`}>{t.status.toUpperCase()}</span>

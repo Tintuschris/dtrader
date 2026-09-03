@@ -14,6 +14,7 @@ import {
   StaleWatchdog,
   type WsCloseLogEntry,
 } from "../lib/ws-lifecycle";
+import { digitFromQuote } from "../lib/format-utils";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -62,6 +63,9 @@ export type TradeRecord = {
   digit_prediction: number;
   duration_ticks: number;
   timestamp: number;
+  entry_tick?: number;
+  exit_tick?: number;
+  resolved_digit?: number;
 };
 
 export type ConnectionStatus =
@@ -87,6 +91,12 @@ export type TradeResult = {
   profit: number;
   payout: number;
   buy_price: number;
+  entry_tick?: number;
+  exit_tick?: number;
+  tick_count?: number;
+  barrier?: string;
+  contract_type?: string;
+  underlying?: string;
 };
 
 export type AccountInfo = {
@@ -134,6 +144,7 @@ export function useDerivTrading() {
   const pendingProposals = useRef<Map<string, (p: Proposal | null) => void>>(new Map());
   const proposalRef = useRef<Proposal | null>(null);
   const pendingBuys = useRef<Map<string, (c: OpenContract | null) => void>>(new Map());
+  const settledContractIdsRef = useRef<Set<string>>(new Set());
   const pendingPortfolio = useRef<(data: { positions: unknown[] } | null) => void>(null);
   const pendingProfitTable = useRef<(data: { transactions: unknown[]; count: number } | null) => void>(null);
   const contractSubscribers = useRef<Map<string, (c: OpenContract) => void>>(new Map());
@@ -553,6 +564,15 @@ export function useDerivTrading() {
               const subscriber = contractSubscribers.current.get(oc.contract_id);
               if (subscriber) subscriber(oc);
               if (oc.is_sold || oc.status === "won" || oc.status === "lost" || oc.status === "expired" || oc.status === "sold") {
+                // Deriv can repeat the final proposal_open_contract snapshot.
+                // Process settlement once so duplicate result messages cannot
+                // repeatedly tear down and rebuild the next proposal.
+                if (settledContractIdsRef.current.has(oc.contract_id)) return;
+                settledContractIdsRef.current.add(oc.contract_id);
+                if (settledContractIdsRef.current.size > 50) {
+                  const oldest = settledContractIdsRef.current.values().next().value as string | undefined;
+                  if (oldest) settledContractIdsRef.current.delete(oldest);
+                }
                 contractSubscribers.current.delete(oc.contract_id);
                 const finalStatus =
                   oc.status === "won"
@@ -568,31 +588,24 @@ export function useDerivTrading() {
                   profit: oc.profit ?? 0,
                   payout: oc.payout ?? 0,
                   buy_price: oc.buy_price ?? 0,
+                  entry_tick: oc.entry_tick,
+                  exit_tick: oc.exit_tick,
+                  tick_count: oc.tick_count,
+                  barrier: oc.barrier,
+                  contract_type: oc.contract_type,
+                  underlying: oc.underlying,
                 };
                 console.log("[WS] Trade settled:", finalStatus, "profit:", oc.profit, "payout:", oc.payout);
                 setLastResult(result);
-                // Pre-warm new proposal immediately before clearing old
-                // so the buy button has minimal downtime
-                const lastParams = lastProposalParamsRef.current;
-                if (lastParams) {
-                  const freshMsg: Record<string, unknown> = {
-                    proposal: 1,
-                    amount: lastParams.amount,
-                    basis: "stake",
-                    contract_type: lastParams.contract_type,
-                    currency: lastParams.currency,
-                    duration: lastParams.duration_ticks,
-                    duration_unit: "t",
-                    underlying_symbol: lastParams.symbol,
-                  };
-                  if (lastParams.barrier !== undefined) freshMsg.barrier = lastParams.barrier;
-                  send(freshMsg);
-                }
-                // Clear proposal after a short delay to allow fresh proposal to arrive
-                setTimeout(() => {
-                  proposalRef.current = null;
-                  setCurrentProposal(null);
-                }, 50);
+                // Invalidate the settled contract's price immediately. The
+                // context effect will request one clean replacement proposal
+                // after it observes lastResult; no short timer or one-shot
+                // pre-warm is allowed to race with that refresh.
+                lastProposalParamsRef.current = null;
+                proposalRef.current = null;
+                proposalTimestampRef.current = 0;
+                setCurrentProposal(null);
+                setProposalLoading(true);
                 setTradeHistory((prev) => {
                   const record: TradeRecord = {
                     id: oc.contract_id,
@@ -605,6 +618,9 @@ export function useDerivTrading() {
                     digit_prediction: Number(oc.barrier ?? 0),
                     duration_ticks: oc.tick_count ?? 0,
                     timestamp: Date.now(),
+                    entry_tick: oc.entry_tick,
+                    exit_tick: oc.exit_tick,
+                    resolved_digit: oc.exit_tick != null ? digitFromQuote(oc.exit_tick) : undefined,
                   };
                   return [record, ...prev].slice(0, 20);
                 });

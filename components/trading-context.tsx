@@ -188,6 +188,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   const [subContract, setSubContract] = useState<SubContract>("over");
   const [stake, setStake] = useState("10.00");
   const [ticks, setTicks] = useState<Tick[]>(initialTicks);
+  const pipSizeRef = useRef(2);
   const [running, setRunning] = useState(true);
   const [selectedDigit, setSelectedDigit] = useState(4);
   const [streamMode, setStreamMode] = useState<"live" | "simulated">("simulated");
@@ -485,6 +486,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
             if (msgType === "history") {
               const history = message.history as { prices?: Array<number | string>; pip_size?: number } | undefined;
               const pipSize = history?.pip_size ?? 2;
+              pipSizeRef.current = pipSize;
               const prices = history?.prices ?? [];
               if (prices.length) {
                 setTicks(prices.slice(-100).map((quote) => ({ value: Number(quote), digit: digitFromQuote(quote, pipSize) })));
@@ -506,6 +508,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
                 setTickStreamStatus("live");
                 setStreamMode("live");
                 const tickPipSize = tick.pip_size ?? 2;
+                pipSizeRef.current = tickPipSize;
                 setTicks((prev) => [...prev.slice(-99), { value: Number(tick.quote), digit: digitFromQuote(tick.quote ?? 0, tickPipSize) }]);
                 try { getGlobalAnalyzer().addTick(sym, { quote: Number(tick.quote), epoch: 0 }); } catch { /* analyzer may not be mounted */ }
                 evaluateAlertsRef.current(Number(tick.quote));
@@ -665,9 +668,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
       pushNotification({
         type: "trade",
         title: lastResult.status === "won" ? "Trade Won!" : "Trade Lost",
-        message: lastResult.status === "won"
-          ? `You won $${Math.abs(lastResult.profit).toFixed(2)} on your trade!`
-          : `You lost $${Math.abs(lastResult.profit).toFixed(2)} on your trade.`,
+        message: `${lastResult.status === "won" ? "You won" : "You lost"} $${Math.abs(lastResult.profit).toFixed(2)}${lastResult.exit_tick != null ? ` · settled on digit ${digitFromQuote(lastResult.exit_tick, pipSizeRef.current)} at ${lastResult.exit_tick}` : ""}.`,
         profit: lastResult.profit,
         severity: lastResult.status === "won" ? "success" : "error",
       });
@@ -751,29 +752,32 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   /* ---- resolved digit indicator on digit strip (colored by win/loss) ---- */
   useEffect(() => {
     if (!lastResult) return;
-    const lastTick = ticks.at(-1);
-    if (lastTick) {
-      setResolvedDigit(lastTick.digit);
+    const resolvedTick = lastResult.exit_tick;
+    if (resolvedTick != null) {
+      setResolvedDigit(digitFromQuote(resolvedTick, pipSizeRef.current));
       setResolvedOutcome(lastResult.status === "won" ? "won" : "lost");
+    } else {
+      setResolvedDigit(null);
+      setResolvedOutcome(null);
     }
     const timer = setTimeout(() => {
       setResolvedDigit(null);
       setResolvedOutcome(null);
     }, indicatorDuration * 1000);
     return () => clearTimeout(timer);
-  }, [lastResult, ticks, indicatorDuration]);
+  }, [lastResult, indicatorDuration]);
 
   /* ---- record resolved trades for chart history markers ---- */
   useEffect(() => {
     if (!lastResult) return;
-    const lastTick = ticks.at(-1);
-    if (lastTick) {
+    const resolvedTick = lastResult.exit_tick;
+    if (typeof resolvedTick === "number") {
       setResolvedTrades((prev) => [
         ...prev.slice(-19),
-        { exit_tick: lastTick.value, status: lastResult.status as "won" | "lost", epoch: Date.now(), profit: lastResult.profit, digit: lastTick.digit },
+        { exit_tick: resolvedTick, status: lastResult.status as "won" | "lost", epoch: Date.now(), profit: lastResult.profit, digit: digitFromQuote(resolvedTick, pipSizeRef.current) },
       ]);
     }
-  }, [lastResult, ticks]);
+  }, [lastResult]);
 
   /* ---- daily risk reset ---- */
   useEffect(() => {
