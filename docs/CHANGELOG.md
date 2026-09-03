@@ -172,6 +172,13 @@ The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade
 
 - Clear the settled proposal immediately and request one clean replacement proposal for the next trade.
 - Prevent repeated final contract messages from repeatedly resetting proposal state and causing next-trade lag.
+- Resolve generic Deriv buy errors immediately so the UI does not remain in “Placing Trade” until the timeout.
+- Release one-tick trade controls immediately after settlement and start the next proposal refresh without the normal configuration debounce.
+
+#### Scanner and notification polish
+
+- Keep the floating scanner pill above its backdrop and close the scanner when the user clicks outside it.
+- Auto-dismiss trade-result toasts in under one second while leaving other notification types readable.
 
 ---
 

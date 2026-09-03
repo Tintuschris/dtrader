@@ -42,6 +42,8 @@ Scanner alerts are rising-edge alerts: a rule must change from not-qualified to 
 - Clicking an actionable scanner toast re-checks the market against the latest scanner snapshot before loading it. If the condition has moved, a small expiry warning is shown and no stale trade ticket is opened. For a grouped toast, the first listed signal is checked and opened.
 - After a scanner selection, the trader clears the previous proposal immediately and waits for a fresh price for the new market/contract. Proposals received before a disconnect or older than the freshness window cannot be bought.
 - The global toast stack keeps only the newest four visible; the complete notification history remains in the notification center.
+- Trade-result toasts are intentionally brief (650ms visible plus the fade-out) so they do not cover the controls during rapid one-tick trading; scanner and other informational toasts retain their normal reading time.
+- The floating scanner pill stays above its backdrop, so it remains clickable while open. Clicking outside the pill or panel closes it; Escape and the close button remain available too.
 
 ## Live connection behavior
 
