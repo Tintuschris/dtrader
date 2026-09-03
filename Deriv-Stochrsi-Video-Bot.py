@@ -431,6 +431,8 @@ def print_dashboard():
     elif _l_phase == "ready_long": phase_str = GRN + "READY-L" + RST
     elif _l_phase == "ready_short": phase_str = RED + "READY-S" + RST
 
+    _track_market(rsi_now, raw_now)
+
     print(f"  {DIM}+--- RAW STOCHRSI DETECTION ---------------------------+{RST}")
     print(f"  {DIM}|{RST}  RSI({RSI_PERIOD}):  {BLD}{rsi_now:6.2f}{RST}  |  Raw SRSI: {raw_color}{BLD}{raw_now:6.4f}{RST}  |  Phase: {phase_str}")
     if k_now is not None:
@@ -697,6 +699,11 @@ def record_session_end():
                     "profit": r.get("profit"),
                     "settled_at": r.get("settled_at"),
                 })
+        ms = _market_state
+        _n = ms["samples"]
+        by_cat = {}
+        for _s in _skips:
+            by_cat[_s["category"]] = by_cat.get(_s["category"], 0) + 1
         _sessions.append({
             "session_start": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(SESSION_START_TS)),
             "session_start_epoch": int(SESSION_START_TS),
@@ -713,6 +720,21 @@ def record_session_end():
                 "win_rate": round(stats["wins"] / settled * 100, 1) if settled else 0.0,
                 "pnl": round(stats["total_pnl"], 2),
                 "balance": round(stats["balance"], 2),
+            },
+            "market": {
+                "samples": _n,
+                "rsi_min": round(ms["rsi_min"], 2) if _n else None,
+                "rsi_max": round(ms["rsi_max"], 2) if _n else None,
+                "rsi_avg": round(ms["rsi_sum"] / _n, 2) if _n else None,
+                "srsi_min": round(ms["srsi_min"], 4) if _n else None,
+                "srsi_max": round(ms["srsi_max"], 4) if _n else None,
+                "srsi_avg": round(ms["srsi_sum"] / _n, 4) if _n else None,
+                "phases": dict(ms["phases"]),
+            },
+            "skips": {
+                "count": len(_skips),
+                "by_category": by_cat,
+                "recent": list(_skips[-10:]),
             },
             "settled_trades": settled_list,
         })
@@ -1052,12 +1074,12 @@ async def process_tick(ws, tick_data, last_trade_time):
             ticks = list(tick_history)[-(FILTER_REVERSAL_TICKS+1):]
             if direction == "higher":
                 if not all(ticks[i] > ticks[i-1] for i in range(1, len(ticks))):
-                    print(f"  {YLW}! SKIPPED: No reversal confirmation (need {FILTER_REVERSAL_TICKS} consecutive UP ticks){RST}")
+                    print(_skip("reversal_up", f"  {YLW}! SKIPPED: No reversal confirmation (need {FILTER_REVERSAL_TICKS} consecutive UP ticks){RST}"))
                     reset_l_state()
                     return now
             if direction == "lower":
                 if not all(ticks[i] < ticks[i-1] for i in range(1, len(ticks))):
-                    print(f"  {YLW}! SKIPPED: No reversal confirmation (need {FILTER_REVERSAL_TICKS} consecutive DOWN ticks){RST}")
+                    print(_skip("reversal_down", f"  {YLW}! SKIPPED: No reversal confirmation (need {FILTER_REVERSAL_TICKS} consecutive DOWN ticks){RST}"))
                     reset_l_state()
                     return now
 
@@ -1065,7 +1087,7 @@ async def process_tick(ws, tick_data, last_trade_time):
         flat_dur = _l_flat_count
         breakout_mag = abs(delta)
         if flat_dur > FILTER_ADAPTIVE_FLAT_MAX and breakout_mag < FILTER_ADAPTIVE_BREAKOUT_MIN:
-            print(f"  {YLW}! SKIPPED: Flat {flat_dur}t > {FILTER_ADAPTIVE_FLAT_MAX}, breakout {breakout_mag:.3f} < {FILTER_ADAPTIVE_BREAKOUT_MIN}{RST}")
+            print(_skip("adaptive_flat", f"  {YLW}! SKIPPED: Flat {flat_dur}t > {FILTER_ADAPTIVE_FLAT_MAX}, breakout {breakout_mag:.3f} < {FILTER_ADAPTIVE_BREAKOUT_MIN}{RST}"))
             reset_l_state()
             return now
 
@@ -1075,11 +1097,11 @@ async def process_tick(ws, tick_data, last_trade_time):
             up_count = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i-1])
             dn_count = sum(1 for i in range(1, len(recent)) if recent[i] < recent[i-1])
             if direction == "higher" and up_count < FILTER_PRICE_DIR_MIN:
-                print(f"  {YLW}! SKIPPED: Price momentum bearish ({up_count}UP/{dn_count}DN, need {FILTER_PRICE_DIR_MIN}){RST}")
+                print(_skip("price_momentum_bearish", f"  {YLW}! SKIPPED: Price momentum bearish ({up_count}UP/{dn_count}DN, need {FILTER_PRICE_DIR_MIN}){RST}"))
                 reset_l_state()
                 return now
             if direction == "lower" and dn_count < FILTER_PRICE_DIR_MIN:
-                print(f"  {YLW}! SKIPPED: Price momentum bullish ({up_count}UP/{dn_count}DN, need {FILTER_PRICE_DIR_MIN}){RST}")
+                print(_skip("price_momentum_bullish", f"  {YLW}! SKIPPED: Price momentum bullish ({up_count}UP/{dn_count}DN, need {FILTER_PRICE_DIR_MIN}){RST}"))
                 reset_l_state()
                 return now
 
@@ -1091,13 +1113,13 @@ async def process_tick(ws, tick_data, last_trade_time):
             if direction == "higher":
                 down_count = sum(1 for i in range(1, len(recent)) if recent[i] < recent[i-1])
                 if down_count >= TREND_MIN_SAME:
-                    print(f"  {YLW}! SKIPPED: Strong downtrend ({down_count}/{TREND_TICKS} ticks down) - price dropping against LONG{RST}")
+                    print(_skip("trend_against_long", f"  {YLW}! SKIPPED: Strong downtrend ({down_count}/{TREND_TICKS} ticks down) - price dropping against LONG{RST}"))
                     reset_l_state()
                     return now
             if direction == "lower":
                 up_count = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i-1])
                 if up_count >= TREND_MIN_SAME:
-                    print(f"  {YLW}! SKIPPED: Strong uptrend ({up_count}/{TREND_TICKS} ticks up) - price rising against SHORT{RST}")
+                    print(_skip("trend_against_short", f"  {YLW}! SKIPPED: Strong uptrend ({up_count}/{TREND_TICKS} ticks up) - price rising against SHORT{RST}"))
                     reset_l_state()
                     return now
 
@@ -1108,11 +1130,11 @@ async def process_tick(ws, tick_data, last_trade_time):
             old_price = list(tick_history)[-DROP_TICKS]
             price_change = tick_history[-1] - old_price
             if direction == "higher" and price_change < -DROP_MIN_PTS:
-                print(f"  {YLW}! SKIPPED: Price dropped {abs(price_change):.4f} pts in last {DROP_TICKS} ticks (threshold: {DROP_MIN_PTS}){RST}")
+                print(_skip("price_drop", f"  {YLW}! SKIPPED: Price dropped {abs(price_change):.4f} pts in last {DROP_TICKS} ticks (threshold: {DROP_MIN_PTS}){RST}"))
                 reset_l_state()
                 return now
             if direction == "lower" and price_change > DROP_MIN_PTS:
-                print(f"  {YLW}! SKIPPED: Price rose {price_change:.4f} pts in last {DROP_TICKS} ticks (threshold: {DROP_MIN_PTS}){RST}")
+                print(_skip("price_rise", f"  {YLW}! SKIPPED: Price rose {price_change:.4f} pts in last {DROP_TICKS} ticks (threshold: {DROP_MIN_PTS}){RST}"))
                 reset_l_state()
                 return now
 

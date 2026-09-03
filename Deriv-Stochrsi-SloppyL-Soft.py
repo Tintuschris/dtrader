@@ -394,6 +394,8 @@ def print_dashboard():
     elif _l_phase == "ready_long": phase_str = GRN + "READY-L" + RST
     elif _l_phase == "ready_short": phase_str = RED + "READY-S" + RST
 
+    _track_market(rsi_now, raw_now)
+
     print(f"  {DIM}+--- RAW STOCHRSI DETECTION ---------------------------+{RST}")
     print(f"  {DIM}|{RST}  RSI({RSI_PERIOD}):  {BLD}{rsi_now:6.2f}{RST}  |  Raw SRSI: {raw_color}{BLD}{raw_now:6.4f}{RST}  |  Phase: {phase_str}")
     if k_now is not None:
@@ -673,6 +675,11 @@ def record_session_end():
                     "profit": r.get("profit"),
                     "settled_at": r.get("settled_at"),
                 })
+        ms = _market_state
+        _n = ms["samples"]
+        by_cat = {}
+        for _s in _skips:
+            by_cat[_s["category"]] = by_cat.get(_s["category"], 0) + 1
         _sessions.append({
             "session_start": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(SESSION_START_TS)),
             "session_start_epoch": int(SESSION_START_TS),
@@ -690,6 +697,21 @@ def record_session_end():
                 "pnl": round(stats["total_pnl"], 2),
                 "balance": round(stats["balance"], 2),
             },
+            "market": {
+                "samples": _n,
+                "rsi_min": round(ms["rsi_min"], 2) if _n else None,
+                "rsi_max": round(ms["rsi_max"], 2) if _n else None,
+                "rsi_avg": round(ms["rsi_sum"] / _n, 2) if _n else None,
+                "srsi_min": round(ms["srsi_min"], 4) if _n else None,
+                "srsi_max": round(ms["srsi_max"], 4) if _n else None,
+                "srsi_avg": round(ms["srsi_sum"] / _n, 4) if _n else None,
+                "phases": dict(ms["phases"]),
+            },
+            "skips": {
+                "count": len(_skips),
+                "by_category": by_cat,
+                "recent": list(_skips[-10:]),
+            },
             "settled_trades": settled_list,
         })
         save_trade_log()
@@ -698,6 +720,48 @@ def record_session_end():
 
 
 atexit.register(record_session_end)
+
+
+# ---- Skip / market tracking (captured into the session record at exit) ----
+_skips = []  # why signals were skipped, newest last
+_market_state = {"samples": 0, "rsi_min": None, "rsi_max": None, "rsi_sum": 0.0,
+                 "srsi_min": None, "srsi_max": None, "srsi_sum": 0.0, "phases": {}}
+
+
+def _plain(text):
+    """Strip ANSI color codes from a console string."""
+    import re as _re
+    return _re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _skip(category, text):
+    """Log a skipped signal (category + text) and return the text to print."""
+    try:
+        if len(_skips) > 500:
+            _skips.pop(0)
+        detail = _plain(text).replace("! SKIPPED:", "skipped").strip()
+        _skips.append({"time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "category": category, "detail": detail})
+    except Exception:
+        pass
+    return text
+
+
+def _track_market(rsi, raw):
+    """Accumulate per-tick RSI/SRSI/phase stats for the session record."""
+    try:
+        ms = _market_state
+        ms["samples"] += 1
+        ms["rsi_min"] = rsi if ms["rsi_min"] is None else min(ms["rsi_min"], rsi)
+        ms["rsi_max"] = rsi if ms["rsi_max"] is None else max(ms["rsi_max"], rsi)
+        ms["rsi_sum"] += rsi
+        ms["srsi_min"] = raw if ms["srsi_min"] is None else min(ms["srsi_min"], raw)
+        ms["srsi_max"] = raw if ms["srsi_max"] is None else max(ms["srsi_max"], raw)
+        ms["srsi_sum"] += raw
+        key = _l_phase if _l_phase else "idle"
+        ms["phases"][key] = ms["phases"].get(key, 0) + 1
+    except Exception:
+        pass
 
 
 def log_trade_signal(direction, srsi_val, rsi_val, reason, price, barrier):
@@ -912,7 +976,7 @@ async def process_tick(ws, tick_data, last_trade_time):
                 _loss_cooldown_until = now + LOSS_COOLDOWN_SECONDS
             remaining = _loss_cooldown_until - now
             if remaining > 0:
-                print(f"  {YLW}! SKIPPED: Loss streak ({_consecutive_losses}L) - {int(remaining)}s cooldown{RST}")
+                print(_skip("loss_streak", f"  {YLW}! SKIPPED: Loss streak ({_consecutive_losses}L) - {int(remaining)}s cooldown{RST}"))
                 reset_l_state()
                 return now
             _consecutive_losses = 0
@@ -921,11 +985,11 @@ async def process_tick(ws, tick_data, last_trade_time):
         # === RSI TREND ALIGNMENT ===
         rsi_now = rsi_vals[-1] if rsi_vals else 50
         if direction == "higher" and rsi_now > RSI_LONG_MAX:
-            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > {RSI_LONG_MAX:.0f}, not oversold enough{RST}")
+            print(_skip("rsi_not_oversold", f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} > {RSI_LONG_MAX:.0f}, not oversold enough{RST}"))
             reset_l_state()
             return now
         if direction == "lower" and rsi_now < RSI_SHORT_MIN:
-            print(f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < {RSI_SHORT_MIN:.0f}, not overbought enough{RST}")
+            print(_skip("rsi_not_overbought", f"  {YLW}! SKIPPED: RSI={rsi_now:.1f} < {RSI_SHORT_MIN:.0f}, not overbought enough{RST}"))
             reset_l_state()
             return now
 
@@ -933,11 +997,11 @@ async def process_tick(ws, tick_data, last_trade_time):
         if len(tick_history) >= 3:
             t1, t2, t3 = tick_history[-3], tick_history[-2], tick_history[-1]
             if direction == "higher" and not (t3 > t2 or t2 > t1):
-                print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 UP ticks){RST}")
+                print(_skip("reversal_up", f"  {YLW}! SKIPPED: No reversal confirmation (need 2 UP ticks){RST}"))
                 reset_l_state()
                 return now
             if direction == "lower" and not (t3 < t2 or t2 < t1):
-                print(f"  {YLW}! SKIPPED: No reversal confirmation (need 2 DOWN ticks){RST}")
+                print(_skip("reversal_down", f"  {YLW}! SKIPPED: No reversal confirmation (need 2 DOWN ticks){RST}"))
                 reset_l_state()
                 return now
 
@@ -946,14 +1010,14 @@ async def process_tick(ws, tick_data, last_trade_time):
             recent = list(tick_history)[-TREND_FILTER_TICKS:]
             down_count = sum(1 for i in range(1, len(recent)) if recent[i] < recent[i-1])
             if down_count >= TREND_FILTER_MIN_DOWNS:
-                print(f"  {YLW}! SKIPPED: Strong downtrend ({down_count}/{TREND_FILTER_TICKS} ticks down) - price dropping against LONG{RST}")
+                print(_skip("trend_against_long", f"  {YLW}! SKIPPED: Strong downtrend ({down_count}/{TREND_FILTER_TICKS} ticks down) - price dropping against LONG{RST}"))
                 reset_l_state()
                 return now
         if direction == "lower" and len(tick_history) >= TREND_FILTER_TICKS:
             recent = list(tick_history)[-TREND_FILTER_TICKS:]
             up_count = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i-1])
             if up_count >= TREND_FILTER_MIN_DOWNS:
-                print(f"  {YLW}! SKIPPED: Strong uptrend ({up_count}/{TREND_FILTER_TICKS} ticks up) - price rising against SHORT{RST}")
+                print(_skip("trend_against_short", f"  {YLW}! SKIPPED: Strong uptrend ({up_count}/{TREND_FILTER_TICKS} ticks up) - price rising against SHORT{RST}"))
                 reset_l_state()
                 return now
 
@@ -962,14 +1026,14 @@ async def process_tick(ws, tick_data, last_trade_time):
             old_price = list(tick_history)[-PRICE_DROP_FILTER_TICKS]
             price_change = tick_history[-1] - old_price
             if price_change < -PRICE_DROP_MIN_POINTS:
-                print(f"  {YLW}! SKIPPED: Price dropped {abs(price_change):.4f} pts in last {PRICE_DROP_FILTER_TICKS} ticks (threshold: {PRICE_DROP_MIN_POINTS}){RST}")
+                print(_skip("price_drop", f"  {YLW}! SKIPPED: Price dropped {abs(price_change):.4f} pts in last {PRICE_DROP_FILTER_TICKS} ticks (threshold: {PRICE_DROP_MIN_POINTS}){RST}"))
                 reset_l_state()
                 return now
         if direction == "lower" and len(tick_history) >= PRICE_DROP_FILTER_TICKS:
             old_price = list(tick_history)[-PRICE_DROP_FILTER_TICKS]
             price_change = tick_history[-1] - old_price
             if price_change > PRICE_DROP_MIN_POINTS:
-                print(f"  {YLW}! SKIPPED: Price rose {price_change:.4f} pts in last {PRICE_DROP_FILTER_TICKS} ticks (threshold: {PRICE_DROP_MIN_POINTS}){RST}")
+                print(_skip("price_rise", f"  {YLW}! SKIPPED: Price rose {price_change:.4f} pts in last {PRICE_DROP_FILTER_TICKS} ticks (threshold: {PRICE_DROP_MIN_POINTS}){RST}"))
                 reset_l_state()
                 return now
 
@@ -979,13 +1043,13 @@ async def process_tick(ws, tick_data, last_trade_time):
             if direction == "higher":
                 mom_up = sum(1 for i in range(1, len(recent_mom)) if recent_mom[i] > recent_mom[i-1])
                 if mom_up < MOMENTUM_CONFIRM_TICKS:
-                    print(f"  {YLW}! SKIPPED: No momentum confirmation ({mom_up}/{MOMENTUM_CONFIRM_TICKS} UP ticks){RST}")
+                    print(_skip("momentum_up", f"  {YLW}! SKIPPED: No momentum confirmation ({mom_up}/{MOMENTUM_CONFIRM_TICKS} UP ticks){RST}"))
                     reset_l_state()
                     return now
             if direction == "lower":
                 mom_dn = sum(1 for i in range(1, len(recent_mom)) if recent_mom[i] < recent_mom[i-1])
                 if mom_dn < MOMENTUM_CONFIRM_TICKS:
-                    print(f"  {YLW}! SKIPPED: No momentum confirmation ({mom_dn}/{MOMENTUM_CONFIRM_TICKS} DOWN ticks){RST}")
+                    print(_skip("momentum_down", f"  {YLW}! SKIPPED: No momentum confirmation ({mom_dn}/{MOMENTUM_CONFIRM_TICKS} DOWN ticks){RST}"))
                     reset_l_state()
                     return now
 
@@ -1077,7 +1141,7 @@ async def handle_message(ws, data, last_trade_time):
             if pid:
                 # === PAYOUT FILTER: Skip if payout too high (market says trade will lose) ===
                 if payout_val > MAX_PAYOUT:
-                    print(f"  {YLW}! SKIPPED: Payout ${payout_val:.2f} > ${MAX_PAYOUT:.2f} limit - market thinks trade will lose{RST}")
+                    print(_skip("payout", f"  {YLW}! SKIPPED: Payout ${payout_val:.2f} > ${MAX_PAYOUT:.2f} limit - market thinks trade will lose{RST}"))
                     reset_active_contract()
                     _active_contract_id = None
                     return last_trade_time
