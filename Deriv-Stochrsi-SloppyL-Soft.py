@@ -96,7 +96,13 @@ RAW_SLOPE_MAX = 0.15
 MAX_CONSECUTIVE_LOSSES = int(os.environ.get("SOFT_MAX_CONSECUTIVE_LOSSES", "1"))
 LOSS_COOLDOWN_SECONDS = int(os.environ.get("SOFT_LOSS_COOLDOWN_SECONDS", "60"))
 RSI_LONG_MAX = float(os.environ.get("SOFT_RSI_LONG_MAX", "45"))
-RSI_LONG_MIN = float(os.environ.get("SOFT_RSI_LONG_MIN", "20"))  # RSI floor for LONG: skip knife-catching deep oversold
+RSI_LONG_MIN = float(os.environ.get("SOFT_RSI_LONG_MIN", "30"))  # RSI floor for LONG: skip knife-catching deep oversold
+#   (raised 20->30: the RSI 20-30 band ran 3W/2L, WR 60%, PnL -1.31 across the 71-trade demo sample)
+# LONG dip-stall gate: only buy the dip once it has stopped falling.
+#   Data: LONGs with <=1 down-tick in the last 4 ticks before entry ran 84.6% WR vs 68.2% at 2/4.
+#   Disable by setting SOFT_LONG_STALL_MAX_DOWNS >= SOFT_LONG_STALL_LOOKBACK (e.g. 99).
+LONG_STALL_LOOKBACK = int(os.environ.get("SOFT_LONG_STALL_LOOKBACK", "4"))
+LONG_STALL_MAX_DOWNS = int(os.environ.get("SOFT_LONG_STALL_MAX_DOWNS", "1"))
 RSI_SHORT_MIN = float(os.environ.get("SOFT_RSI_SHORT_MIN", "65"))
 
 # === Trend filters ===
@@ -1071,6 +1077,15 @@ async def process_tick(ws, tick_data, last_trade_time):
             price_change = tick_history[-1] - old_price
             if price_change > PRICE_DROP_MIN_POINTS:
                 print(_skip("price_rise", f"  {YLW}! SKIPPED: Price rose {price_change:.4f} pts in last {PRICE_DROP_FILTER_TICKS} ticks (threshold: {PRICE_DROP_MIN_POINTS}){RST}"))
+                reset_l_state()
+                return now
+
+        # === LONG DIP-STALL GATE: only buy the dip once it has stopped falling ===
+        if direction == "higher" and LONG_STALL_LOOKBACK >= 1 and len(tick_history) >= LONG_STALL_LOOKBACK + 1:
+            recent_stall = list(tick_history)[-(LONG_STALL_LOOKBACK + 1):]
+            stall_down = sum(1 for i in range(1, len(recent_stall)) if recent_stall[i] < recent_stall[i - 1])
+            if stall_down > LONG_STALL_MAX_DOWNS:
+                print(_skip("long_dip_not_stalled", f"  {YLW}! SKIPPED: Dip still falling ({stall_down}/{LONG_STALL_LOOKBACK} of last {LONG_STALL_LOOKBACK} ticks down) - waiting for the dip to stall{RST}"))
                 reset_l_state()
                 return now
 

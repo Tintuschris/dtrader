@@ -9,7 +9,7 @@ Notable changes to both trading products in this repository, each tracked with i
 
 | Product | Latest | Full history |
 |---|---|---|
-| **Bots** | [v3.3.2 - Exit-Spot Settlement Analysis Fix (2026-09-04)](#v332---exit-spot-settlement-analysis-fix-2026-09-04) | [Bots](#bots) |
+| **Bots** | [v3.3.3 - LONG Entry Quality Gates (2026-09-05)](#v333---long-entry-quality-gates-2026-09-05) | [Bots](#bots) |
 | **Web App** | [Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)](#web-v14---settlement-details--next-trade-refresh-2026-09-03) | [Web App](#web-app) |
 
 ---
@@ -24,6 +24,14 @@ Notable changes to both trading products in this repository, each tracked with i
 - **Append-only trade history** - `trades` now accumulates across runs instead of being replaced by the latest run; signals that never settle stay visible for reconciliation
 - **Per-run session accuracy** - session records count and settle only their own run's trades (`signals` per run, results matched by run), and every trade/session/file is tagged with its bot
 - **One-time migration** - the Video bot copies the old shared `trade_log.json` history into its new file on first start, so prior sessions are preserved
+
+### v3.3.3 - LONG Entry Quality Gates (2026-09-05)
+
+#### New Features
+
+- **LONG RSI floor raised 20 -> 30** (`SOFT_RSI_LONG_MIN`) - the RSI 20-30 bucket ran 60% WR / -$1.31 across the backfilled 71-trade demo sample; the floor now skips that knife-catching band
+- **LONG dip-stall gate** (`SOFT_LONG_STALL_LOOKBACK` default 4, `SOFT_LONG_STALL_MAX_DOWNS` default 1) - a LONG is only bought once the dip has stopped falling (<= 1 down-tick in the last 4 before entry). Historical LONGs entered with <= 1 down ran 84.6% WR vs 68.2% at 2-of-4; disable by setting `SOFT_LONG_STALL_MAX_DOWNS` >= lookback (e.g. 99)
+- New skip category `long_dip_not_stalled` feeds the existing skip/session stats
 
 ### v3.3.2 - Exit-Spot Settlement Analysis Fix (2026-09-04)
 
