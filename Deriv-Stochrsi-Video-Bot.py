@@ -90,6 +90,9 @@ parser.add_argument("--barrier-weak", default=os.environ.get("BARRIER_WEAK", "-0
 parser.add_argument("--price-dir-min", type=int,
                     default=int(os.environ.get("FILTER_PRICE_DIR_MIN", "3")),
                     help="Min ticks in trade direction (of last 5) (default: 3)")
+parser.add_argument("--min-balance", type=float,
+                    default=float(os.environ.get("MIN_BALANCE", "0")),
+                    help="Pause trading when account balance falls below this amount (default: 0 = disabled)")
 args = parser.parse_args()
 
 
@@ -140,6 +143,10 @@ FILTER_ADAPTIVE_FLAT_MAX = args.adaptive_flat_max
 FILTER_ADAPTIVE_BREAKOUT_MIN = args.adaptive_breakout_min
 FILTER_PRICE_DIR_MIN = args.price_dir_min
 FILTER_ENTRY_DELAY = args.entry_delay
+
+# === Balance guard ===
+# Pause trading when the account balance drops below this threshold (0 = disabled).
+MIN_BALANCE = args.min_balance
 
 # Reconnection
 MAX_RECONNECT_ATTEMPTS = 10
@@ -192,6 +199,8 @@ _l_flat_extreme = 0.0
 _signal_ctx = {}  # pattern context captured at signal fire (survives reset_l_state)
 _consecutive_losses = 0
 _loss_cooldown_until = 0.0
+_balance_known = False            # True once a real numeric balance has been received
+_balance_guard_triggered = False  # True while trading is paused by the balance guard
 # _trade_log is loaded from the trade log file at import (persistent across runs)
 _last_displayed_cid = None
 _pending_signal = None
@@ -538,7 +547,10 @@ def print_trade_result(status, profit, entry_price, exit_price, direction, contr
 
 
 def print_balance(amount):
-    stats["balance"] = float(amount) if amount != "?" else stats["balance"]
+    global _balance_known
+    if amount != "?":
+        stats["balance"] = float(amount)
+        _balance_known = True
     print(f"  {DIM}Balance: ${stats['balance']:.2f}{RST}")
 
 
@@ -1003,7 +1015,7 @@ async def place_trade(ws, direction, barrier):
 
 async def process_tick(ws, tick_data, last_trade_time):
     global _tick_count, _in_cooldown, active_contract
-    global _consecutive_losses, _loss_cooldown_until
+    global _consecutive_losses, _loss_cooldown_until, _pending_signal, _balance_guard_triggered
     _tick_count += 1
     price = tick_data["quote"]
     closes.append(price)
@@ -1036,8 +1048,21 @@ async def process_tick(ws, tick_data, last_trade_time):
         return last_trade_time
 
 
+    # === BALANCE GUARD ===
+    if MIN_BALANCE > 0 and _balance_known:
+        if stats["balance"] < MIN_BALANCE:
+            if not _balance_guard_triggered:
+                print(_skip("balance", f"  {RED}X Balance ${stats['balance']:.2f} < ${MIN_BALANCE:.2f} minimum - trading paused{RST}"))
+                _pending_signal = None  # abort any queued entry
+            _balance_guard_triggered = True
+            reset_l_state()
+            return last_trade_time
+        elif _balance_guard_triggered:
+            print(f"  {GRN}+ Balance ${stats['balance']:.2f} recovered above ${MIN_BALANCE:.2f} - trading resumed{RST}")
+            _balance_guard_triggered = False
+
+
     # === ENTRY DELAY PROCESSING ===
-    global _pending_signal
     if _pending_signal is not None:
         _pending_signal["delay_count"] += 1
         ps = _pending_signal
