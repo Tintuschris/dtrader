@@ -9,7 +9,7 @@ Notable changes to both trading products in this repository, each tracked with i
 
 | Product | Latest | Full history |
 |---|---|---|
-| **Bots** | [v3.3.1 - Keepalive & Error Logging Fix (2026-09-04)](#v331---keepalive-fix-2026-09-04) | [Bots](#bots) |
+| **Bots** | [v3.3.2 - Exit-Spot Settlement Analysis Fix (2026-09-04)](#v332---exit-spot-settlement-analysis-fix-2026-09-04) | [Bots](#bots) |
 | **Web App** | [Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)](#web-v14---settlement-details--next-trade-refresh-2026-09-03) | [Web App](#web-app) |
 
 ---
@@ -24,6 +24,13 @@ Notable changes to both trading products in this repository, each tracked with i
 - **Append-only trade history** - `trades` now accumulates across runs instead of being replaced by the latest run; signals that never settle stay visible for reconciliation
 - **Per-run session accuracy** - session records count and settle only their own run's trades (`signals` per run, results matched by run), and every trade/session/file is tagged with its bot
 - **One-time migration** - the Video bot copies the old shared `trade_log.json` history into its new file on first start, so prior sessions are preserved
+
+### v3.3.2 - Exit-Spot Settlement Analysis Fix (2026-09-04)
+
+#### Bug Fixes
+
+- **SloppyL-Soft bot now records and displays the real exit spot** - Deriv's settlement messages carry the final price as `exit_spot`, but the Soft bot only read `exit_tick` (a field the OTP endpoint does not send), so every banner and log row showed `Exit spot: 0.0000` and losses printed a bogus `Lost by: <barrier> (99.99%)` gap. The analyzer and settlement handler now read `entry_spot`/`exit_spot` first (falling back to `*_tick`), matching the Video bot
+- **No more premature loss banners** - a contract that just hit `is_expired` can send an intermediate snapshot whose `exit_spot` is still `0.0`; the Soft bot analyzed it and reported a fake ~100% loss. Settlements are now only analyzed when the message carries `audit_details` and a real `exit_spot > 0`, so the true "last tick vs barrier" gap is shown instead
 
 ### v3.3.1 - Keepalive & Error Logging Fix (2026-09-04)
 

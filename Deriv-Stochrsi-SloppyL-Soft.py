@@ -544,8 +544,8 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
             _consecutive_losses += 1
     wr = (stats["wins"] / stats["trades"] * 100) if stats["trades"] > 0 else 0
 
-    entry_spot = poc.get("entry_tick", entry_price)
-    exit_spot = poc.get("exit_tick", exit_price)
+    entry_spot = poc.get("entry_spot", poc.get("entry_tick", entry_price))
+    exit_spot = poc.get("exit_spot", poc.get("exit_tick", exit_price))
     if isinstance(entry_spot, dict):
         entry_spot = entry_spot.get("epoch", entry_price)
     if isinstance(exit_spot, dict):
@@ -1218,13 +1218,13 @@ async def handle_message(ws, data, last_trade_time):
             print(f"  {DIM}[POC] keys={list(poc.keys())} status={poc.get(chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115), chr(63))} is_sold={poc.get(chr(105)+chr(115)+chr(95)+chr(115)+chr(111)+chr(108)+chr(100), chr(63))} profit={poc.get(chr(112)+chr(114)+chr(111)+chr(102)+chr(105)+chr(116), chr(63))}{RST}")
             status = poc.get("status", "")
             profit = poc.get("profit", 0)
-            entry = poc.get("entry_tick", 0)
-            exit_p = poc.get("exit_tick", 0)
+            entry = poc.get("entry_spot", poc.get("entry_tick", 0))
+            exit_p = poc.get("exit_spot", poc.get("exit_tick", 0))
             cur = poc.get("current_spot", poc.get("current_tick", 0))
             total = poc.get("tick_count", DURATION)
             cid = poc.get("contract_id", "?")
             is_sold = status in ("expired", "sold", "won", "lost", "cancelled") or poc.get("is_sold") == 1 or poc.get("is_expired") == 1
-            if is_sold and poc.get("exit_spot") is not None and _last_displayed_cid != cid:
+            if (_last_displayed_cid != cid) and ("audit_details" in poc) and (poc.get("exit_spot") is not None and float(poc.get("exit_spot", 0) or 0) > 0):
                 direction = "?"
                 entry_price = entry
                 ctx = active_contract
@@ -1253,7 +1253,7 @@ async def handle_message(ws, data, last_trade_time):
                 _active_contract_snapshot = None
                 _last_displayed_cid = cid
                 last_trade_time = time.time()
-            elif status == "open" and total:
+            elif status == "open" and "audit_details" not in poc and total:
                 direction = active_contract["direction"] if active_contract else (_active_contract_snapshot.get("direction", "?") if _active_contract_snapshot else "?")
                 barrier_val = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER
                 print_trade_progress(cur, total, entry, barrier_val)
