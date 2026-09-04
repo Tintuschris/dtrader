@@ -35,7 +35,7 @@ The bot connects to Deriv's WebSocket API, streams real-time tick data for a vol
 - Applies 6 configurable strategy filters before placing any trade
 - Waits for 2-tick price confirmation after signal fires (entry delay)
 - Uses adaptive barrier offset based on signal strength (RSI)
-- Saves every trade to `trade_log.json` with full signal context
+- Saves every trade with full signal context to a per-bot log (`trade_log_video.json` for the Video bot, `trade_log_soft.json` for the Soft bot) - append-only across runs
 - Automatically reconnects with exponential backoff
 - Sends keepalive pings every 30 seconds
 - Rich terminal UI with spark charts, indicator values, detection phases

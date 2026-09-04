@@ -38,7 +38,7 @@ parser.add_argument("--record", metavar="FILE",
 parser.add_argument("--replay", metavar="FILE",
                     help="Replay recorded ticks for backtesting")
 parser.add_argument("--history", action="store_true",
-                    help="Print saved session history from trade_log.json and exit")
+                    help="Print saved session history from the trade log file and exit")
 parser.add_argument("--max-sessions", type=int, metavar="N",
                     help="With --history: show only the newest N session records")
 parser.add_argument("--trim", action="store_true",
@@ -192,7 +192,7 @@ _l_flat_extreme = 0.0
 _signal_ctx = {}  # pattern context captured at signal fire (survives reset_l_state)
 _consecutive_losses = 0
 _loss_cooldown_until = 0.0
-_trade_log = []
+# _trade_log is loaded from the trade log file at import (persistent across runs)
 _last_displayed_cid = None
 _pending_signal = None
 
@@ -641,7 +641,26 @@ def save_recording():
 atexit.register(save_recording)
 
 
-TRADE_LOG_FILE = "trade_log.json"
+BOT_NAME = "video"
+# Each bot writes to its own log file; override with TRADE_LOG_FILE env var.
+TRADE_LOG_FILE = os.environ.get("TRADE_LOG_FILE", "trade_log_video.json")
+
+
+def _migrate_legacy_log():
+    """One-time: copy the old shared trade_log.json history into this bot's
+    own file if it doesn't exist yet, so prior sessions are not lost."""
+    try:
+        if os.path.exists(TRADE_LOG_FILE) or not os.path.exists("trade_log.json"):
+            return
+        with open("trade_log.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        with open(TRADE_LOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+_migrate_legacy_log()
 
 
 def save_trade_log():
@@ -651,7 +670,8 @@ def save_trade_log():
     if not _trade_log and not _sessions:
         return
     try:
-        done = [e for e in _trade_log if e["result"]["status"] in ("won","lost")]
+        done = [e for e in _trade_log
+                if e.get("epoch", 0) >= SESSION_START_TS and e["result"]["status"] in ("won", "lost")]
         w = sum(1 for e in done if e["result"]["status"]=="won")
         l = sum(1 for e in done if e["result"]["status"]=="lost")
         t = w + l
@@ -665,7 +685,7 @@ def save_trade_log():
             "pnl":round(pnl,2),"best_win_streak":bw,"best_loss_streak":bl,
             "current_streak":sw if sw else -sl,"last_updated":time.strftime("%Y-%m-%d %H:%M:%S")}
         with open(TRADE_LOG_FILE, "w") as f:
-            json.dump({"summary":summary,"trades":_trade_log,"sessions":_sessions}, f, indent=2)
+            json.dump({"bot": BOT_NAME, "summary":summary,"trades":_trade_log,"sessions":_sessions}, f, indent=2)
     except Exception as e:
         print(f"  {RED}X Failed to save trade log: {e}{RST}")
 
@@ -689,7 +709,18 @@ def _load_existing_sessions():
         return []
 
 
+def _load_existing_trades():
+    """Load trade entries left by previous runs (append-only across runs)."""
+    try:
+        with open(TRADE_LOG_FILE, "r") as f:
+            return json.load(f).get("trades", [])
+    except Exception:
+        return []
+
+
 _sessions = _load_existing_sessions()
+_trade_log = _load_existing_trades()
+_run_signals = 0  # signals emitted during THIS run (for the session record)
 
 
 def record_session_end():
@@ -703,6 +734,8 @@ def record_session_end():
         settled = stats["trades"]
         settled_list = []
         for e in _trade_log:
+            if e.get("epoch", 0) < SESSION_START_TS:
+                continue  # only this run's trades belong in this session record
             r = e.get("result", {})
             if r.get("contract_id") and r.get("status") in ("won", "lost", "cancelled"):
                 settled_list.append({
@@ -723,8 +756,9 @@ def record_session_end():
             "session_end": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_ts)),
             "duration_sec": round(end_ts - SESSION_START_TS, 1),
             "exit_reason": _exit_reason,
+            "bot": BOT_NAME,
             "ticks": _tick_count,
-            "signals": len(_trade_log),
+            "signals": _run_signals,
             "summary": {
                 "settled": settled,
                 "wins": stats["wins"],
@@ -803,8 +837,10 @@ def _track_market(rsi, raw):
 
 def log_trade_signal(direction, srsi_val, rsi_val, flat_count, flat_avg, breakout, reason, price, barrier):
     """Log a trade signal with full context when it fires."""
+    global _run_signals
     entry = {
         "id": len(_trade_log) + 1,
+        "bot": BOT_NAME,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "epoch": time.time(),
         "symbol": SYMBOL,
@@ -843,6 +879,7 @@ def log_trade_signal(direction, srsi_val, rsi_val, flat_count, flat_avg, breakou
         },
     }
     _trade_log.append(entry)
+    _run_signals += 1
     save_trade_log()
     return entry
 
@@ -850,7 +887,7 @@ def log_trade_signal(direction, srsi_val, rsi_val, flat_count, flat_avg, breakou
 def log_trade_result(contract_id, status, profit, entry_spot, exit_spot, payout, balance):
     """Update a trade log entry with the result."""
     for entry in reversed(_trade_log):
-        if entry["result"]["status"] == "pending":
+        if entry.get("epoch", 0) >= SESSION_START_TS and entry["result"]["status"] == "pending":
             entry["result"]["status"] = status
             entry["result"]["contract_id"] = contract_id
             entry["result"]["exit_spot"] = exit_spot

@@ -9,12 +9,21 @@ Notable changes to both trading products in this repository, each tracked with i
 
 | Product | Latest | Full history |
 |---|---|---|
-| **Bots** | [v3.2 - Reliability, Session History & Filter Hardening (2026-09-03)](#v32---reliability-session-history--filter-hardening-2026-09-03) | [Bots](#bots) |
+| **Bots** | [v3.3 - Per-Bot Trade Logs & Append-Only History (2026-09-04)](#v33---per-bot-trade-logs--append-only-history-2026-09-04) | [Bots](#bots) |
 | **Web App** | [Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)](#web-v14---settlement-details--next-trade-refresh-2026-09-03) | [Web App](#web-app) |
 
 ---
 
 ## Bots
+
+### v3.3 - Per-Bot Trade Logs & Append-Only History (2026-09-04)
+
+#### New Features
+
+- **Each bot writes to its own log file** - `trade_log_video.json` (Video bot) and `trade_log_soft.json` (Soft bot), overridable with `TRADE_LOG_FILE`, so the two bots no longer clobber each other's records
+- **Append-only trade history** - `trades` now accumulates across runs instead of being replaced by the latest run; signals that never settle stay visible for reconciliation
+- **Per-run session accuracy** - session records count and settle only their own run's trades (`signals` per run, results matched by run), and every trade/session/file is tagged with its bot
+- **One-time migration** - the Video bot copies the old shared `trade_log.json` history into its new file on first start, so prior sessions are preserved
 
 ### v3.2 - Reliability, Session History & Filter Hardening (2026-09-03)
 
