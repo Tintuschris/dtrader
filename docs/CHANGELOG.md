@@ -9,7 +9,7 @@ Notable changes to both trading products in this repository, each tracked with i
 
 | Product | Latest | Full history |
 |---|---|---|
-| **Bots** | [v3.3 - Per-Bot Trade Logs & Append-Only History (2026-09-04)](#v33---per-bot-trade-logs--append-only-history-2026-09-04) | [Bots](#bots) |
+| **Bots** | [v3.3.1 - Keepalive & Error Logging Fix (2026-09-04)](#v331---keepalive-fix-2026-09-04) | [Bots](#bots) |
 | **Web App** | [Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)](#web-v14---settlement-details--next-trade-refresh-2026-09-03) | [Web App](#web-app) |
 
 ---
@@ -24,6 +24,14 @@ Notable changes to both trading products in this repository, each tracked with i
 - **Append-only trade history** - `trades` now accumulates across runs instead of being replaced by the latest run; signals that never settle stay visible for reconciliation
 - **Per-run session accuracy** - session records count and settle only their own run's trades (`signals` per run, results matched by run), and every trade/session/file is tagged with its bot
 - **One-time migration** - the Video bot copies the old shared `trade_log.json` history into its new file on first start, so prior sessions are preserved
+
+### v3.3.1 - Keepalive & Error Logging Fix (2026-09-04)
+
+#### Bug Fixes
+
+- **30-second `UnrecognisedRequest` error loop fixed** - Deriv's OTP endpoint answers the bots' keepalive `{"ping": 1}` with `msg_type: "ping"` (a pong tagged as a ping). Both bots misread that reply as a server-initiated ping and answered with an unsolicited `{"pong": 1}`, which Deriv rejected with an `UnrecognisedRequest` error every `PING_INTERVAL` seconds. Pongs are now sent only for genuine server pings (no `echo_req`)
+- **API errors now log code + message** - generic API errors print as `API ERROR [code]: message` instead of a bare `msg_type=error` line
+- **Keepalive hardened against dead connections** - a failed keepalive send is now logged and retried every `PING_INTERVAL` instead of silently stopping the ping loop; after `PING_MAX_FAILURES` (3) consecutive failures the connection is closed so the session's reconnect logic takes over
 
 ### v3.2 - Reliability, Session History & Filter Hardening (2026-09-03)
 

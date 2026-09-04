@@ -152,6 +152,8 @@ MIN_BALANCE = args.min_balance
 MAX_RECONNECT_ATTEMPTS = 10
 RECONNECT_BASE_DELAY = 2
 PING_INTERVAL = 30
+# Give up and force a reconnect after this many consecutive ping failures.
+PING_MAX_FAILURES = 3
 DRY_RUN = args.dry_run or bool(args.replay)
 RECORD_FILE = args.record
 REPLAY_FILE = args.replay
@@ -1301,7 +1303,10 @@ async def subscribe_ws(ws):
 async def handle_message(ws, data, last_trade_time):
     # Debug: log non-tick messages
     _mt = data.get("msg_type", "?")
-    if _mt not in ("tick", "balance", "ping"):
+    if _mt == "error":
+        err = data.get("error", {}) or {}
+        print(f"  {RED}X API ERROR [{err.get('code', '?')}]: {err.get('message', data)}{RST}")
+    elif _mt not in ("tick", "balance", "ping", "pong"):
         print(f"  {DIM}[MSG] msg_type={_mt}{RST}")
     global pending_proposal
     global active_contract, _active_contract_id, _active_contract_snapshot, _last_displayed_cid
@@ -1395,19 +1400,42 @@ async def handle_message(ws, data, last_trade_time):
         bal = data.get("balance", {})
         print_balance(bal.get("balance", "?"))
     elif data.get("msg_type") == "ping":
-        await ws.send(json.dumps({"pong": 1}))
+        # The OTP/derivws endpoint answers OUR keepalive {"ping": 1} with
+        # msg_type="ping" and echo_req = our request (a pong, not a server ping).
+        # Replying {"pong": 1} to our own ping draws an UnrecognisedRequest error
+        # every PING_INTERVAL. Only an unsolicited ping (no echo_req) needs a pong.
+        if "echo_req" not in data:
+            await ws.send(json.dumps({"pong": 1}))
     return last_trade_time
 
 
 
 async def keepalive_ping(ws):
-    """Send periodic pings to keep the WebSocket connection alive."""
+    """Send periodic pings to keep the WebSocket connection alive.
+
+    A failed send is logged and retried (every PING_INTERVAL) instead of
+    silently killing the keepalive. After PING_MAX_FAILURES consecutive
+    failures the connection is presumed dead, so it is closed to let the
+    session's reconnect logic take over.
+    """
+    consecutive_failures = 0
     while True:
+        await asyncio.sleep(PING_INTERVAL)
         try:
-            await asyncio.sleep(PING_INTERVAL)
             await ws.send(json.dumps({"ping": 1}))
-        except Exception:
-            break  # Connection is dead, stop pinging
+            consecutive_failures = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            consecutive_failures += 1
+            print(f"  {YLW}! Keepalive ping failed: {e} (consecutive failure {consecutive_failures}/{PING_MAX_FAILURES}){RST}")
+            if consecutive_failures >= PING_MAX_FAILURES:
+                print(f"  {RED}X Keepalive: {PING_MAX_FAILURES} consecutive ping failures - closing connection to force reconnect{RST}")
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+                return
 
 async def run_session():
     """Run one WebSocket session with keepalive ping."""
