@@ -9,7 +9,7 @@ Notable changes to both trading products in this repository, each tracked with i
 
 | Product | Latest | Full history |
 |---|---|---|
-| **Bots** | [v3.3.3 - LONG Entry Quality Gates (2026-09-05)](#v333---long-entry-quality-gates-2026-09-05) | [Bots](#bots) |
+| **Bots** | [v3.3.5 - Settlement Status Fix & SHORT Cohort Analyzer (2026-09-05)](#v335---settlement-status-fix--short-cohort-analyzer-2026-09-05) | [Bots](#bots) |
 | **Web App** | [Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)](#web-v14---settlement-details--next-trade-refresh-2026-09-03) | [Web App](#web-app) |
 
 ---
@@ -24,6 +24,23 @@ Notable changes to both trading products in this repository, each tracked with i
 - **Append-only trade history** - `trades` now accumulates across runs instead of being replaced by the latest run; signals that never settle stay visible for reconciliation
 - **Per-run session accuracy** - session records count and settle only their own run's trades (`signals` per run, results matched by run), and every trade/session/file is tagged with its bot
 - **One-time migration** - the Video bot copies the old shared `trade_log.json` history into its new file on first start, so prior sessions are preserved
+
+### v3.3.5 - Settlement Status Fix & SHORT Cohort Analyzer (2026-09-05)
+
+#### Bug Fixes
+
+- **Settlement status normalization** - Deriv can send intermediate settlement snapshots with a non-final status (e.g. "open") while profit/exit_spot are already final. Both bots now normalize any non-final status to the real outcome (won if profit >= 0, else lost), so a stuck "open" status doesn't drop the trade from all status-filtered counters
+
+#### New Features
+
+- **SHORT cohort analyzer** (`analyze_trade_log.py --short-cohorts`) - prints the SHORT cohort split by downs-at-entry (>=3/4 vs 2/4 of the last 4 ticks), the SHORT momentum-gate check. With `--since`, prints the pre-window baseline and the at/after window side by side - e.g. pass the gated bot's start time to compare the gated SHORTs against the pre-gate cohorts
+
+### v3.3.4 - SHORT Momentum Gate (2026-09-05)
+
+#### New Features
+
+- **SHORT momentum gate** (`SOFT_SHORT_MOMENTUM_LOOKBACK` default 4, `SOFT_SHORT_MOMENTUM_MIN_DOWNS` default 0 = disabled) - a LOWER is only sold once the drop has momentum (>= `SOFT_SHORT_MOMENTUM_MIN_DOWNS` down-transitions in the last `SOFT_SHORT_MOMENTUM_LOOKBACK` before entry). Across the backfilled 71-trade demo sample, SHORTs entered with >= 3/4 downs ran 92.3% WR (+$1.76) vs 80.0% (-$0.16) at 2/4 - the only sub-breakeven SHORT regime. Disabled by default; enable by setting `SOFT_SHORT_MOMENTUM_MIN_DOWNS=3`
+- New skip category `short_momentum_unconfirmed` feeds the existing skip/session stats
 
 ### v3.3.3 - LONG Entry Quality Gates (2026-09-05)
 

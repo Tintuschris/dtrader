@@ -900,6 +900,11 @@ def log_trade_signal(direction, srsi_val, rsi_val, flat_count, flat_avg, breakou
 
 def log_trade_result(contract_id, status, profit, entry_spot, exit_spot, payout, balance):
     """Update a trade log entry with the result."""
+    # A settlement snapshot can arrive with a non-final status (e.g. "open")
+    # while profit/exit_spot are already final. Normalize to the real outcome -
+    # a stuck "open" status makes every status-filtered counter drop the trade.
+    if status not in ("won", "lost", "cancelled", "sold"):
+        status = "won" if float(profit or 0) >= 0 else "lost"
     for entry in reversed(_trade_log):
         if entry.get("epoch", 0) >= SESSION_START_TS and entry["result"]["status"] == "pending":
             entry["result"]["status"] = status

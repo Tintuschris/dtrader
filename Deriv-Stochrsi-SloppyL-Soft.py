@@ -5,6 +5,7 @@ Maconny L-Shape with rich terminal output.
 
 import asyncio
 import json
+import math
 import os
 import sys
 import time
@@ -53,6 +54,13 @@ parser.add_argument('--barrier-strong', default=os.environ.get('BARRIER_STRONG',
                     help='Barrier for strong RSI signals (default: -0.20)')
 parser.add_argument('--barrier-weak', default=os.environ.get('BARRIER_WEAK', '-0.30'),
                     help='Barrier for weaker RSI signals (default: -0.30)')
+parser.add_argument('--barrier-mode', default=os.environ.get('BARRIER_MODE', 'fixed'),
+                    choices=['fixed', 'rsi'],
+                    help='Barrier selection mode (default: fixed — CLI --barrier-higher/--barrier-lower are authoritative; rsi — adapt based on RSI strength using --barrier-strong/--barrier-weak)')
+parser.add_argument('--strong-threshold-long', type=int, default=int(os.environ.get('SOFT_STRONG_THRESHOLD_LONG', '25')),
+                    help='RSI threshold for strong LONG signal (default: 25)')
+parser.add_argument('--strong-threshold-short', type=int, default=int(os.environ.get('SOFT_STRONG_THRESHOLD_SHORT', '85')),
+                    help='RSI threshold for strong SHORT signal (default: 85)')
 args = parser.parse_args()
 
 
@@ -65,10 +73,61 @@ ACCOUNT_TYPE = os.environ.get("ACCOUNT_TYPE", "demo")
 SYMBOL = args.symbol
 STAKE = args.stake
 CURRENCY = "USD"
-BARRIER_HIGHER = args.barrier_higher
-BARRIER_LOWER = args.barrier_lower
-BARRIER_STRONG = args.barrier_strong
-BARRIER_WEAK = args.barrier_weak
+def _barrier_float_repr(val):
+    """Deriv-compatible signed barrier string for a numeric value."""
+    return f'+{val:.2f}' if val >= 0 else f'{val:.2f}'
+
+
+def _parse_barrier(raw, name):
+    """Normalize a user-supplied barrier string through float() so repeated/malformed
+    signs like '++35.00' or '--0.20' come out as a clean signed numeric string.
+
+    Returns (normalized_string, raw_for_logging).
+    """
+    raw = (raw or '').strip()
+    if not raw:
+        return (None, raw)
+    try:
+        val = float(raw)
+    except (ValueError, TypeError):
+        _barrier_form_warnings.append(
+            f'BARRIER: unparseable {name}={raw!r} -- using {name} as-is: {raw!r}'
+        )
+        return (raw, raw)
+    if math.isinf(val) or math.isnan(val):
+        _barrier_form_warnings.append(
+            f'BARRIER: extreme {name}={raw!r} -- using {name} as-is: {raw!r}'
+        )
+        return (raw, raw)
+    if raw != _barrier_float_repr(val):
+        _barrier_form_warnings.append(
+            f'BARRIER: normalized {name}={raw!r} -> {val!r} (sent as {_barrier_float_repr(val)})'
+        )
+    return (_barrier_float_repr(val), raw)
+
+
+# === Barrier args ===
+_p_h, BARRIER_HIGHER_RAW = _parse_barrier(args.barrier_higher, '--barrier-higher')
+_p_l, BARRIER_LOWER_RAW = _parse_barrier(args.barrier_lower, '--barrier-lower')
+BARRIER_HIGHER_SENT = _p_h if _p_h is not None else _barrier_float_repr(BARRIER_HIGHER)
+BARRIER_LOWER_SENT = _p_l if _p_l is not None else _barrier_float_repr(BARRIER_LOWER)
+BARRIER_HIGHER = float(_p_h) if _p_h is not None else 0.0
+BARRIER_LOWER = float(_p_l) if _p_l is not None else 0.0
+BARRIER_STRONG = float(args.barrier_strong) if args.barrier_strong else 0.0
+BARRIER_WEAK = float(args.barrier_weak) if args.barrier_weak else 0.0
+BARRIER_MODE = args.barrier_mode
+
+
+# Warnings collected during CLI parsing.
+_barrier_form_warnings = []
+if _p_h is None:
+    _barrier_form_warnings.append(
+        f'BARRIER: empty --barrier-higher, defaulting HIGHER to {BARRIER_HIGHER_SENT}'
+    )
+if _p_l is None:
+    _barrier_form_warnings.append(
+        f'BARRIER: empty --barrier-lower, defaulting LOWER to {BARRIER_LOWER_SENT}'
+    )
 DURATION = args.duration
 DURATION_UNIT = "t"
 RSI_PERIOD = 14
@@ -377,11 +436,13 @@ def print_header():
     print(f"{CYN}|{RST}  {BLD}Deriv STOCHRSI L-Shape Bot{RST}  {DIM}v2.0 Enhanced CLI{RST}")
     print(f"{CYN}+{'='*56}+{RST}")
     print(f"{CYN}|{RST}  Symbol:    {BLD}{SYMBOL}{RST}                          Duration: {BLD}{DURATION}{DURATION_UNIT}{RST}")
-    print(f"{CYN}|{RST}  Stake:     {GRN}${STAKE} {CURRENCY}{RST}                       Barrier:  {BLD}{BARRIER_HIGHER}/{BARRIER_LOWER}{RST}")
+    print(f"{CYN}|{RST}  Stake:     {GRN}${STAKE} {CURRENCY}{RST}                       Barrier:  {BLD}{BARRIER_HIGHER_SENT}/{BARRIER_LOWER_SENT}{RST}  ({BARRIER_MODE}){RST}")
     print(f"{CYN}|{RST}  Mode:      {BLD}{'BRIDGE' if USE_BRIDGE else 'PAT'}{RST}")
     print(f"{CYN}|{RST}  Strategy:  {MAG}RAW StochRSI({RSI_PERIOD}) slanted L{RST}")
     if DRY_RUN:
         print(f"  {DIM}    *** DRY RUN MODE ***{RST}")
+    for _w in _barrier_form_warnings:
+        print(f"  {YEL}! {_w}{RST}")
     print(f"{CYN}+{'='*56}+{RST}")
     print()
 
@@ -439,31 +500,65 @@ def print_tick(price, tick_num):
         srsi_str = f"  {sc}SRSI:{sv:.3f}{RST}"
     print(f"  {DIM}#{tick_num:>4d}{RST} {arrow} {BLD}{price:.4f}{RST}  {digit_color}[{digit}]{RST}{srsi_str}  {DIM}{spark}{RST}")
 
-def _calc_barrier(direction, rsi):
-    """Pick barrier based on RSI strength. Uses user-specified BARRIER_HIGHER/BARRIER_LOWER."""
-    strong_threshold = 25 if direction == 'higher' else 85
-    if direction == 'higher':
-        return BARRIER_HIGHER if rsi <= strong_threshold else BARRIER_WEAK
-    else:
-        bv = BARRIER_LOWER if rsi >= strong_threshold else BARRIER_WEAK
-        return '+' + bv.lstrip('-')
+def _calc_barrier(direction, rsi, barrier_mode=None, strong_long=None, strong_short=None):
+    """Pick barrier based on mode.
 
-def print_signal(direction, srsi_val, reason, rsi_val=None, barrier=None):
+    fixed: use CLI --barrier-higher/--barrier-lower directly (authoritative).
+    rsi: adapt based on RSI strength -- strong threshold uses --barrier-strong,
+         otherwise falls back to --barrier-weak.
+
+    The returned string is always a clean signed float string. In fixed mode the
+    values come directly from the already-normalized BARRIER_HIGHER_SENT /
+    BARRIER_LOWER_SENT so repeated/malformed signs like '++35.00' never leak into
+    the actual placement.
+    """
+    if barrier_mode is None:
+        barrier_mode = BARRIER_MODE
+    if direction == 'higher':
+        if barrier_mode == 'fixed':
+            return BARRIER_HIGHER_SENT
+        # rsi mode
+        thresh = strong_long if strong_long is not None else args.strong_threshold_long
+        if rsi <= thresh:
+            return format_barrier(BARRIER_STRONG)
+        return format_barrier(BARRIER_WEAK)
+    else:
+        if barrier_mode == 'fixed':
+            return BARRIER_LOWER_SENT
+        # rsi mode
+        thresh = strong_short if strong_short is not None else args.strong_threshold_short
+        if rsi >= thresh:
+            return format_barrier(BARRIER_STRONG)
+        return format_barrier(BARRIER_WEAK)
+
+
+def format_barrier(val):
+    """Format a barrier value as a Deriv-compatible string with explicit sign."""
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return str(val)
+    if f >= 0:
+        return f'+{f:.2f}'
+    return f'{f:.2f}'
+
+def print_signal(direction, srsi_val, reason, rsi_val=None, barrier=None, barrier_mode=None):
+    mode_str = barrier_mode if barrier_mode else 'fixed'
     if direction == "higher":
         print(f"  {BLD}{GRN}{"="*60}{RST}")
         print(f"  {BLD}{GRN}  >>>  L-SHAPE LONG SIGNAL  <<<{RST}")
         print(f"  {BLD}{GRN}  Raw SRSI={srsi_val:.4f} broke UP from oversold zone{RST}")
         print(f"  {GRN}  Reason: {reason}{RST}")
-        bv = barrier if barrier else BARRIER_HIGHER
-        print(f"  {GRN}  Barrier: {bv} | Contract: HIGHER | Stake: {RST}")
+        bv = barrier if barrier else BARRIER_HIGHER_SENT
+        print(f"  {GRN}  Barrier: {bv} | Contract: HIGHER | Mode: {mode_str} | Stake: {RST}")
         print(f"  {BLD}{GRN}{"="*60}{RST}")
     else:
         print(f"  {BLD}{RED}{"="*60}{RST}")
         print(f"  {BLD}{RED}  <<<  L-SHAPE SHORT SIGNAL  >>>{RST}")
         print(f"  {BLD}{RED}  Raw SRSI={srsi_val:.4f} broke DOWN from overbought zone{RST}")
         print(f"  {RED}  Reason: {reason}{RST}")
-        bv = barrier if barrier else BARRIER_LOWER
-        print(f"  {RED}  Barrier: {bv} | Contract: LOWER | Stake: {RST}")
+        bv = barrier if barrier else BARRIER_LOWER_SENT
+        print(f"  {RED}  Barrier: {bv} | Contract: LOWER | Mode: {mode_str} | Stake: {RST}")
         print(f"  {BLD}{RED}{"="*60}{RST}")
 def print_trade_placed(contract_id, direction, cost, payout):
     print(f"  {BLD}{YLW}+--- TRADE PLACED --------------------------------+{RST}")
@@ -937,7 +1032,7 @@ async def get_otp_url(account_id):
 
 # ============ TRADE PLACEMENT ============
 
-async def place_trade(ws, direction, barrier):
+async def place_trade(ws, direction, barrier, barrier_mode=None):
     global pending_proposal
     contract_type = "HIGHER" if direction == "higher" else "LOWER"
     proposal_req = {
@@ -953,6 +1048,7 @@ async def place_trade(ws, direction, barrier):
     }
     pending_proposal = {"direction": direction, "barrier": barrier, "entry_price": None}
     print(f"  {DIM}[PROPOSAL] amount={STAKE} type={contract_type} barrier={barrier} symbol={SYMBOL}{RST}")
+    print(f"  {DIM}[BARRIER] sent={barrier} direction={direction} mode={barrier_mode if barrier_mode else 'fixed'} raw_h={BARRIER_HIGHER_RAW!r} raw_l={BARRIER_LOWER_RAW!r}{RST}")
     await ws.send(json.dumps(proposal_req))
 # ============ TICK PROCESSING ============
 
@@ -1105,14 +1201,15 @@ async def process_tick(ws, tick_data, last_trade_time):
                     reset_l_state()
                     return now
 
-        barrier = _calc_barrier(direction, rsi_now)
-        print_signal(direction, srsi_now, reason, rsi_val=rsi_now, barrier=barrier)
+        barrier_mode = BARRIER_MODE
+        barrier = _calc_barrier(direction, rsi_now, barrier_mode=barrier_mode)
+        print_signal(direction, srsi_now, reason, rsi_val=rsi_now, barrier=barrier, barrier_mode=barrier_mode)
         active_contract = {"direction": direction, "entry_price": price, "barrier": barrier}
         log_trade_signal(direction, srsi_now, rsi_now, reason, price, barrier)
         if DRY_RUN:
-            print(f"  {DIM}[DRY RUN] Would place {direction} trade with barrier {barrier}{RST}")
+            print(f"  {DIM}[DRY RUN] Would place {direction} trade with barrier {barrier} (mode={barrier_mode}){RST}")
         else:
-            await place_trade(ws, direction, barrier)
+            await place_trade(ws, direction, barrier, barrier_mode=barrier_mode)
         return now
 
     return last_trade_time
