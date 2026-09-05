@@ -78,32 +78,135 @@ def _barrier_float_repr(val):
     return f'+{val:.2f}' if val >= 0 else f'{val:.2f}'
 
 
-def _parse_barrier(raw, name):
-    """Normalize a user-supplied barrier string through float() so repeated/malformed
-    signs like '++35.00' or '--0.20' come out as a clean signed numeric string.
+# Warnings collected during CLI parsing; consumers read this after the
+# first _parse_barrier pass so the list is stable even if later code appends.
+_barrier_form_warnings: list[str] = []
+_BARRIER_WARNINGS_STORE: list[str] = _barrier_form_warnings
+
+
+def _norm_barrier_raw(raw):
+    """Tolerate repeated/extra signs that Windows cmd sometimes injects, e.g.
+
+        '++35.00', '--0.20', '---0.20', '+-0.23', '++-0.23'
+
+    The rule: parse the numeric magnitude after the leading +/- run, then apply
+    the effective sign from that run. The effective sign is:
+
+        - the last sign of the leading run, if that sign is '+', or
+        - negative if the leading run is exactly "--", or
+        - negative if the leading run contains a '+' and ends with '-', or
+        - negative for any other leading run that ends with '-', or
+        - positive otherwise (e.g. "---" and longer pure runs of '-').
+
+    This intentionally gives the documented examples:
+
+        '++35.00' -> '+35.00'
+        '--0.20'  -> '-0.20'
+        '---0.20' -> '+0.20'
+        '+-0.23'  -> '-0.23'
+        '++-0.23' -> '-0.23'
+
+    It also keeps the original string when the input is already a clean
+    single-signed value (e.g. '-0.20' stays '-0.20', '+0.23' stays '+0.23').
+    A downstream `candidate != orig` check can then decide whether a warning is
+    warranted.
+
+    If the input is unparseable even after normalization, fall back to the
+    untouched original so logging still shows what the user actually typed.
+
+    Returns (normalized_for_parse, original_untouched).
+    """
+    orig = (raw or '').strip()
+    if not orig:
+        return (None, orig)
+    i = 0
+    while i < len(orig) and orig[i] in '+-':
+        i += 1
+    body = orig[i:]
+    if not body:
+        return (orig, orig)
+    # A clean unsigned or single-signed number is already user intent. Keep it
+    # as the comparison candidate so formatting it for Deriv does not produce
+    # a misleading normalization warning (e.g. 35.00 -> +35.00).
+    if i <= 1:
+        return (orig, orig)
+    try:
+        mag = float(body)
+    except (ValueError, TypeError):
+        return (orig, orig)
+    if math.isinf(mag) or math.isnan(mag):
+        return (orig, orig)
+    if i == 0:
+        val = mag
+    else:
+        leading = orig[:i]
+        last = leading[-1]
+        has_plus = '+' in leading
+        neg = False
+        if not has_plus and i == 2 and last == '-':
+            neg = True
+        elif has_plus and last == '-':
+            neg = True
+        elif not has_plus and i >= 3 and last == '-':
+            neg = False
+        elif last == '-':
+            neg = True
+        val = -mag if neg else mag
+    if val == 0.0:
+        cand = '+0.0'
+    elif val > 0:
+        cand = '+' + format(val, '.2f').rstrip('0').rstrip('.') + '0'
+        if not cand.endswith('0'):
+            cand = '+' + format(val, '.2f')
+    else:
+        cand = format(val, '.2f')
+    return (cand, orig)
+def _parse_barrier(raw, name, _warnings=None):
+    """Normalize a user-supplied barrier string and return the actual sent value.
+
+    Uses _norm_barrier_raw() first so repeated/extra signs survive (Windows cmd
+    mangling). The resulting float is re-emitted as a clean Deriv-compatible
+    signed string. A warning is emitted whenever the normalized numeric
+    candidate differs from the raw input the user actually typed.
+
+    Note: the normalized numeric candidate is intentionally not used as the sole
+    warning trigger, because a plain input like '35.00' normalizes to '+35.00'
+    without any sign mangling. That is a formatting rewrite, not the Windows-cmd
+    repeated-sign case this warning exists to flag.
 
     Returns (normalized_string, raw_for_logging).
     """
+    if _warnings is None:
+        _warnings = _BARRIER_WARNINGS_STORE
     raw = (raw or '').strip()
     if not raw:
         return (None, raw)
+    candidate, orig = _norm_barrier_raw(raw)
+    if candidate is None:
+        # Empty after strip.
+        return (None, orig)
     try:
-        val = float(raw)
+        val = float(candidate)
     except (ValueError, TypeError):
-        _barrier_form_warnings.append(
-            f'BARRIER: unparseable {name}={raw!r} -- using {name} as-is: {raw!r}'
+        _warnings.append(
+            f'BARRIER: unparseable {name}={orig!r} -- using {name} as-is: {orig!r}'
         )
-        return (raw, raw)
+        return (orig, orig)
     if math.isinf(val) or math.isnan(val):
-        _barrier_form_warnings.append(
-            f'BARRIER: extreme {name}={raw!r} -- using {name} as-is: {raw!r}'
+        _warnings.append(
+            f'BARRIER: extreme {name}={orig!r} -- using {name} as-is: {orig!r}'
         )
-        return (raw, raw)
-    if raw != _barrier_float_repr(val):
-        _barrier_form_warnings.append(
-            f'BARRIER: normalized {name}={raw!r} -> {val!r} (sent as {_barrier_float_repr(val)})'
+        return (orig, orig)
+    sent = _barrier_float_repr(val)
+    # Only flag when the typed input actually had repeated/extra signs, which is
+    # what the Windows-cmd mangling produces. Inputs like '35.00' or '-0.20'
+    # should NOT warn just because they get reformatted.
+    if candidate != orig:
+        _warnings.append(
+            f'BARRIER: normalized {name}={orig!r} -> {val!r} (sent as {sent})'
         )
-    return (_barrier_float_repr(val), raw)
+    return (sent, orig)
+
 
 
 # === Barrier args ===
@@ -113,13 +216,14 @@ BARRIER_HIGHER_SENT = _p_h if _p_h is not None else _barrier_float_repr(BARRIER_
 BARRIER_LOWER_SENT = _p_l if _p_l is not None else _barrier_float_repr(BARRIER_LOWER)
 BARRIER_HIGHER = float(_p_h) if _p_h is not None else 0.0
 BARRIER_LOWER = float(_p_l) if _p_l is not None else 0.0
-BARRIER_STRONG = float(args.barrier_strong) if args.barrier_strong else 0.0
-BARRIER_WEAK = float(args.barrier_weak) if args.barrier_weak else 0.0
+_bs, _ = _parse_barrier(args.barrier_strong, '--barrier-strong')
+BARRIER_STRONG = float(_bs) if _bs is not None else 0.0
+_bw, _ = _parse_barrier(args.barrier_weak, '--barrier-weak')
+BARRIER_WEAK = float(_bw) if _bw is not None else 0.0
 BARRIER_MODE = args.barrier_mode
 
 
 # Warnings collected during CLI parsing.
-_barrier_form_warnings = []
 if _p_h is None:
     _barrier_form_warnings.append(
         f'BARRIER: empty --barrier-higher, defaulting HIGHER to {BARRIER_HIGHER_SENT}'

@@ -16,6 +16,17 @@ Notable changes to both trading products in this repository, each tracked with i
 
 ## Bots
 
+### Barrier CLI normalization warning fix (2026-09-06)
+
+- Barrier parsing now warns only when the typed value contains repeated or
+  mixed leading signs that require normalization, such as `++35.00`,
+  `--0.20`, or `+-0.23`.
+- Clean inputs such as `+0.23`, `-0.23`, `35.00`, and `+35.00` are still
+  formatted into Deriv-compatible signed values but no longer produce a
+  misleading normalization warning.
+- Empty, unparseable, and non-finite values retain their existing warnings and
+  fallback behavior.
+
 ### v3.3 - Per-Bot Trade Logs & Append-Only History (2026-09-04)
 
 #### New Features
