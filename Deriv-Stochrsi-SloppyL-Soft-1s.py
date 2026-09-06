@@ -48,6 +48,24 @@ symbol = requested_symbol(sys.argv[1:])
 os.environ["USE_BRIDGE"] = "0"
 os.environ["ACCOUNT_TYPE"] = "demo"
 os.environ["SYMBOL"] = symbol
+# One-second ticks are much noisier than the normal volatility feeds. Keep
+# this profile independent by using a slower indicator, a longer contract,
+# and stronger reversal confirmation. Every value remains overridable through
+# the SOFT_1S_* environment variables for market-by-market experiments.
+profile_defaults = {
+    "DURATION": "10",
+    "SOFT_RSI_PERIOD": "21",
+    "SOFT_STOCH_PERIOD": "21",
+    "SOFT_RAW_FLAT_LOOKBACK": "5",
+    "SOFT_RAW_BREAKOUT_MIN": "0.20",
+    "SOFT_SHORT_BREAKOUT_MIN": "0.25",
+    "SOFT_MOMENTUM_CONFIRM_TICKS": "3",
+    "SOFT_RSI_LONG_MAX": "48",
+    "SOFT_RSI_LONG_MIN": "30",
+    "SOFT_RSI_SHORT_MIN": "65",
+}
+for key, value in profile_defaults.items():
+    os.environ[key] = os.environ.get("SOFT_1S_" + key, value)
 # Keep 1-second experiments independent even when the shell still exports a
 # generic TRADE_LOG_FILE from a standard or multi-market run.
 os.environ["TRADE_LOG_FILE"] = os.environ.get(

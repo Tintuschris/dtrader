@@ -49,6 +49,13 @@ It does not inherit generic `SYMBOL` or `TRADE_LOG_FILE` values left by another
 bot. Use `SOFT_1S_SYMBOL` or `SOFT_1S_TRADE_LOG_FILE` only when you need to
 override those profile defaults without CLI options.
 
+The profile also uses independent 1-second defaults: 10-tick duration, RSI and
+StochRSI periods of 21, a 5-tick flat zone, stronger SRSI breakout thresholds
+(`0.20` HIGHER / `0.25` LOWER), three-tick momentum confirmation, RSI
+`30–48` for HIGHER, and RSI `65+` for LOWER. These are an experimental demo
+profile, not a claim of profitability. Override any one with the matching
+`SOFT_1S_<SETTING>` variable, for example `SOFT_1S_DURATION=5`.
+
 ```bash
 USE_BRIDGE=0 ACCOUNT_TYPE=demo PAT_TOKEN="YOUR_PAT_TOKEN" DERIV_APP_ID="YOUR_APP_ID" python Deriv-Stochrsi-SloppyL-Soft-1s.py
 ```

@@ -247,8 +247,8 @@ if _p_l is None:
     )
 DURATION = args.duration
 DURATION_UNIT = "t"
-RSI_PERIOD = 14
-STOCH_PERIOD = 14
+RSI_PERIOD = int(os.environ.get("SOFT_RSI_PERIOD", "14"))
+STOCH_PERIOD = int(os.environ.get("SOFT_STOCH_PERIOD", "14"))
 K_SMOOTH = 3
 D_SMOOTH = 3
 LEVEL_LOW = 0.3
@@ -260,8 +260,8 @@ BREAKOUT_MIN = 0.12
 # === RAW StochRSI L-shape detection (replaces SMA-smoothed K detection) ===
 RAW_LEVEL_LOW = 0.20
 RAW_LEVEL_HIGH = 0.80
-RAW_FLAT_LOOKBACK = 3
-RAW_FLAT_THRESHOLD = 0.08
+RAW_FLAT_LOOKBACK = int(os.environ.get("SOFT_RAW_FLAT_LOOKBACK", "3"))
+RAW_FLAT_THRESHOLD = float(os.environ.get("SOFT_RAW_FLAT_THRESHOLD", "0.08"))
 RAW_BREAKOUT_MIN = float(os.environ.get("SOFT_RAW_BREAKOUT_MIN", "0.12"))
 # SHORT reversals were the weakest near-miss cohort in the eased run. Require
 # a little more SRSI movement for LOWER entries without changing the L-shape.
@@ -704,6 +704,10 @@ def print_trade_progress(current, total, entry_price, barrier):
     except Exception: current = 0
     try: total = int(total)
     except Exception: total = 1
+    try: entry_price = float(entry_price)
+    except (TypeError, ValueError): entry_price = 0.0
+    try: barrier = float(barrier)
+    except (TypeError, ValueError): barrier = barrier
     pct = current / total if total > 0 else 0
     bar_w = 20
     filled = int(pct * bar_w)

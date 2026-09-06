@@ -40,6 +40,11 @@ Notable changes to both trading products in this repository, each tracked with i
 - The multi-market launcher now presents a compact live event board for placed
   and settled contracts while preserving each worker's complete dashboard in
   its own log file.
+- Fixed Soft-bot settlement-progress formatting when Deriv sends numeric fields
+  as strings, preventing repeated worker reconnects during open contracts.
+- The 1-second profile now has an independent slower/stricter experimental
+  profile (10 ticks, 21-period indicators, stronger breakout and momentum
+  confirmation) with `SOFT_1S_*` overrides.
 
 ### Barrier CLI normalization warning fix (2026-09-06)
 
