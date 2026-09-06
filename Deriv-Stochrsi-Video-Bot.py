@@ -23,6 +23,8 @@ parser.add_argument("-s", "--symbol", default=os.environ.get("SYMBOL", "R_25"),
                     help="Deriv symbol (default: R_25)")
 parser.add_argument("--stake", type=float, default=float(os.environ.get("STAKE", "1")),
                     help="Stake amount in USD (default: 1)")
+parser.add_argument("--min-stake", type=float, default=float(os.environ.get("MIN_STAKE", "0.15")),
+                    help="Minimum stake floor for balance scaling (default: 0.15)")
 parser.add_argument("--duration", type=int, default=int(os.environ.get("DURATION", "5")),
                     help="Contract duration in ticks (default: 5)")
 parser.add_argument("--barrier-higher", default=os.environ.get("BARRIER_HIGHER", "-0.23"),
@@ -84,10 +86,12 @@ parser.add_argument("--adaptive-breakout-min", type=float,
 parser.add_argument("--entry-delay", type=int,
                     default=int(os.environ.get("FILTER_ENTRY_DELAY", "2")),
                     help="Ticks to wait for confirmation (default: 2)")
-parser.add_argument("--barrier-strong", default=os.environ.get("BARRIER_STRONG", "-0.20"),
-                    help="Barrier for strong signals (default: -0.20)")
-parser.add_argument("--barrier-weak", default=os.environ.get("BARRIER_WEAK", "-0.30"),
-                    help="Barrier for weaker signals (default: -0.30)")
+parser.add_argument("--barrier-strong", default=os.environ.get("BARRIER_STRONG", "-0.40"),
+                    help="Barrier for strong signals (default: -0.40)")
+parser.add_argument("--barrier-weak", default=os.environ.get("BARRIER_WEAK", "-0.50"),
+                    help="Barrier for weaker signals (default: -0.50)")
+parser.add_argument("--barrier-extreme", default=os.environ.get("BARRIER_EXTREME", "0.30"),
+                    help="Barrier offset for extreme signals magnitude only (default: 0.30)")
 parser.add_argument("--barrier-scale", choices=["recent", "fixed"],
                     default=os.environ.get("BARRIER_SCALE_MODE", "recent"),
                     help="Scale barrier from recent R_25 tick movement (default: recent)")
@@ -122,6 +126,9 @@ parser.add_argument("--tick-gate-macro", type=int, default=int(os.environ.get("F
 parser.add_argument("--min-balance", type=float,
                     default=float(os.environ.get("MIN_BALANCE", "0")),
                     help="Pause trading when account balance falls below this amount (default: 0 = disabled)")
+parser.add_argument("--max-session-loss", type=float,
+                    default=float(os.environ.get("MAX_SESSION_LOSS", "5.0")),
+                    help="Pause trading after losing this much in the session (default: 5.0)")
 args = parser.parse_args()
 
 
@@ -186,6 +193,9 @@ FILTER_TICK_GATE_MACRO = args.tick_gate_macro   # Min opposite ticks in last 10
 # === Balance guard ===
 # Pause trading when the account balance drops below this threshold (0 = disabled).
 MIN_BALANCE = args.min_balance
+MIN_STAKE = args.min_stake
+BARRIER_EXTREME = args.barrier_extreme
+MAX_SESSION_LOSS = args.max_session_loss
 
 # Reconnection
 MAX_RECONNECT_ATTEMPTS = 10
@@ -242,7 +252,9 @@ _consecutive_losses = 0
 _loss_cooldown_until = 0.0
 _cooldown_multiplier = 1.0  # Escalates after losses, resets on win
 _balance_known = False            # True once a real numeric balance has been received
-_balance_guard_triggered = False  # True while trading is paused by the balance guard
+_balance_guard_triggered = False
+_session_pnl = 0.0
+_session_halt_until = 0.0  # True while trading is paused by the balance guard
 # _trade_log is loaded from the trade log file at import (persistent across runs)
 _last_displayed_cid = None
 _pending_signal = None
@@ -646,10 +658,12 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
             stats["wins"] += 1
             _consecutive_losses = 0
             _cooldown_multiplier = 1.0  # Reset on win
+            _session_pnl += profit
         else:
             stats["losses"] += 1
             _consecutive_losses += 1
-            _cooldown_multiplier = min(4.0, _cooldown_multiplier + 0.5)  # Escalate: 1.0→1.5→2.0→2.5→...
+            _cooldown_multiplier = min(4.0, _cooldown_multiplier + 0.5)
+            _session_pnl += profit  # Escalate: 1.0→1.5→2.0→2.5→...
     wr = (stats["wins"] / stats["trades"] * 100) if stats["trades"] > 0 else 0
 
     entry_spot = poc.get("entry_spot", poc.get("entry_tick", entry_price))
@@ -1082,7 +1096,7 @@ def _effective_stake():
     elif bal >= 1.0:
         return round(STAKE * 0.40, 2)  # 40% stake
     else:
-        return 0.15               # Minimum viable stake
+        return MIN_STAKE          # Configurable minimum
 
 
 async def place_trade(ws, direction, barrier):
@@ -1154,6 +1168,23 @@ async def process_tick(ws, tick_data, last_trade_time):
             print(f"  {GRN}+ Balance ${stats['balance']:.2f} recovered above ${MIN_BALANCE:.2f} - trading resumed{RST}")
             _balance_guard_triggered = False
 
+    # === SESSION P&L HALT ===
+    if MAX_SESSION_LOSS > 0 and _session_pnl < -MAX_SESSION_LOSS:
+        if _session_halt_until == 0:
+            _session_halt_until = time.time() + 300
+            print(f"  {RED}X SESSION HALT: Lost ${abs(_session_pnl):.2f} (cap: ${MAX_SESSION_LOSS:.2f}) -- pausing 5 min{RST}")
+        remaining = int(_session_halt_until - time.time())
+        if remaining > 0:
+            if not _in_cooldown:
+                print(f"  {DIM}Session halt: {remaining}s remaining{RST}")
+                _in_cooldown = True
+            reset_l_state()
+            return last_trade_time
+        else:
+            print(f"  {GRN}+ Session halt expired -- resuming{RST}")
+            _session_pnl = 0.0
+            _session_halt_until = 0.0
+            _in_cooldown = False
 
     # === ENTRY DELAY PROCESSING ===
     if _pending_signal is not None:
@@ -1385,32 +1416,40 @@ async def process_tick(ws, tick_data, last_trade_time):
 
 
 def _calc_barrier(direction, rsi):
-    """Three-tier RSI barrier: Extreme / Strong / Weak, then scale to recent movement.
+    """Three-tier RSI barrier: Extreme / Strong / Weak, scaled to recent movement.
+    Safety-first defaults. All tiers overridable via CLI."""
+    try:
+        extreme_abs = abs(float(BARRIER_EXTREME))
+    except (TypeError, ValueError):
+        extreme_abs = 0.30
+    try:
+        strong_abs = abs(float(BARRIER_STRONG))
+    except (TypeError, ValueError):
+        strong_abs = 0.40
+    try:
+        weak_abs = abs(float(BARRIER_WEAK))
+    except (TypeError, ValueError):
+        weak_abs = 0.50
 
-    Tier mapping (HIGHER example — LOWER mirrors):
-      RSI < 20  → Extreme  → -0.15  (tightest, highest payout ~$1.60)
-      RSI < 30  → Strong   → -0.20  (default strong)
-      RSI < 35  → Weak     → -0.35  (wider, more room for borderline signals)
-    """
     if direction == "higher":
         if rsi <= 20:
-            base = "-0.15"   # Extreme oversold
+            base = f-"{extreme_abs:.2f}"
             tier = "extreme"
         elif rsi <= 30:
-            base = BARRIER_HIGHER  # Strong oversold (default -0.20)
+            base = f-"{strong_abs:.2f}"
             tier = "strong"
         else:
-            base = "-0.35"   # Weak oversold — wider barrier for safety
+            base = f-"{weak_abs:.2f}"
             tier = "weak"
     else:
         if rsi >= 85:
-            base = "+0.15"   # Extreme overbought
+            base = f+"{extreme_abs:.2f}"
             tier = "extreme"
         elif rsi >= 75:
-            base = "+0.20"   # Strong overbought
+            base = f+"{strong_abs:.2f}"
             tier = "strong"
         else:
-            base = "+0.35"   # Weak overbought — wider barrier for safety
+            base = f+"{weak_abs:.2f}"
             tier = "weak"
 
     try:
@@ -1419,6 +1458,7 @@ def _calc_barrier(direction, rsi):
         return base
 
     # Scale to recent market movement using adaptive variance-based multiplier
+# Scale to recent market movement using adaptive variance-based multiplier
     if BARRIER_SCALE_MODE == "fixed" or len(tick_history) < BARRIER_VOL_LOOKBACK:
         scaled_abs = base_abs
     else:
