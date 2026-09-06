@@ -25,10 +25,10 @@ parser.add_argument("--stake", type=float, default=float(os.environ.get("STAKE",
                     help="Stake amount in USD (default: 1)")
 parser.add_argument("--duration", type=int, default=int(os.environ.get("DURATION", "5")),
                     help="Contract duration in ticks (default: 5)")
-parser.add_argument("--barrier-higher", default=os.environ.get("BARRIER_HIGHER", "-0.23"),
-                    help="Barrier for HIGHER contract (default: -0.23)")
-parser.add_argument("--barrier-lower", default=os.environ.get("BARRIER_LOWER", "+0.23"),
-                    help="Barrier for LOWER contract (default: +0.23)")
+parser.add_argument("--barrier-higher", default=os.environ.get("BARRIER_HIGHER", "-0.40"),
+                    help="Barrier for HIGHER contract (default: -0.40)")
+parser.add_argument("--barrier-lower", default=os.environ.get("BARRIER_LOWER", "+0.40"),
+                    help="Barrier for LOWER contract (default: +0.40)")
 parser.add_argument("--account", default=os.environ.get("ACCOUNT_TYPE", "demo"),
                     choices=["demo", "real"],
                     help="Account type (default: demo)")
@@ -249,7 +249,10 @@ RAW_LEVEL_LOW = 0.20
 RAW_LEVEL_HIGH = 0.80
 RAW_FLAT_LOOKBACK = 3
 RAW_FLAT_THRESHOLD = 0.08
-RAW_BREAKOUT_MIN = 0.10
+RAW_BREAKOUT_MIN = float(os.environ.get("SOFT_RAW_BREAKOUT_MIN", "0.12"))
+# SHORT reversals were the weakest near-miss cohort in the eased run. Require
+# a little more SRSI movement for LOWER entries without changing the L-shape.
+RAW_SHORT_BREAKOUT_MIN = float(os.environ.get("SOFT_SHORT_BREAKOUT_MIN", "0.15"))
 RAW_SLOPE_MIN = -0.15
 RAW_SLOPE_MAX = 0.15
 
@@ -258,7 +261,7 @@ RAW_SLOPE_MAX = 0.15
 # Loss policy (same as main bot): pause after the first loss for LOSS_COOLDOWN_SECONDS.
 MAX_CONSECUTIVE_LOSSES = int(os.environ.get("SOFT_MAX_CONSECUTIVE_LOSSES", "1"))
 LOSS_COOLDOWN_SECONDS = int(os.environ.get("SOFT_LOSS_COOLDOWN_SECONDS", "60"))
-RSI_LONG_MAX = float(os.environ.get("SOFT_RSI_LONG_MAX", "45"))
+RSI_LONG_MAX = float(os.environ.get("SOFT_RSI_LONG_MAX", "48"))
 RSI_LONG_MIN = float(os.environ.get("SOFT_RSI_LONG_MIN", "30"))  # RSI floor for LONG: skip knife-catching deep oversold
 #   (raised 20->30: the RSI 20-30 band ran 3W/2L, WR 60%, PnL -1.31 across the 71-trade demo sample)
 # LONG dip-stall gate: only buy the dip once it has stopped falling.
@@ -266,7 +269,7 @@ RSI_LONG_MIN = float(os.environ.get("SOFT_RSI_LONG_MIN", "30"))  # RSI floor for
 #   Disable by setting SOFT_LONG_STALL_MAX_DOWNS >= SOFT_LONG_STALL_LOOKBACK (e.g. 99).
 LONG_STALL_LOOKBACK = int(os.environ.get("SOFT_LONG_STALL_LOOKBACK", "4"))
 LONG_STALL_MAX_DOWNS = int(os.environ.get("SOFT_LONG_STALL_MAX_DOWNS", "1"))
-RSI_SHORT_MIN = float(os.environ.get("SOFT_RSI_SHORT_MIN", "65"))
+RSI_SHORT_MIN = float(os.environ.get("SOFT_RSI_SHORT_MIN", "62"))
 
 # === Trend filters ===
 # Skip signals when price is trending strongly against the trade direction.
@@ -483,7 +486,7 @@ def detect_l_shape(srsi_now, srsi_prev):
         return None
 
     if _l_phase == "ready_short":
-        if delta <= -RAW_BREAKOUT_MIN:
+        if delta <= -RAW_SHORT_BREAKOUT_MIN:
             flat_avg = _l_flat_val_sum / _l_flat_count
             reason = (f"SRSI rose from {_l_slope_start_val:.3f} to {flat_avg:.3f} "
                      f"(flat {_l_flat_count}t), broke DOWN {delta:.3f}")
@@ -765,8 +768,15 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
         exit_spot = exit_price
 
     bv = float(barrier_val)
+    # Deriv's settled POC contains the absolute barrier actually used by the
+    # contract. Prefer it over reconstructing from the relative CLI offset so
+    # the displayed gap and persisted analysis match the exchange settlement.
+    try:
+        poc_barrier = float(poc.get("barrier"))
+    except (TypeError, ValueError):
+        poc_barrier = None
+    barrier_level = poc_barrier if poc_barrier is not None else entry_spot + bv
     if direction == "higher":
-        barrier_level = entry_spot + bv
         won = exit_spot > barrier_level
         condition = "Exit ({:.4f}) > Barrier ({:.4f})".format(exit_spot, barrier_level)
     else:
@@ -1036,7 +1046,7 @@ def log_trade_signal(direction, srsi_val, rsi_val, reason, price, barrier):
     save_trade_log()
 
 
-def log_trade_result(contract_id, status, profit, entry_spot, exit_spot, payout, balance):
+def log_trade_result(contract_id, status, profit, entry_spot, exit_spot, payout, balance, barrier_level=None):
     """Attach the settled result to the most recent pending signal."""
     for entry in reversed(_trade_log):
         if entry.get("epoch", 0) >= SESSION_START_TS and entry["result"]["status"] == "pending":
@@ -1048,6 +1058,7 @@ def log_trade_result(contract_id, status, profit, entry_spot, exit_spot, payout,
                 "profit": profit,
                 "payout": payout,
                 "balance": balance,
+                "barrier_level": barrier_level,
                 "settled_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             })
             break
@@ -1459,8 +1470,14 @@ async def handle_message(ws, data, last_trade_time):
                     entry_f = float(entry_price) if entry_price else 0
                     exit_f = float(exit_p) if exit_p else 0
                     print_trade_result_analyzed(status, profit_f, entry_f, exit_f, direction, cid, barrier_val, poc)
+                    settled_barrier = None
+                    try:
+                        settled_barrier = float(poc.get("barrier")) if poc.get("barrier") is not None else None
+                    except (TypeError, ValueError):
+                        pass
                     log_trade_result(cid, status, profit_f, entry_f, exit_f,
-                                     float(poc.get("payout", 0) or 0), stats["balance"])
+                                     float(poc.get("payout", 0) or 0), stats["balance"],
+                                     barrier_level=settled_barrier)
                 except Exception as e:
                     print(f"  {RED}X Trade result error: {e}{RST}")
                     print(f"  {DIM}  status={status} profit={profit} entry={entry_price} exit={exit_p}{RST}")

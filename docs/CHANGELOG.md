@@ -27,6 +27,19 @@ Notable changes to both trading products in this repository, each tracked with i
 - Empty, unparseable, and non-finite values retain their existing warnings and
   fallback behavior.
 
+### Soft bot eased-entry follow-up (2026-09-06)
+
+- The Soft bot defaults now match the tested eased configuration: RSI `30–48`
+  for HIGHER signals, RSI `62+` for LOWER signals, and fixed barriers
+  `-0.40/+0.40`.
+- HIGHER signals require at least `0.12` raw SRSI breakout; LOWER signals use a
+  stricter `0.15` minimum because weak SHORT reversals were the most fragile
+  part of the eased four-hour run. Both thresholds remain configurable through
+  `SOFT_RAW_BREAKOUT_MIN` and `SOFT_SHORT_BREAKOUT_MIN`.
+- Settled trade analysis now prefers Deriv's absolute barrier from the settled
+  contract payload and persists it as `result.barrier_level`, preventing a
+  relative-offset reconstruction from hiding settlement discrepancies.
+
 ### v3.3 - Per-Bot Trade Logs & Append-Only History (2026-09-04)
 
 #### New Features
