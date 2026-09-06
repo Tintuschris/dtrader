@@ -16,6 +16,16 @@ Notable changes to both trading products in this repository, each tracked with i
 
 ## Bots
 
+### Demo multi-market and 1-second launch profiles (2026-09-06)
+
+- Added `run_soft_multi_demo.py`, which starts isolated, demo-only Soft-bot
+  workers for `R_25`, `R_75`, and `R_100`. Each worker has a separate trade
+  history JSON file and terminal-output log.
+- Added `Deriv-Stochrsi-SloppyL-Soft-1s.py`, a demo-only 1-second-market
+  profile that defaults to `1HZ100V` and writes to an independent log.
+- Account selection now fails closed if the requested demo or real account type
+  is unavailable; it no longer silently falls back to the first account.
+
 ### Barrier CLI normalization warning fix (2026-09-06)
 
 - Barrier parsing now warns only when the typed value contains repeated or

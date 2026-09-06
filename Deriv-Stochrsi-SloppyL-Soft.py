@@ -69,7 +69,9 @@ BRIDGE_URL = os.environ.get("DTRADER_BRIDGE_URL", "http://localhost:3000")
 USE_BRIDGE = os.environ.get("USE_BRIDGE", "1") == "1"
 PAT_TOKEN = os.environ.get("PAT_TOKEN", "")
 APP_ID = os.environ.get("DERIV_APP_ID", "")
-ACCOUNT_TYPE = os.environ.get("ACCOUNT_TYPE", "demo")
+# Use the parsed argument so an explicit --account value is honoured. The
+# multi-market and 1-second demo launchers pass --account demo deliberately.
+ACCOUNT_TYPE = args.account
 SYMBOL = args.symbol
 STAKE = args.stake
 CURRENCY = "USD"
@@ -1127,8 +1129,10 @@ def select_account(accounts_data):
         if ACCOUNT_TYPE == "real" and not is_demo:
             selected = acc
             break
-    if not selected and accounts:
-        selected = accounts[0]
+    # Never fall back to a different account type. In particular, a requested
+    # demo run must fail closed rather than silently selecting a real account.
+    if not selected:
+        return None
     return selected.get("account_id") or selected.get("accountId") or selected.get("id") or selected.get("loginid")
 
 
