@@ -157,6 +157,7 @@ export type TradingContextValue = {
   buy: (id: string, price: number) => Promise<any>;
   sell: (id: string) => void;
   subscribeProposal: (params: any) => void;
+  refreshProposal: () => void;
   clearError: () => void;
   lastError: string | null;
   authenticated: boolean;
@@ -272,6 +273,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     connect: connectTrading,
     propose,
     subscribeProposal,
+    refreshProposal,
     buy,
     buyBot,
     sell,
@@ -1044,7 +1046,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
     balance, balanceCurrency, connectionStatus, reconnectAttempt, lastResult, clearLastResult,
     tradeHistory, currentProposal, proposalRef, proposalLoading, activeContract, buy, sell,
     setMarkets, authLoading, resolvedTrades,
-    subscribeProposal, clearError, lastError, authenticated, login, logout,
+    subscribeProposal, refreshProposal, clearError, lastError, authenticated, login, logout,
     fetchProfitTable, fetchPortfolio, botApi, wsAccounts, propose, buyBot, subscribeToContract, unsubscribeFromContract,
   };
 

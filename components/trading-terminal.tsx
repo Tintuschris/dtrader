@@ -109,7 +109,7 @@ function TradingTerminalInner() {
     subOptions, needsBarrier, isDemo, stakeNum, activeAccount,
     handlePlaceTrade, handleUseRecommendation, handleContractGroupChange, handleHedge,
     balance, balanceCurrency, connectionStatus, lastResult, clearLastResult,
-    tradeHistory, currentProposal, proposalRef, proposalLoading, buy, sell,
+    tradeHistory, currentProposal, proposalRef, proposalLoading, refreshProposal, buy, sell,
     clearError, lastError, authenticated, login, logout,
     fetchProfitTable, fetchPortfolio, botApi, wsAccounts, resolvedTrades,
     activeContract, setMarkets, loadAccounts, authLoading, isBuying, setIsBuying,
@@ -532,6 +532,9 @@ if (!isMounted) {
                 <div className="payout-rate">
                   {currentProposal ? "+" + ((currentProposal.payout - currentProposal.ask_price) / currentProposal.ask_price * 100).toFixed(1) + "%" : proposalRef.current ? "+" + ((proposalRef.current.payout - proposalRef.current.ask_price) / proposalRef.current.ask_price * 100).toFixed(1) + "%" : proposalLoading ? " " : "—"}
                 </div>
+                {!currentProposal && !proposalRef.current && !proposalLoading && connectionStatus === "connected" && (
+                  <button className="payout-refresh" onClick={refreshProposal} type="button">Refresh price</button>
+                )}
               </div>
               {/* Active contract status */}
               {activeContract && (

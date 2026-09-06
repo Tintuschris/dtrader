@@ -119,6 +119,8 @@ const BASE_DELAY = 1000;
 const MAX_DELAY = 30000;
 const PING_INTERVAL_MS = 15_000; // Keep WebSocket alive
 const PROPOSAL_MAX_AGE_MS = 20_000; // A subscribed proposal older than this is stale
+const PROPOSAL_RECOVERY_INTERVAL_MS = 2_000;
+const PROPOSAL_RECOVERY_AFTER_MS = 6_000;
 const WS_DROP_LOG_KEY = "freebuff_ws_drops"; // capped ring buffer of socket closes
 const WS_DROP_LOG_MAX = 50;
 // Proactively close + reconnect when no message of any kind (incl. ping
@@ -155,6 +157,8 @@ export function useDerivTrading() {
   const lastProposalParamsRef = useRef<ProposalRequest | null>(null);
   const connGuard = useRef(createConnGuard());
   const proposalTimestampRef = useRef(0);
+  const proposalRequestedAtRef = useRef(0);
+  const proposalRecoveryAtRef = useRef(0);
   const reconcileOnOpenRef = useRef(false);
   const activeContractRef = useRef<OpenContract | null>(null);
   const connectedAtRef = useRef<number | null>(null); // when the current socket opened
@@ -410,6 +414,7 @@ export function useDerivTrading() {
               };
               proposalRef.current = proposal;
               proposalTimestampRef.current = Date.now();
+              proposalRequestedAtRef.current = proposalTimestampRef.current;
               // Only update React state if values actually changed to avoid
               // unnecessary re-renders that cause payout flickering
               setCurrentProposal((prev) => {
@@ -446,6 +451,8 @@ export function useDerivTrading() {
                 ?? (code ? `Proposal error: ${code}` : undefined)
                 ?? "Proposal failed — check contract parameters";
               console.error("Proposal error:", code, message, "full:", JSON.stringify(msg));
+              proposalRef.current = null;
+              proposalTimestampRef.current = 0;
               setProposalLoading(false);
               setCurrentProposal(null);
               const resolve = reqId ? pendingProposals.current.get(reqId) : undefined;
@@ -709,6 +716,7 @@ export function useDerivTrading() {
           // ready, even if the UI still shows the old price.
           proposalRef.current = null;
           proposalTimestampRef.current = 0;
+          proposalRequestedAtRef.current = 0;
           setCurrentProposal(null);
           const code = event.code;
           const reason = event.reason;
@@ -809,6 +817,7 @@ export function useDerivTrading() {
         proposalTimestampRef.current = 0;
         setCurrentProposal(null);
       }
+      proposalRequestedAtRef.current = Date.now();
       setProposalLoading(true);
       setLastError(null);
       const subMsg: Record<string, unknown> = {
@@ -825,7 +834,12 @@ export function useDerivTrading() {
       if (req.barrier !== undefined) {
         subMsg.barrier = req.barrier;
       }
-      send(subMsg);
+      const requestId = send(subMsg);
+      if (!requestId) {
+        proposalRequestedAtRef.current = 0;
+        setProposalLoading(false);
+        setLastError("Trading connection interrupted — refreshing pricing");
+      }
     },
     [send],
   );
@@ -841,6 +855,7 @@ export function useDerivTrading() {
     }
     proposalRef.current = null;
     proposalTimestampRef.current = 0;
+    proposalRequestedAtRef.current = Date.now();
     setCurrentProposal(null);
     const subMsg: Record<string, unknown> = {
       proposal: 1,
@@ -855,8 +870,31 @@ export function useDerivTrading() {
     };
     if (req.barrier !== undefined) subMsg.barrier = req.barrier;
     setProposalLoading(true);
-    send(subMsg);
+    const requestId = send(subMsg);
+    if (!requestId) {
+      proposalRequestedAtRef.current = 0;
+      setProposalLoading(false);
+      setLastError("Trading connection interrupted — waiting for reconnection");
+    }
   }, [send]);
+
+  /* ---- proposal-specific recovery ---- */
+  // Ticks and ping responses can keep the socket alive while the proposal
+  // stream itself has stopped. Recover that narrower failure automatically.
+  useEffect(() => {
+    if (connectionStatus !== "connected") return;
+    const timer = setInterval(() => {
+      if (!lastProposalParamsRef.current || activeContractRef.current) return;
+      const now = Date.now();
+      const lastGood = proposalTimestampRef.current || proposalRequestedAtRef.current;
+      if (!lastGood || now - lastGood < PROPOSAL_RECOVERY_AFTER_MS) return;
+      if (now - proposalRecoveryAtRef.current < PROPOSAL_RECOVERY_AFTER_MS) return;
+      proposalRecoveryAtRef.current = now;
+      console.warn("[WS] Proposal stream stale — refreshing pricing");
+      resubscribeProposal();
+    }, PROPOSAL_RECOVERY_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [connectionStatus, resubscribeProposal]);
 
   // Cleanup subscription on unmount
   useEffect(() => {
@@ -948,6 +986,7 @@ export function useDerivTrading() {
         // expired server-side — refuse it and re-subscribe for fresh pricing.
         if (!isProposalFresh(proposalTimestampRef.current, PROPOSAL_MAX_AGE_MS)) {
           proposalRef.current = null;
+          proposalRequestedAtRef.current = Date.now();
           setCurrentProposal(null);
           setLastError("Trading connection interrupted — refreshing pricing");
           resubscribeProposal();
@@ -1145,6 +1184,7 @@ export function useDerivTrading() {
     connect,
     propose,
     subscribeProposal,
+    refreshProposal: resubscribeProposal,
     buy,
     buyBot,
     sell,
@@ -1161,6 +1201,7 @@ export function useDerivTrading() {
       }
       proposalRef.current = null;
       proposalTimestampRef.current = 0;
+      proposalRequestedAtRef.current = 0;
       setCurrentProposal(null);
       setProposalLoading(false);
     },

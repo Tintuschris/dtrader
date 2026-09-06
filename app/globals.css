@@ -955,3 +955,4 @@
   .scanner-cols{grid-template-columns:1fr}
 }
 .digit-ring.most-frequent{outline:2px solid #f0c040;outline-offset:4px;box-shadow:0 0 0 3px rgba(240,192,64,.16),0 0 16px rgba(240,192,64,.22)}
+.payout-card{gap:12px}.payout-refresh{margin-left:auto;border:1px solid rgba(70,211,189,.35);background:rgba(70,211,189,.08);color:#8de7d9;border-radius:6px;padding:6px 8px;font-size:10px;white-space:nowrap;cursor:pointer}.payout-refresh:hover{background:rgba(70,211,189,.16)}

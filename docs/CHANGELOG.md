@@ -272,6 +272,17 @@ Notable changes to both trading products in this repository, each tracked with i
 
 The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade ticket, and the authenticated Deriv trading WebSocket. Its reliability work is documented in detail in [`docs/web-ws-reliability.md`](web-ws-reliability.md).
 
+### Web v1.5 - Proposal Stream Recovery (2026-09-07)
+
+- Added a proposal-specific watchdog that refreshes payout pricing when the
+  WebSocket is alive but the proposal stream has gone stale.
+- Failed proposal sends and proposal errors now leave loading state cleanly and
+  trigger recovery instead of leaving the Buy button disabled indefinitely.
+- Added a manual `Refresh price` action when the connection is live but fresh
+  contract pricing is unavailable.
+- Buy remains disabled until a fresh proposal is received, preventing stale or
+  incorrectly priced purchases.
+
 ### Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)
 
 #### Trade results
