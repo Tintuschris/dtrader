@@ -25,6 +25,9 @@ Notable changes to both trading products in this repository, each tracked with i
   profile that defaults to `1HZ100V` and writes to an independent log.
 - Account selection now fails closed if the requested demo or real account type
   is unavailable; it no longer silently falls back to the first account.
+- The multi-market launcher now presents a compact live event board for placed
+  and settled contracts while preserving each worker's complete dashboard in
+  its own log file.
 
 ### Barrier CLI normalization warning fix (2026-09-06)
 

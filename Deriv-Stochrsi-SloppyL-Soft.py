@@ -75,6 +75,17 @@ ACCOUNT_TYPE = args.account
 SYMBOL = args.symbol
 STAKE = args.stake
 CURRENCY = "USD"
+EVENT_STREAM = os.environ.get("SOFT_EVENT_STREAM", "0") == "1"
+
+
+def emit_bot_event(event, **details):
+    """Emit one parseable lifecycle event for a supervisor, when requested."""
+    if not EVENT_STREAM:
+        return
+    payload = {"event": event, "symbol": SYMBOL, **details}
+    print("[BOT_EVENT] " + json.dumps(payload, separators=(",", ":")), flush=True)
+
+
 def _barrier_float_repr(val):
     """Deriv-compatible signed barrier string for a numeric value."""
     return f'+{val:.2f}' if val >= 0 else f'{val:.2f}'
@@ -670,6 +681,14 @@ def print_signal(direction, srsi_val, reason, rsi_val=None, barrier=None, barrie
         print(f"  {RED}  Barrier: {bv} | Contract: LOWER | Mode: {mode_str} | Stake: {RST}")
         print(f"  {BLD}{RED}{"="*60}{RST}")
 def print_trade_placed(contract_id, direction, cost, payout):
+    emit_bot_event(
+        "placed",
+        contract_id=str(contract_id),
+        direction=direction,
+        cost=cost,
+        payout=payout,
+        duration_ticks=DURATION,
+    )
     print(f"  {BLD}{YLW}+--- TRADE PLACED --------------------------------+{RST}")
     print(f"  {YLW}|{RST}  Contract:   {BLD}{contract_id}{RST}")
     print(f"  {YLW}|{RST}  Direction:  {BLD}{direction.upper()}{RST}")
@@ -782,12 +801,27 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
         won = exit_spot > barrier_level
         condition = "Exit ({:.4f}) > Barrier ({:.4f})".format(exit_spot, barrier_level)
     else:
-        barrier_level = entry_spot + bv
         won = exit_spot < barrier_level
         condition = "Exit ({:.4f}) < Barrier ({:.4f})".format(exit_spot, barrier_level)
 
     diff = exit_spot - barrier_level
     pct_diff = abs(diff) / entry_spot * 100 if entry_spot else 0
+    try:
+        payout_val = float(poc.get("payout", 0))
+    except Exception:
+        payout_val = 0
+    emit_bot_event(
+        "settled",
+        contract_id=str(contract_id),
+        direction=direction,
+        outcome="cancelled" if is_cancelled else ("won" if is_win else "lost"),
+        profit=profit,
+        payout=payout_val,
+        entry_spot=entry_spot,
+        exit_spot=exit_spot,
+        barrier_level=barrier_level,
+        gap=diff,
+    )
 
     print()
     print("  " + rc + "=" * 60 + RST)
@@ -796,10 +830,6 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
     print("  " + DIM + "|" + RST + "  Contract:   " + BLD + str(contract_id) + RST)
     print("  " + DIM + "|" + RST + "  Direction:  " + BLD + direction.upper() + RST)
     print("  " + DIM + "|" + RST + "  Stake:      $" + str(STAKE))
-    try:
-        payout_val = float(poc.get("payout", 0))
-    except Exception:
-        payout_val = 0
     print("  " + DIM + "|" + RST + "  Payout:     $" + "{:.2f}".format(payout_val))
     print("  " + DIM + "|" + RST + "  Profit:     " + rc + BLD + "${:+.2f}".format(profit) + RST)
     print("  " + DIM + "|" + RST + "  Balance:    " + BLD + "${:.2f}".format(stats["balance"]) + RST)

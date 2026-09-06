@@ -9,6 +9,17 @@ Every worker has isolated state and files:
   `trade_log_soft_R_100.json` stores its trade history.
 - `logs/soft_<symbol>_<timestamp>.log` stores its terminal output.
 
+The launcher terminal is intentionally a compact event board, not three
+interleaved tick dashboards. It shows only confirmed placements and settlements:
+
+```text
+[20:31:27] R_75    PLACED  LOWER  #123456 | stake $1.00 | payout $1.14 | 5 ticks
+[20:31:42] R_75    WON     LOWER  #123456 | P/L $+0.14 | exit 2746.9670 vs barrier 2747.6040 | gap -0.6370
+```
+
+The complete dashboard, indicator values, skips, and API details remain in the
+matching file under `logs/` for troubleshooting.
+
 The launcher forces `ACCOUNT_TYPE=demo` and `USE_BRIDGE=0`. The bot now fails
 instead of silently selecting a mismatched account type when no demo account is
 available for the supplied token.

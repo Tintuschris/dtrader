@@ -8,9 +8,11 @@ PAT credentials required by the existing PAT WebSocket flow.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from pathlib import Path
 DEFAULT_SYMBOLS = ("R_25", "R_75", "R_100")
 ROOT = Path(__file__).resolve().parent
 BOT = ROOT / "Deriv-Stochrsi-SloppyL-Soft.py"
+EVENT_PREFIX = "[BOT_EVENT] "
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,9 +60,65 @@ def worker_env(symbol: str) -> dict[str, str]:
             "ACCOUNT_TYPE": "demo",
             "SYMBOL": symbol,
             "TRADE_LOG_FILE": f"trade_log_soft_{symbol}.json",
+            "SOFT_EVENT_STREAM": "1",
         }
     )
     return env
+
+
+def parse_event(line: str) -> dict | None:
+    """Return a worker lifecycle event without exposing its raw dashboard."""
+    if not line.startswith(EVENT_PREFIX):
+        return None
+    try:
+        event = json.loads(line[len(EVENT_PREFIX):])
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None
+
+
+def display_number(value: object, decimals: int, signed: bool = False) -> str:
+    try:
+        return f"{float(value):{ '+' if signed else ''}.{decimals}f}"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def format_event(event: dict) -> str | None:
+    symbol = str(event.get("symbol", "?"))
+    kind = event.get("event")
+    if kind == "placed":
+        return (
+            f"{symbol:<7} PLACED  {str(event.get('direction', '?')).upper():<6} "
+            f"#{event.get('contract_id', '?')} | stake ${display_number(event.get('cost'), 2)} "
+            f"| payout ${display_number(event.get('payout'), 2)} "
+            f"| {event.get('duration_ticks', '?')} ticks"
+        )
+    if kind == "settled":
+        outcome = str(event.get("outcome", "?")).upper()
+        return (
+            f"{symbol:<7} {outcome:<7} {str(event.get('direction', '?')).upper():<6} "
+            f"#{event.get('contract_id', '?')} | P/L ${display_number(event.get('profit'), 2, signed=True)} "
+            f"| exit {display_number(event.get('exit_spot'), 4)} "
+            f"vs barrier {display_number(event.get('barrier_level'), 4)} "
+            f"| gap {display_number(event.get('gap'), 4, signed=True)}"
+        )
+    return None
+
+
+def mirror_worker_output(
+    worker: subprocess.Popen[str], output_path: Path, terminal_lock: threading.Lock
+) -> None:
+    """Persist the full child dashboard while surfacing only lifecycle events."""
+    assert worker.stdout is not None
+    with output_path.open("w", encoding="utf-8", errors="replace") as output:
+        for line in worker.stdout:
+            output.write(line)
+            output.flush()
+            summary = format_event(parse_event(line) or {})
+            if summary:
+                with terminal_lock:
+                    print(f"[{time.strftime('%H:%M:%S')}] {summary}", flush=True)
 
 
 def stop_workers(workers: list[subprocess.Popen[bytes]]) -> None:
@@ -90,13 +149,13 @@ def main() -> int:
     log_dir = (ROOT / args.log_dir).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    workers: list[subprocess.Popen[bytes]] = []
-    handles = []
+    workers: list[subprocess.Popen[str]] = []
+    readers: list[threading.Thread] = []
+    terminal_lock = threading.Lock()
 
     try:
         for symbol in args.symbols:
             output_path = log_dir / f"soft_{symbol}_{stamp}.log"
-            handle = output_path.open("wb")
             command = [sys.executable, "-u", str(BOT), "--symbol", symbol, "--account", "demo"]
             if args.dry_run:
                 command.append("--dry-run")
@@ -104,11 +163,21 @@ def main() -> int:
                 command,
                 cwd=ROOT,
                 env=worker_env(symbol),
-                stdout=handle,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
             )
-            handles.append(handle)
             workers.append(worker)
+            reader = threading.Thread(
+                target=mirror_worker_output,
+                args=(worker, output_path, terminal_lock),
+                daemon=True,
+            )
+            reader.start()
+            readers.append(reader)
             print(
                 f"Started {symbol} (PID {worker.pid}) | "
                 f"trade log: trade_log_soft_{symbol}.json | output: {output_path.relative_to(ROOT)}"
@@ -121,8 +190,8 @@ def main() -> int:
         print("Stopping all demo workers...")
         stop_workers(workers)
     finally:
-        for handle in handles:
-            handle.close()
+        for reader in readers:
+            reader.join(timeout=2)
 
     failed = [worker for worker in workers if worker.returncode not in (None, 0)]
     return 1 if failed else 0
