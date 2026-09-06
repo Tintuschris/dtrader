@@ -498,7 +498,7 @@ def print_header():
     print(f"{CYN}|{RST}  {BLD}Deriv STOCHRSI L-Shape Bot{RST}  {DIM}v2.0 Enhanced CLI{RST}")
     print(f"{CYN}+{'='*56}+{RST}")
     print(f"{CYN}|{RST}  Symbol:    {BLD}{SYMBOL}{RST}                          Duration: {BLD}{DURATION}{DURATION_UNIT}{RST}")
-    print(f"{CYN}|{RST}  Stake:     {GRN}${STAKE} {CURRENCY}{RST}                       Barrier:  {BLD}{BARRIER_HIGHER}/{BARRIER_LOWER}{RST}")
+    print(f"{CYN}|{RST}  Stake:     {GRN}${STAKE} {CURRENCY}{RST}                       Barrier:  {BLD}E:{BARRIER_EXTREME} S:{BARRIER_STRONG} W:{BARRIER_WEAK}{RST}")
     print(f"{CYN}|{RST}  Mode:      {BLD}{'BRIDGE' if USE_BRIDGE else 'PAT'}{RST}")
     print(f"{CYN}|{RST}  Strategy:  {MAG}RAW StochRSI({RSI_PERIOD}) slanted L{RST}")
     if DRY_RUN:
@@ -1433,23 +1433,23 @@ def _calc_barrier(direction, rsi):
 
     if direction == "higher":
         if rsi <= 20:
-            base = f-"{extreme_abs:.2f}"
+            base = f"-{extreme_abs:.2f}"
             tier = "extreme"
         elif rsi <= 30:
-            base = f-"{strong_abs:.2f}"
+            base = f"-{strong_abs:.2f}"
             tier = "strong"
         else:
-            base = f-"{weak_abs:.2f}"
+            base = f"-{weak_abs:.2f}"
             tier = "weak"
     else:
         if rsi >= 85:
-            base = f+"{extreme_abs:.2f}"
+            base = f"+{extreme_abs:.2f}"
             tier = "extreme"
         elif rsi >= 75:
-            base = f+"{strong_abs:.2f}"
+            base = f"+{strong_abs:.2f}"
             tier = "strong"
         else:
-            base = f+"{weak_abs:.2f}"
+            base = f"+{weak_abs:.2f}"
             tier = "weak"
 
     try:
