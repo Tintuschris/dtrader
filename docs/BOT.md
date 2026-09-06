@@ -95,6 +95,24 @@ The original implementation used SMA(3)-smoothed K values, which **erased the sh
 
 The bot applies **6 configurable filters** after detecting an L-shape signal. All signals must pass ALL filters to trigger a trade.
 
+### Longer Trend Alignment Protection
+
+The Video bot also checks a longer recent-price window before placing a trade.
+This protects against a brief HIGHER bounce inside a broader downtrend and a
+brief LOWER dip inside a broader uptrend. It requires both a minimum number of
+opposite-direction tick transitions and a net move measured in average tick
+movement units, so the rule scales across quote magnitudes.
+
+| Parameter | Default | Environment variable |
+|-----------|---------|-----------------------|
+| Trend window | 10 ticks | `FILTER_TREND_LOOKBACK` |
+| Opposite transitions | 6 of the last 9 | `FILTER_TREND_MIN_OPPOSITE` |
+| Minimum normalized move | 1.25 average-tick moves | `FILTER_TREND_MIN_NORMALIZED_MOVE` |
+
+The gate is symmetric: HIGHER is blocked by a qualifying downtrend and LOWER
+is blocked by a qualifying uptrend. Set the lookback below 2 to disable this
+specific gate, although doing so is not recommended for real-money runs.
+
 ### Filter 1: Loss-Streak Circuit Breaker
 
 Stops trading after N consecutive losses to prevent cascade losses.

@@ -16,6 +16,18 @@ Notable changes to both trading products in this repository, each tracked with i
 
 ## Bots
 
+### Video bot longer trend alignment protection (2026-09-06)
+
+- Added a symmetric counter-trend protection for real-money Video-bot entries:
+  it blocks short HIGHER bounces inside a broader downtrend and short LOWER
+  dips inside a broader uptrend.
+- The default window is 10 ticks, requiring at least 6 opposite-direction
+  transitions and a net counter-move of 1.25 average tick movements.
+- The movement threshold is normalized by each market's recent tick size rather
+  than using a fixed raw-point threshold. Configure it with
+  `FILTER_TREND_LOOKBACK`, `FILTER_TREND_MIN_OPPOSITE`, and
+  `FILTER_TREND_MIN_NORMALIZED_MOVE`.
+
 ### Demo multi-market and 1-second launch profiles (2026-09-06)
 
 - Added `run_soft_multi_demo.py`, which starts isolated, demo-only Soft-bot

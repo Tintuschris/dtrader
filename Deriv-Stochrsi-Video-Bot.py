@@ -90,6 +90,15 @@ parser.add_argument("--barrier-weak", default=os.environ.get("BARRIER_WEAK", "-0
 parser.add_argument("--price-dir-min", type=int,
                     default=int(os.environ.get("FILTER_PRICE_DIR_MIN", "3")),
                     help="Min ticks in trade direction (of last 5) (default: 3)")
+parser.add_argument("--trend-lookback", type=int,
+                    default=int(os.environ.get("FILTER_TREND_LOOKBACK", "10")),
+                    help="Longer trend window in ticks (default: 10)")
+parser.add_argument("--trend-min-opposite", type=int,
+                    default=int(os.environ.get("FILTER_TREND_MIN_OPPOSITE", "6")),
+                    help="Minimum opposite-direction transitions in trend window (default: 6)")
+parser.add_argument("--trend-min-normalized-move", type=float,
+                    default=float(os.environ.get("FILTER_TREND_MIN_NORMALIZED_MOVE", "1.25")),
+                    help="Minimum net opposite move in average-tick units (default: 1.25)")
 parser.add_argument("--min-balance", type=float,
                     default=float(os.environ.get("MIN_BALANCE", "0")),
                     help="Pause trading when account balance falls below this amount (default: 0 = disabled)")
@@ -143,6 +152,9 @@ FILTER_ADAPTIVE_FLAT_MAX = args.adaptive_flat_max
 FILTER_ADAPTIVE_BREAKOUT_MIN = args.adaptive_breakout_min
 FILTER_PRICE_DIR_MIN = args.price_dir_min
 FILTER_ENTRY_DELAY = args.entry_delay
+FILTER_TREND_LOOKBACK = args.trend_lookback
+FILTER_TREND_MIN_OPPOSITE = args.trend_min_opposite
+FILTER_TREND_MIN_NORMALIZED_MOVE = args.trend_min_normalized_move
 
 # === Balance guard ===
 # Pause trading when the account balance drops below this threshold (0 = disabled).
@@ -377,6 +389,33 @@ def detect_l_shape(srsi_now, srsi_prev):
         return None
 
     return None
+
+
+def trend_against_signal(prices, direction, lookback=10, min_opposite=6,
+                         min_normalized_move=1.25):
+    """Detect a counter-trend bounce using a longer, scale-free price window.
+
+    ``min_normalized_move`` measures the net move in average absolute tick
+    movements, so this works across markets with different quote magnitudes.
+    Returns ``(blocked, opposite_count, normalized_move)``.
+    """
+    if lookback < 2 or len(prices) < lookback:
+        return False, 0, 0.0
+    window = list(prices)[-lookback:]
+    steps = [window[i] - window[i - 1] for i in range(1, len(window))]
+    average_step = sum(abs(step) for step in steps) / len(steps)
+    if average_step <= 0:
+        return False, 0, 0.0
+    net_move = window[-1] - window[0]
+    if direction == "higher":
+        opposite_count = sum(1 for step in steps if step < 0)
+        normalized_move = (-net_move / average_step) if net_move < 0 else 0.0
+    else:
+        opposite_count = sum(1 for step in steps if step > 0)
+        normalized_move = (net_move / average_step) if net_move > 0 else 0.0
+    blocked = (opposite_count >= min_opposite and
+               normalized_move >= min_normalized_move)
+    return blocked, opposite_count, normalized_move
 def mini_spark(values, width=20):
     if len(values) < 2:
         return "." * width
@@ -1192,7 +1231,25 @@ async def process_tick(ws, tick_data, last_trade_time):
                 reset_l_state()
                 return now
 
-        # === FILTER 7: STRONG TREND AGAINST TRADE ===
+        # === FILTER 7: LONGER NORMALIZED TREND AGAINST TRADE ===
+        # A short bounce can satisfy the five-tick checks while still moving
+        # against the broader trend. This symmetric scale-free gate catches
+        # that setup without assuming a fixed number of quote points.
+        if FILTER_TREND_LOOKBACK >= 2 and len(tick_history) >= FILTER_TREND_LOOKBACK:
+            blocked, opposite_count, normalized_move = trend_against_signal(
+                tick_history, direction, FILTER_TREND_LOOKBACK,
+                FILTER_TREND_MIN_OPPOSITE, FILTER_TREND_MIN_NORMALIZED_MOVE)
+            if blocked:
+                trend_name = "downtrend" if direction == "higher" else "uptrend"
+                print(_skip(
+                    "trend_against_long" if direction == "higher" else "trend_against_short",
+                    f"  {YLW}! SKIPPED: Broader {trend_name} "
+                    f"({opposite_count}/{FILTER_TREND_LOOKBACK - 1} opposite ticks, "
+                    f"{normalized_move:.2f} avg-tick moves) - waiting for trend alignment{RST}"))
+                reset_l_state()
+                return now
+
+        # === FILTER 8: STRONG TREND AGAINST TRADE ===
         TREND_TICKS = 5
         TREND_MIN_SAME = 4
         if len(tick_history) >= TREND_TICKS:
