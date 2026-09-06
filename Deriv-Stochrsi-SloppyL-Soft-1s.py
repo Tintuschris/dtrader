@@ -39,6 +39,10 @@ def requests_real_account(argv: list[str]) -> bool:
     return False
 
 
+def has_option(argv: list[str], *names: str) -> bool:
+    return any(arg == name or arg.startswith(name + "=") for arg in argv for name in names)
+
+
 if not ENGINE.is_file():
     raise SystemExit(f"Soft bot engine not found: {ENGINE}")
 if requests_real_account(sys.argv[1:]):
@@ -66,6 +70,12 @@ profile_defaults = {
 }
 for key, value in profile_defaults.items():
     os.environ[key] = os.environ.get("SOFT_1S_" + key, value)
+# Do not inherit normal-market barrier exports. Explicit CLI barriers still
+# win because argparse applies them after reading the environment defaults.
+if not has_option(sys.argv[1:], "--barrier-higher"):
+    os.environ["BARRIER_HIGHER"] = os.environ.get("SOFT_1S_BARRIER_HIGHER", "-0.40")
+if not has_option(sys.argv[1:], "--barrier-lower"):
+    os.environ["BARRIER_LOWER"] = os.environ.get("SOFT_1S_BARRIER_LOWER", "+0.40")
 # Keep 1-second experiments independent even when the shell still exports a
 # generic TRADE_LOG_FILE from a standard or multi-market run.
 os.environ["TRADE_LOG_FILE"] = os.environ.get(

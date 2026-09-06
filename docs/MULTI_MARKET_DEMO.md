@@ -55,6 +55,9 @@ StochRSI periods of 21, a 5-tick flat zone, stronger SRSI breakout thresholds
 `30–48` for HIGHER, and RSI `65+` for LOWER. These are an experimental demo
 profile, not a claim of profitability. Override any one with the matching
 `SOFT_1S_<SETTING>` variable, for example `SOFT_1S_DURATION=5`.
+The 1-second profile also isolates its default `-0.40/+0.40` barriers from
+generic shell barrier variables; explicit `--barrier-higher` and
+`--barrier-lower` arguments still take precedence.
 
 ```bash
 USE_BRIDGE=0 ACCOUNT_TYPE=demo PAT_TOKEN="YOUR_PAT_TOKEN" DERIV_APP_ID="YOUR_APP_ID" python Deriv-Stochrsi-SloppyL-Soft-1s.py
