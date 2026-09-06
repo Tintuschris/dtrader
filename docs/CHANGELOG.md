@@ -9,12 +9,107 @@ Notable changes to both trading products in this repository, each tracked with i
 
 | Product | Latest | Full history |
 |---|---|---|
-| **Bots** | [v3.3.5 - Settlement Status Fix & SHORT Cohort Analyzer (2026-09-05)](#v335---settlement-status-fix--short-cohort-analyzer-2026-09-05) | [Bots](#bots) |
-| **Web App** | [Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)](#web-v14---settlement-details--next-trade-refresh-2026-09-03) | [Web App](#web-app) |
+| **Bots** | [v3.4.0 - Safety-First Adaptive Barrier & Risk Controls (2026-09-07)](#v340---safety-first-adaptive-barrier--risk-controls-2026-09-07) | [Bots](#bots) |
+| **Web App** | [Web v1.5 - Proposal Stream Recovery (2026-09-07)](#web-v15---proposal-stream-recovery-2026-09-07) | [Web App](#web-app) |
 
 ---
 
 ## Bots
+
+### v3.4.0 - Safety-First Adaptive Barrier & Risk Controls (2026-09-07)
+
+A major safety overhaul driven by real-account loss analysis. Two losing trades
+on Sep 6 (Trade #19: falling knife LONG lost by 0.793 points; Trade #21:
+near-miss SHORT lost by 0.086 points) motivated a full review of the barrier
+system, stake sizing, and entry filtering.
+
+#### New Features
+
+- **Three-tier RSI barrier mapping** — replaces the 2-tier system with
+  Extreme/Strong/Weak tiers:
+  - Extreme (RSI ≤ 20 / ≥ 85): ±0.30 barrier (high-confidence signals)
+  - Strong (RSI 20–30 / 75–85): ±0.40 barrier (solid signals)
+  - Weak (RSI 30–35 / 65–75): ±0.50 barrier (wider safety margin)
+  - All three tiers are fully configurable from CLI
+  - Trade #21 (RSI=75.89, lost by 0.086) would have been saved with the
+    Strong-tier +0.40 barrier (exit 2739.810 vs barrier 2739.024 = 0.786 margin)
+
+- **Adaptive variance-based barrier multiplier** — replaces the fixed 1.5x
+  barrier multiplier with a 4-tier system based on recent tick movement stdev:
+  - Choppy (> 0.15 stdev): 2.0x — wide barrier, maximum room
+  - Moderate (0.08–0.15): 1.7x — slightly wider
+  - Normal (0.03–0.08): 1.5x — default
+  - Calm (< 0.03): 1.2x — tighter barrier, better payout
+  - The bot now logs every barrier decision with tier, base, and scaled values
+
+- **Balance floor stake scaling** — dynamically reduces stake when account
+  balance is low, preventing a depleted account from being wiped:
+  - Balance ≥ $10: 100% stake (normal)
+  - Balance ≥ $5: 70% stake
+  - Balance ≥ $2: 50% stake
+  - Balance ≥ $1: 40% stake
+  - Balance < $1: configurable minimum (default $0.15, real-account safe)
+
+- **Post-entry cooldown escalation** — increases cooldown between trades after
+  consecutive losses, slowing down during unfavorable market conditions:
+  - Each loss adds +0.5× to the cooldown multiplier (capped at 4.0×)
+  - Each win resets to 1.0×
+  - Progression: 7s → 10.5s → 14s → 17.5s → … → 28s (max)
+
+- **Opposite-direction tick count gate** (filters 9a/9b) — new pre-entry micro
+  and macro filter that counts how many recent ticks move against the trade:
+  - Micro gate (last 5 ticks): blocks if ≥ 3 of 5 go against trade direction
+  - Macro gate (last 10 ticks): blocks if ≥ 7 of 10 go against trade direction
+  - Configurable via `--tick-gate-micro` / `--tick-gate-macro` and env vars
+  - Trade #19 (falling knife LONG) would have been caught by the macro gate
+
+- **CLI-configurable `--barrier-extreme`** — the Extreme tier barrier is no
+  longer hardcoded; it can be set from the command line alongside `--barrier-strong`
+  and `--barrier-weak`
+
+- **CLI-configurable `--min-stake`** — replaces the hardcoded $0.15 minimum with
+  a configurable floor. For real-account use: `--min-stake 0.35` preserves the
+  full $0.35 stake at all balance levels
+
+- **Session P&L halt** (`--max-session-loss`) — pauses trading for 5 minutes
+  when cumulative session losses exceed the threshold, then resets the counter.
+  Prevents extended bleeding during unfavorable market regimes
+
+#### Updated Filter Chain (Video Bot)
+
+The Video bot now has **10 filters** (up from 6):
+
+| # | Filter | New? |
+|---|--------|------|
+| 1 | Loss-streak circuit breaker | |
+| 2 | RSI trend alignment | |
+| 3 | SRSI peak check | |
+| 4 | 3-tick reversal confirmation | |
+| 5 | Adaptive flat duration cap | |
+| 6 | Price direction check | |
+| 7 | Longer normalized trend against trade | |
+| 8 | Strong trend + price drop spike check | |
+| 9a | Micro tick count gate (5-tick) | ✅ |
+| 9b | Macro tick count gate (10-tick) | ✅ |
+| 10 | Session P&L halt | ✅ |
+
+#### New CLI Args
+
+| Arg | Env Var | Default | Description |
+|-----|---------|---------|-------------|
+| `--barrier-extreme` | `BARRIER_EXTREME` | 0.30 | Barrier for extreme RSI signals |
+| `--min-stake` | `MIN_STAKE` | 0.15 | Minimum stake (balance floor) |
+| `--max-session-loss` | `MAX_SESSION_LOSS` | 5.0 | Session loss halt threshold |
+| `--tick-gate-micro` | `FILTER_TICK_GATE_MICRO` | 3 | Micro gate: opposite ticks in 5 |
+| `--tick-gate-macro` | `FILTER_TICK_GATE_MACRO` | 7 | Macro gate: opposite ticks in 10 |
+
+#### Commits
+
+- `1b1240e` — adaptive barrier, balance guard, cooldown escalation, tick gate
+- `ecc7539` — safety-first barrier tiers, min-stake CLI, session P&L halt
+- `2789239` — recover stalled contract pricing
+
+---
 
 ### Video bot recent-movement barrier scaling (2026-09-06)
 

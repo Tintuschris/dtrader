@@ -1,6 +1,6 @@
-# Deriv STOCHRSI L-Shape Bot v3.1
+# Deriv STOCHRSI L-Shape Bot v3.4
 
-An automated trading bot for Deriv's Volatility Indices (R_25, R_75, R_100, etc.) that detects **L-shaped patterns** on the Stochastic RSI indicator and places short-term tick trades with 6 configurable strategy filters.
+An automated trading bot for Deriv's Volatility Indices (R_25, R_75, R_100, etc.) that detects **L-shaped patterns** on the Stochastic RSI indicator and places short-term tick trades with **10 configurable strategy filters**, adaptive barrier scaling, and session risk controls.
 
 ---
 
@@ -8,7 +8,7 @@ An automated trading bot for Deriv's Volatility Indices (R_25, R_75, R_100, etc.
 
 1. [Overview](#overview)
 2. [The L-Shape Strategy](#the-l-shape-strategy)
-3. [Strategy Filters (6 Filters)](#strategy-filters)
+3. [Strategy Filters (10 Filters)](#strategy-filters)
 4. [Adaptive Barrier System](#adaptive-barrier-system)
 5. [Entry Delay Confirmation](#entry-delay-confirmation)
 6. [Architecture](#architecture)
@@ -27,7 +27,7 @@ An automated trading bot for Deriv's Volatility Indices (R_25, R_75, R_100, etc.
 
 ## Overview
 
-The bot connects to Deriv's WebSocket API, streams real-time tick data for a volatility index, and runs a **Stochastic RSI** indicator pipeline. When it detects a specific **slanted L-shape** pattern on the raw StochRSI line, it applies 6 strategy filters, waits for price confirmation, then automatically places a trade betting that the next few ticks will move in the expected direction.
+The bot connects to Deriv's WebSocket API, streams real-time tick data for a volatility index, and runs a **Stochastic RSI** indicator pipeline. When it detects a specific **slanted L-shape** pattern on the raw StochRSI line, it applies 10 strategy filters, waits for price confirmation, then automatically places a trade betting that the next few ticks will move in the expected direction.
 
 **Key capabilities:**
 - Streams live ticks and computes RSI(14) -> StochRSI(14) -> K/D indicators in real-time
@@ -93,7 +93,7 @@ The original implementation used SMA(3)-smoothed K values, which **erased the sh
 
 ## Strategy Filters
 
-The bot applies **6 configurable filters** after detecting an L-shape signal. All signals must pass ALL filters to trigger a trade.
+The Video bot applies **10 configurable filters** after detecting an L-shape signal. All signals must pass ALL filters to trigger a trade.
 
 ### Longer Trend Alignment Protection
 
@@ -178,6 +178,50 @@ Requires >=N of the last 5 ticks to be moving in the trade direction.
 
 **Evidence:** Catches "falling knife" LONG entries where 4+ of the last 5 ticks were DOWN.
 
+### Filter 7: Opposite-Direction Tick Count Gate
+
+Counts ticks moving against the trade direction in recent windows. Catches
+"falling knife" entries (Trade #19: 7/10 macro ticks were bearish on a HIGHER).
+
+| Layer | Window | Default Threshold | CLI Arg | Env Var |
+|-------|--------|-------------------|---------|--------|
+| Micro | Last 5 ticks | ≥ 3 opposite | `--tick-gate-micro` | `FILTER_TICK_GATE_MICRO` |
+| Macro | Last 10 ticks | ≥ 7 opposite | `--tick-gate-macro` | `FILTER_TICK_GATE_MACRO` |
+
+Both layers must pass. If either layer detects too many opposite-direction ticks,
+the trade is skipped. This is the **last filter** before trade placement.
+
+### Session P&L Halt
+
+Pauses trading when cumulative session losses exceed the threshold. Resets
+after a 5-minute cooldown.
+
+| Parameter | Default | CLI Arg | Env Var |
+|-----------|---------|---------|---------|
+| Max session loss | $5.00 | `--max-session-loss` | `MAX_SESSION_LOSS` |
+
+### Balance Floor Stake Scaling
+
+Automatically reduces stake when account balance drops below thresholds:
+
+| Balance | Stake Multiplier |
+|---------|------------------|
+| ≥ $10 | 100% (normal) |
+| ≥ $5 | 70% |
+| ≥ $2 | 50% |
+| ≥ $1 | 40% |
+| < $1 | `--min-stake` floor (default $0.15) |
+
+**CLI:** `--min-stake` (default 0.15) — set to 0.35 for real-account safety.  
+**Env:** `MIN_STAKE`
+
+### Balance Guard
+
+Pauses trading when balance drops below a minimum threshold.
+
+**CLI:** `--min-balance` (default 0 = disabled) — set to 1.0 for real account.  
+**Env:** `MIN_BALANCE`
+
 ### Historical Filter Results
 
 Retroactive analysis on 29 trades (7 losses) across 2 sessions:
@@ -194,42 +238,49 @@ Retroactive analysis on 29 trades (7 losses) across 2 sessions:
 
 ## Adaptive Barrier System
 
-The barrier offset adjusts based on signal strength (RSI value):
+The barrier offset adjusts based on signal strength (RSI value) using a
+**three-tier system** with adaptive volatility scaling:
 
-| Signal Strength | Condition | Default Barrier | Payout |
-|----------------|-----------|-----------------|--------|
-| **Strong** | RSI < 25 (LONG) or > 85 (SHORT) | `--barrier-strong` = -0.20 | ~$1.40 |
-| **Normal** | RSI 25-35 or 65-85 | `--barrier-weak` = -0.30 | ~$1.18 |
+### RSI Tier Mapping
 
-Strong signals get a tighter base barrier for better payout. Weaker signals get a wider base barrier for more room.
+| Tier | Condition | Default Barrier | CLI Arg | Payout |
+|------|-----------|-----------------|---------|--------|
+| **Extreme** | RSI ≤ 20 (LONG) or ≥ 85 (SHORT) | ±0.30 | `--barrier-extreme` | ~$1.25 |
+| **Strong** | RSI 20–30 (LONG) or 75–85 (SHORT) | ±0.40 | `--barrier-strong` | ~$1.15 |
+| **Weak** | RSI 30–35 (LONG) or 65–75 (SHORT) | ±0.50 | `--barrier-weak` | ~$1.08 |
 
-**CLI args:** `--barrier-strong`, `--barrier-weak`  
-**Env vars:** `BARRIER_STRONG`, `BARRIER_WEAK`
+Extreme signals get the tightest barrier (best payout). Weak signals get the
+widest barrier (most room). All three tiers are configurable from CLI.
 
-### Recent-movement barrier scaling
+**Example:** Trade #21 (RSI=75.89) hit the Strong tier. With `--barrier-strong 0.40`,
+the exit at 2739.810 vs barrier at 2739.024 = 0.786 margin → **win**.
 
-The Video bot now scales the selected barrier distance using recent movement on
-the normal `R_25` feed. It takes the median absolute movement of the last 20
-ticks, multiplies it by `1.5`, and compares that result with the RSI-selected
-base barrier. The result is bounded between `0.20` and `0.45` points by
-default. This gives a noisier market more room while keeping quiet-market
-barriers from becoming unnecessarily wide.
+### Adaptive Variance-Based Multiplier
 
-For `HIGHER`, the resulting offset is negative (below entry). For `LOWER`, it
-is positive (above entry). The Sloppy-L detector, RSI filters, entry delay,
-and direction logic are unchanged. A wider barrier normally lowers payout, so
-this is a deliberate win-probability-versus-payout tradeoff, not a guarantee
-against losses.
+The barrier is then **scaled** based on recent tick movement variance (stdev of
+absolute moves). This replaces the fixed 1.5x multiplier:
 
-Controls:
+| Variance (stdev) | Market State | Multiplier | Effect |
+|---|---|---|---|
+| > 0.15 | Choppy — whipsawing | 2.0x | Wider barrier, more room |
+| 0.08–0.15 | Moderate — normal | 1.7x | Slightly wider |
+| 0.03–0.08 | Normal — steady | 1.5x | Default |
+| < 0.03 | Calm — smooth trending | 1.2x | Tighter barrier, better payout |
 
-| Parameter | Default | Purpose |
-|-----------|---------|---------|
-| `--barrier-scale` / `BARRIER_SCALE_MODE` | `recent` | Use `fixed` to disable scaling |
-| `--barrier-vol-lookback` / `BARRIER_VOL_LOOKBACK` | `20` | Recent ticks used |
-| `--barrier-vol-multiplier` / `BARRIER_VOL_MULTIPLIER` | `1.5` | Movement buffer |
-| `--barrier-min-offset` / `BARRIER_MIN_OFFSET` | `0.20` | Lower bound |
-| `--barrier-max-offset` / `BARRIER_MAX_OFFSET` | `0.45` | Upper bound |
+The final barrier is `max(base_tier_barrier, median_tick_move × multiplier)`.
+Bounded between `BARRIER_MIN_OFFSET` (0.20) and `BARRIER_MAX_OFFSET` (0.45).
+
+### Barrier Controls
+
+| Parameter | Default | CLI Arg | Env Var |
+|-----------|---------|---------|---------|
+| Extreme tier | 0.30 | `--barrier-extreme` | `BARRIER_EXTREME` |
+| Strong tier | 0.40 | `--barrier-strong` | `BARRIER_STRONG` |
+| Weak tier | 0.50 | `--barrier-weak` | `BARRIER_WEAK` |
+| Scale mode | `recent` | `--barrier-scale` | `BARRIER_SCALE_MODE` |
+| Vol lookback | 20 | `--barrier-vol-lookback` | `BARRIER_VOL_LOOKBACK` |
+| Min offset | 0.20 | `--barrier-min-offset` | `BARRIER_MIN_OFFSET` |
+| Max offset | 0.45 | `--barrier-max-offset` | `BARRIER_MAX_OFFSET` |
 
 The scale is intentionally specific to the normal Video bot. It is not used
 by the multi-volatility runner or the separate 1-second profile.
@@ -238,7 +289,7 @@ by the multi-volatility runner or the separate 1-second profile.
 
 ## Entry Delay Confirmation
 
-After all 6 filters pass, the signal is **queued** for N ticks. During this delay:
+After all 10 filters pass, the signal is **queued** for N ticks. During this delay:
 
 - The bot monitors whether price is actually moving in the trade direction
 - If price confirms (moves right way) -> places trade with adaptive barrier
