@@ -201,10 +201,38 @@ The barrier offset adjusts based on signal strength (RSI value):
 | **Strong** | RSI < 25 (LONG) or > 85 (SHORT) | `--barrier-strong` = -0.20 | ~$1.40 |
 | **Normal** | RSI 25-35 or 65-85 | `--barrier-weak` = -0.30 | ~$1.18 |
 
-Strong signals get a tighter barrier for better payout. Weaker signals get a wider barrier for more room.
+Strong signals get a tighter base barrier for better payout. Weaker signals get a wider base barrier for more room.
 
 **CLI args:** `--barrier-strong`, `--barrier-weak`  
 **Env vars:** `BARRIER_STRONG`, `BARRIER_WEAK`
+
+### Recent-movement barrier scaling
+
+The Video bot now scales the selected barrier distance using recent movement on
+the normal `R_25` feed. It takes the median absolute movement of the last 20
+ticks, multiplies it by `1.5`, and compares that result with the RSI-selected
+base barrier. The result is bounded between `0.20` and `0.45` points by
+default. This gives a noisier market more room while keeping quiet-market
+barriers from becoming unnecessarily wide.
+
+For `HIGHER`, the resulting offset is negative (below entry). For `LOWER`, it
+is positive (above entry). The Sloppy-L detector, RSI filters, entry delay,
+and direction logic are unchanged. A wider barrier normally lowers payout, so
+this is a deliberate win-probability-versus-payout tradeoff, not a guarantee
+against losses.
+
+Controls:
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `--barrier-scale` / `BARRIER_SCALE_MODE` | `recent` | Use `fixed` to disable scaling |
+| `--barrier-vol-lookback` / `BARRIER_VOL_LOOKBACK` | `20` | Recent ticks used |
+| `--barrier-vol-multiplier` / `BARRIER_VOL_MULTIPLIER` | `1.5` | Movement buffer |
+| `--barrier-min-offset` / `BARRIER_MIN_OFFSET` | `0.20` | Lower bound |
+| `--barrier-max-offset` / `BARRIER_MAX_OFFSET` | `0.45` | Upper bound |
+
+The scale is intentionally specific to the normal Video bot. It is not used
+by the multi-volatility runner or the separate 1-second profile.
 
 ---
 

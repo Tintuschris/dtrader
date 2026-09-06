@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import atexit
+from statistics import median, stdev
 from collections import deque
 
 import aiohttp
@@ -87,6 +88,21 @@ parser.add_argument("--barrier-strong", default=os.environ.get("BARRIER_STRONG",
                     help="Barrier for strong signals (default: -0.20)")
 parser.add_argument("--barrier-weak", default=os.environ.get("BARRIER_WEAK", "-0.30"),
                     help="Barrier for weaker signals (default: -0.30)")
+parser.add_argument("--barrier-scale", choices=["recent", "fixed"],
+                    default=os.environ.get("BARRIER_SCALE_MODE", "recent"),
+                    help="Scale barrier from recent R_25 tick movement (default: recent)")
+parser.add_argument("--barrier-vol-lookback", type=int,
+                    default=int(os.environ.get("BARRIER_VOL_LOOKBACK", "20")),
+                    help="Ticks used to estimate recent movement (default: 20)")
+parser.add_argument("--barrier-vol-multiplier", type=float,
+                    default=float(os.environ.get("BARRIER_VOL_MULTIPLIER", "1.5")),
+                    help="Recent median tick movement multiplier (default: 1.5)")
+parser.add_argument("--barrier-min-offset", type=float,
+                    default=float(os.environ.get("BARRIER_MIN_OFFSET", "0.20")),
+                    help="Smallest scaled absolute offset (default: 0.20)")
+parser.add_argument("--barrier-max-offset", type=float,
+                    default=float(os.environ.get("BARRIER_MAX_OFFSET", "0.45")),
+                    help="Largest scaled absolute offset (default: 0.45)")
 parser.add_argument("--price-dir-min", type=int,
                     default=int(os.environ.get("FILTER_PRICE_DIR_MIN", "3")),
                     help="Min ticks in trade direction (of last 5) (default: 3)")
@@ -99,6 +115,10 @@ parser.add_argument("--trend-min-opposite", type=int,
 parser.add_argument("--trend-min-normalized-move", type=float,
                     default=float(os.environ.get("FILTER_TREND_MIN_NORMALIZED_MOVE", "1.25")),
                     help="Minimum net opposite move in average-tick units (default: 1.25)")
+parser.add_argument("--tick-gate-micro", type=int, default=int(os.environ.get("FILTER_TICK_GATE_MICRO", "3")),
+                    help="Min opposite ticks in last 5 to block entry (default: 3)")
+parser.add_argument("--tick-gate-macro", type=int, default=int(os.environ.get("FILTER_TICK_GATE_MACRO", "7")),
+                    help="Min opposite ticks in last 10 to block entry (default: 7)")
 parser.add_argument("--min-balance", type=float,
                     default=float(os.environ.get("MIN_BALANCE", "0")),
                     help="Pause trading when account balance falls below this amount (default: 0 = disabled)")
@@ -118,6 +138,11 @@ BARRIER_HIGHER = args.barrier_higher
 BARRIER_LOWER = args.barrier_lower
 BARRIER_STRONG = args.barrier_strong
 BARRIER_WEAK = args.barrier_weak
+BARRIER_SCALE_MODE = args.barrier_scale
+BARRIER_VOL_LOOKBACK = max(2, args.barrier_vol_lookback)
+BARRIER_VOL_MULTIPLIER = max(0.0, args.barrier_vol_multiplier)
+BARRIER_MIN_OFFSET = max(0.0, args.barrier_min_offset)
+BARRIER_MAX_OFFSET = max(BARRIER_MIN_OFFSET, args.barrier_max_offset)
 DURATION = args.duration
 DURATION_UNIT = "t"
 RSI_PERIOD = 14
@@ -155,6 +180,8 @@ FILTER_ENTRY_DELAY = args.entry_delay
 FILTER_TREND_LOOKBACK = args.trend_lookback
 FILTER_TREND_MIN_OPPOSITE = args.trend_min_opposite
 FILTER_TREND_MIN_NORMALIZED_MOVE = args.trend_min_normalized_move
+FILTER_TICK_GATE_MICRO = args.tick_gate_micro   # Min opposite ticks in last 5
+FILTER_TICK_GATE_MACRO = args.tick_gate_macro   # Min opposite ticks in last 10
 
 # === Balance guard ===
 # Pause trading when the account balance drops below this threshold (0 = disabled).
@@ -213,6 +240,7 @@ _l_flat_extreme = 0.0
 _signal_ctx = {}  # pattern context captured at signal fire (survives reset_l_state)
 _consecutive_losses = 0
 _loss_cooldown_until = 0.0
+_cooldown_multiplier = 1.0  # Escalates after losses, resets on win
 _balance_known = False            # True once a real numeric balance has been received
 _balance_guard_triggered = False  # True while trading is paused by the balance guard
 # _trade_log is loaded from the trade log file at import (persistent across runs)
@@ -617,9 +645,11 @@ def print_trade_result_analyzed(status, profit, entry_price, exit_price, directi
         if is_win:
             stats["wins"] += 1
             _consecutive_losses = 0
+            _cooldown_multiplier = 1.0  # Reset on win
         else:
             stats["losses"] += 1
             _consecutive_losses += 1
+            _cooldown_multiplier = min(4.0, _cooldown_multiplier + 0.5)  # Escalate: 1.0→1.5→2.0→2.5→...
     wr = (stats["wins"] / stats["trades"] * 100) if stats["trades"] > 0 else 0
 
     entry_spot = poc.get("entry_spot", poc.get("entry_tick", entry_price))
@@ -1040,12 +1070,27 @@ async def get_otp_url(account_id):
 
 # ============ TRADE PLACEMENT ============
 
+def _effective_stake():
+    """Scale stake down when balance is low to preserve capital."""
+    bal = stats.get("balance", 0)
+    if bal >= 10.0:
+        return STAKE              # Normal stake
+    elif bal >= 5.0:
+        return round(STAKE * 0.70, 2)  # 70% stake
+    elif bal >= 2.0:
+        return round(STAKE * 0.50, 2)  # 50% stake
+    elif bal >= 1.0:
+        return round(STAKE * 0.40, 2)  # 40% stake
+    else:
+        return 0.15               # Minimum viable stake
+
+
 async def place_trade(ws, direction, barrier):
     global pending_proposal
     contract_type = "HIGHER" if direction == "higher" else "LOWER"
     proposal_req = {
         "proposal": 1,
-        "amount": STAKE,
+        "amount": _effective_stake(),
         "basis": "stake",
         "contract_type": contract_type,
         "currency": CURRENCY,
@@ -1055,7 +1100,9 @@ async def place_trade(ws, direction, barrier):
         "underlying_symbol": SYMBOL,
     }
     pending_proposal = {"direction": direction, "barrier": barrier, "entry_price": None}
-    print(f"  {DIM}[PROPOSAL] amount={STAKE} type={contract_type} barrier={barrier} symbol={SYMBOL}{RST}")
+    eff_stake = _effective_stake()
+    stake_note = f" (scaled from {STAKE})" if eff_stake != STAKE else ""
+    print(f"  {DIM}[PROPOSAL] amount={eff_stake}{stake_note} type={contract_type} barrier={barrier} symbol={SYMBOL}{RST}")
     await ws.send(json.dumps(proposal_req))
 # ============ TICK PROCESSING ============
 
@@ -1140,10 +1187,12 @@ async def process_tick(ws, tick_data, last_trade_time):
 
     # Cooldown
     now = time.time()
-    if now - last_trade_time < (DURATION + 2):
+    cooldown_seconds = int((DURATION + 2) * _cooldown_multiplier)
+    if now - last_trade_time < cooldown_seconds:
         if not _in_cooldown:
-            remaining = int((DURATION + 2) - (now - last_trade_time))
-            print(f"  {DIM}Cooldown: {remaining}s remaining{RST}")
+            remaining = int(cooldown_seconds - (now - last_trade_time))
+            mult_note = f" ({_cooldown_multiplier:.1f}x escalated)" if _cooldown_multiplier > 1.0 else ""
+            print(f"  {DIM}Cooldown: {remaining}s remaining{mult_note}{RST}")
             _in_cooldown = True
         return last_trade_time
     _in_cooldown = False
@@ -1282,6 +1331,39 @@ async def process_tick(ws, tick_data, last_trade_time):
                 reset_l_state()
                 return now
 
+        # === FILTER 9: OPPOSITE-DIRECTION TICK COUNT GATE ===
+        # Two-layer gate catches entries against the broader micro/macro trend.
+        # Micro (5 ticks): catches short-term adverse momentum.
+        # Macro (10 ticks): catches entries against the broader trend even when
+        #   the last few ticks show a favorable bounce (Trade #19 scenario).
+        if len(tick_history) >= 5:
+            micro_ticks = list(tick_history)[-5:]
+            micro_opposite = sum(
+                1 for i in range(1, len(micro_ticks))
+                if (direction == "higher" and micro_ticks[i] < micro_ticks[i - 1])
+                or (direction == "lower"  and micro_ticks[i] > micro_ticks[i - 1])
+            )
+            if micro_opposite >= FILTER_TICK_GATE_MICRO:
+                print(_skip("tick_gate_micro",
+                    f"  {YLW}! SKIPPED: Micro gate ({micro_opposite}/4 opposite in last 5 ticks) "
+                    f"- short-term momentum against {direction.upper()}{RST}"))
+                reset_l_state()
+                return now
+
+        if len(tick_history) >= 10:
+            macro_ticks = list(tick_history)[-10:]
+            macro_opposite = sum(
+                1 for i in range(1, len(macro_ticks))
+                if (direction == "higher" and macro_ticks[i] < macro_ticks[i - 1])
+                or (direction == "lower"  and macro_ticks[i] > macro_ticks[i - 1])
+            )
+            if macro_opposite >= FILTER_TICK_GATE_MACRO:
+                print(_skip("tick_gate_macro",
+                    f"  {YLW}! SKIPPED: Macro gate ({macro_opposite}/9 opposite in last 10 ticks) "
+                    f"- broader trend against {direction.upper()}{RST}"))
+                reset_l_state()
+                return now
+
         print_signal(direction, srsi_now, reason)
         if FILTER_ENTRY_DELAY > 0:
             _pending_signal = {"direction": direction, "srsi": srsi_now, "rsi": rsi_now,
@@ -1303,13 +1385,73 @@ async def process_tick(ws, tick_data, last_trade_time):
 
 
 def _calc_barrier(direction, rsi):
-    """Pick barrier based on RSI strength. Uses user-specified BARRIER_HIGHER/BARRIER_LOWER."""
-    strong_threshold = 25 if direction == "higher" else 85
+    """Three-tier RSI barrier: Extreme / Strong / Weak, then scale to recent movement.
+
+    Tier mapping (HIGHER example — LOWER mirrors):
+      RSI < 20  → Extreme  → -0.15  (tightest, highest payout ~$1.60)
+      RSI < 30  → Strong   → -0.20  (default strong)
+      RSI < 35  → Weak     → -0.35  (wider, more room for borderline signals)
+    """
     if direction == "higher":
-        return BARRIER_HIGHER if rsi <= strong_threshold else BARRIER_WEAK
+        if rsi <= 20:
+            base = "-0.15"   # Extreme oversold
+            tier = "extreme"
+        elif rsi <= 30:
+            base = BARRIER_HIGHER  # Strong oversold (default -0.20)
+            tier = "strong"
+        else:
+            base = "-0.35"   # Weak oversold — wider barrier for safety
+            tier = "weak"
     else:
-        bv = BARRIER_LOWER if rsi >= strong_threshold else BARRIER_WEAK
-        return "+" + bv.lstrip("-")
+        if rsi >= 85:
+            base = "+0.15"   # Extreme overbought
+            tier = "extreme"
+        elif rsi >= 75:
+            base = "+0.20"   # Strong overbought
+            tier = "strong"
+        else:
+            base = "+0.35"   # Weak overbought — wider barrier for safety
+            tier = "weak"
+
+    try:
+        base_abs = abs(float(base))
+    except (TypeError, ValueError):
+        return base
+
+    # Scale to recent market movement using adaptive variance-based multiplier
+    if BARRIER_SCALE_MODE == "fixed" or len(tick_history) < BARRIER_VOL_LOOKBACK:
+        scaled_abs = base_abs
+    else:
+        recent = list(tick_history)[-BARRIER_VOL_LOOKBACK:]
+        moves = [abs(recent[i] - recent[i - 1]) for i in range(1, len(recent))]
+        if not moves:
+            scaled_abs = base_abs
+        else:
+            typical_move = median(moves)
+            # Adaptive multiplier: choppy markets get wider barriers
+            #   high variance (>0.15/tick) → 2.0x  (whipsaw protection)
+            #   moderate (0.08-0.15)       → 1.7x
+            #   normal (0.03-0.08)         → 1.5x  (current default)
+            #   calm (<0.03)               → 1.2x  (tighter for better payout)
+            try:
+                variance = stdev(moves)
+            except Exception:
+                variance = 0.0
+            if variance > 0.15:
+                adaptive_mult = 2.0
+            elif variance > 0.08:
+                adaptive_mult = 1.7
+            elif variance < 0.03:
+                adaptive_mult = 1.2
+            else:
+                adaptive_mult = BARRIER_VOL_MULTIPLIER  # 1.5x default
+            scaled_abs = max(base_abs, typical_move * adaptive_mult)
+            scaled_abs = min(BARRIER_MAX_OFFSET, max(BARRIER_MIN_OFFSET, scaled_abs))
+            print(f"  {DIM}[BARRIER] volatility: median={typical_move:.4f} stdev={variance:.4f} mult={adaptive_mult:.1f}x → scaled={scaled_abs:.2f}{RST}")
+
+    print(f"  {DIM}[BARRIER] tier={tier} rsi={rsi:.1f} base={base} scaled={scaled_abs:.2f}{RST}")
+    sign = -1 if direction == "higher" else 1
+    return f"{sign * scaled_abs:+.2f}"
 
 # ============ TRADING LOOP ============
 
@@ -1625,6 +1767,39 @@ async def process_tick_replay(tick_data, bt):
         direction, reason = result
         delta = srsi_now - srsi_prev
         bt["signals"] += 1
+        # === FILTER 9: OPPOSITE-DIRECTION TICK COUNT GATE ===
+        # Two-layer gate catches entries against the broader micro/macro trend.
+        # Micro (5 ticks): catches short-term adverse momentum.
+        # Macro (10 ticks): catches entries against the broader trend even when
+        #   the last few ticks show a favorable bounce (Trade #19 scenario).
+        if len(tick_history) >= 5:
+            micro_ticks = list(tick_history)[-5:]
+            micro_opposite = sum(
+                1 for i in range(1, len(micro_ticks))
+                if (direction == "higher" and micro_ticks[i] < micro_ticks[i - 1])
+                or (direction == "lower"  and micro_ticks[i] > micro_ticks[i - 1])
+            )
+            if micro_opposite >= FILTER_TICK_GATE_MICRO:
+                print(_skip("tick_gate_micro",
+                    f"  {YLW}! SKIPPED: Micro gate ({micro_opposite}/4 opposite in last 5 ticks) "
+                    f"- short-term momentum against {direction.upper()}{RST}"))
+                reset_l_state()
+                return now
+
+        if len(tick_history) >= 10:
+            macro_ticks = list(tick_history)[-10:]
+            macro_opposite = sum(
+                1 for i in range(1, len(macro_ticks))
+                if (direction == "higher" and macro_ticks[i] < macro_ticks[i - 1])
+                or (direction == "lower"  and macro_ticks[i] > macro_ticks[i - 1])
+            )
+            if macro_opposite >= FILTER_TICK_GATE_MACRO:
+                print(_skip("tick_gate_macro",
+                    f"  {YLW}! SKIPPED: Macro gate ({macro_opposite}/9 opposite in last 10 ticks) "
+                    f"- broader trend against {direction.upper()}{RST}"))
+                reset_l_state()
+                return now
+
         print_signal(direction, srsi_now, reason)
         entry = price
         barrier = BARRIER_HIGHER if direction == "higher" else BARRIER_LOWER

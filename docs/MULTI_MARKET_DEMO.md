@@ -43,19 +43,20 @@ market independently with the main bot's `--history` option and the matching
 ## 1-second Soft Bot
 
 `Deriv-Stochrsi-SloppyL-Soft-1s.py` is a separate demo-only launch profile. It
-uses the same strategy engine but defaults to Deriv's Volatility 100 (1s)
-symbol, `1HZ100V`, and writes to `trade_log_soft_1s_1HZ100V.json`.
+uses the same strategy engine but defaults to Deriv's Volatility 25 (1s)
+symbol, `1HZ25V`, and writes to `trade_log_soft_1s_1HZ25V.json`.
 It does not inherit generic `SYMBOL` or `TRADE_LOG_FILE` values left by another
 bot. Use `SOFT_1S_SYMBOL` or `SOFT_1S_TRADE_LOG_FILE` only when you need to
 override those profile defaults without CLI options.
 
-The profile also uses independent 1-second defaults: 10-tick duration, RSI and
+The profile also uses independent 1-second defaults: 5-tick duration, RSI and
 StochRSI periods of 21, a 5-tick flat zone, stronger SRSI breakout thresholds
 (`0.20` HIGHER / `0.25` LOWER), three-tick momentum confirmation, RSI
-`30–48` for HIGHER, and RSI `65+` for LOWER. These are an experimental demo
+`30–48` for HIGHER, and RSI `65+` for LOWER. Its Volatility 25 calibration uses
+`-50` for HIGHER and `+50` for LOWER. These are experimental demo
 profile, not a claim of profitability. Override any one with the matching
 `SOFT_1S_<SETTING>` variable, for example `SOFT_1S_DURATION=5`.
-The 1-second profile also isolates its default `-0.40/+0.40` barriers from
+The 1-second profile also isolates its default `-50/+50` barriers from
 generic shell barrier variables; explicit `--barrier-higher` and
 `--barrier-lower` arguments still take precedence.
 

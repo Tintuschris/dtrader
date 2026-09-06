@@ -16,6 +16,16 @@ Notable changes to both trading products in this repository, each tracked with i
 
 ## Bots
 
+### Video bot recent-movement barrier scaling (2026-09-06)
+
+- Added bounded, recent-tick movement scaling for the normal `R_25` Video bot.
+- The RSI-selected barrier remains the base; the bot uses the median absolute
+  movement over the last 20 ticks multiplied by `1.5`, bounded to `0.20–0.45`.
+- `HIGHER` keeps a negative offset and `LOWER` keeps a positive offset.
+- Added fixed-mode and CLI/environment controls for demo calibration.
+- The Sloppy-L signal and entry filters are unchanged. This change applies
+  only to `Deriv-Stochrsi-Video-Bot.py`, not multi-market or 1-second bots.
+
 ### Video bot longer trend alignment protection (2026-09-06)
 
 - Added a symmetric counter-trend protection for real-money Video-bot entries:

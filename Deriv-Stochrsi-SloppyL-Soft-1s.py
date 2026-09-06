@@ -27,7 +27,7 @@ def requested_symbol(argv: list[str]) -> str:
     # Do not inherit a generic SYMBOL from another bot run. A 1-second profile
     # must start on its own documented default unless its CLI explicitly names
     # a market.
-    return os.environ.get("SOFT_1S_SYMBOL", "1HZ100V")
+    return os.environ.get("SOFT_1S_SYMBOL", "1HZ25V")
 
 
 def requests_real_account(argv: list[str]) -> bool:
@@ -53,11 +53,12 @@ os.environ["USE_BRIDGE"] = "0"
 os.environ["ACCOUNT_TYPE"] = "demo"
 os.environ["SYMBOL"] = symbol
 # One-second ticks are much noisier than the normal volatility feeds. Keep
-# this profile independent by using a slower indicator, a longer contract,
+# this profile independent by using a slower indicator, a point-scaled barrier,
+# and a shorter contract suited to the Volatility 25 (1s) calibration.
 # and stronger reversal confirmation. Every value remains overridable through
 # the SOFT_1S_* environment variables for market-by-market experiments.
 profile_defaults = {
-    "DURATION": "10",
+    "DURATION": "5",
     "SOFT_RSI_PERIOD": "21",
     "SOFT_STOCH_PERIOD": "21",
     "SOFT_RAW_FLAT_LOOKBACK": "5",
@@ -73,9 +74,11 @@ for key, value in profile_defaults.items():
 # Do not inherit normal-market barrier exports. Explicit CLI barriers still
 # win because argparse applies them after reading the environment defaults.
 if not has_option(sys.argv[1:], "--barrier-higher"):
-    os.environ["BARRIER_HIGHER"] = os.environ.get("SOFT_1S_BARRIER_HIGHER", "-0.40")
+    # ±50 is a demo calibration for 1HZ25V. The old ±0.40 values were
+    # normal-market offsets and are negligible beside 1-second price moves.
+    os.environ["BARRIER_HIGHER"] = os.environ.get("SOFT_1S_BARRIER_HIGHER", "-50")
 if not has_option(sys.argv[1:], "--barrier-lower"):
-    os.environ["BARRIER_LOWER"] = os.environ.get("SOFT_1S_BARRIER_LOWER", "+0.40")
+    os.environ["BARRIER_LOWER"] = os.environ.get("SOFT_1S_BARRIER_LOWER", "+50")
 # Keep 1-second experiments independent even when the shell still exports a
 # generic TRADE_LOG_FILE from a standard or multi-market run.
 os.environ["TRADE_LOG_FILE"] = os.environ.get(
