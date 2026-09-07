@@ -611,6 +611,8 @@ async def trading_loop():
                             lt = time.time()
                 finally:
                     ka.cancel()
+        except asyncio.CancelledError:
+            break
         except (websockets.ConnectionClosed, ConnectionError, OSError) as e:
             print(f"\n  {YLW}> Conn err: {e}. Reconnect 3s...{RST}")
             await asyncio.sleep(3)
@@ -636,11 +638,16 @@ async def main():
     save_log()
     try:
         await trading_loop()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print(f"\n  {YLW}> Stopped{RST}")
         print_summary()
         save_log()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print(f"\n  {YLW}> Stopped{RST}")
+        print_summary()
+        save_log()
