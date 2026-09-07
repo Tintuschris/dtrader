@@ -353,6 +353,7 @@ tick_history = deque(maxlen=60)
 stats = {"trades": 0, "wins": 0, "losses": 0, "cancelled": 0, "total_pnl": 0.0, "balance": 0.0}
 active_contract = None
 pending_proposal = None  # {proposal_id, direction, barrier, entry_price}
+_pending_buy = None       # Trade context that survives reconnect: {direction, barrier, entry_price, signal_ts, srsi, rsi, reason, price}
 _active_contract_id = None  # Persists across reconnects for POC re-subscription
 _active_contract_snapshot = None  # Full open-contract context kept across reconnects for settle recovery
 _tick_count = 0
@@ -431,11 +432,16 @@ def reset_l_state():
 
 
 def reset_active_contract():
-    """Clear active contract and pending proposal, saving contract context for re-subscription."""
-    global active_contract, pending_proposal, _active_contract_id, _active_contract_snapshot
+    """Clear active contract and pending proposal, saving contract context for re-subscription.
+    Also preserves _pending_buy so that an in-flight buy response can still record the contract."""
+    global active_contract, pending_proposal, _active_contract_id, _active_contract_snapshot, _pending_buy
     if active_contract and active_contract.get("contract_id"):
         _active_contract_id = active_contract["contract_id"]
         _active_contract_snapshot = dict(active_contract)
+    # If we had a pending proposal (buy sent but response not yet received),
+    # preserve the trade context so the buy response handler can still record it.
+    if pending_proposal and not _pending_buy:
+        _pending_buy = dict(pending_proposal)
     active_contract = None
     pending_proposal = None
 
@@ -1181,6 +1187,22 @@ def log_trade_signal(direction, srsi_val, rsi_val, reason, price, barrier):
     save_trade_log()
 
 
+def mark_trade_failed(reason="buy_error"):
+    """Mark the most recent pending trade as failed so it doesn't stay stuck."""
+    for entry in reversed(_trade_log):
+        if entry.get("epoch", 0) >= SESSION_START_TS and entry["result"]["status"] == "pending":
+            entry["result"].update({
+                "status": "failed",
+                "profit": 0,
+                "payout": 0,
+                "balance": stats.get("balance", 0),
+                "settled_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "fail_reason": reason,
+            })
+            break
+    save_trade_log()
+
+
 def log_trade_result(contract_id, status, profit, entry_spot, exit_spot, payout, balance, barrier_level=None):
     """Attach the settled result to the most recent pending signal."""
     for entry in reversed(_trade_log):
@@ -1298,7 +1320,8 @@ async def place_trade(ws, direction, barrier, barrier_mode=None):
         "barrier": barrier,
         "underlying_symbol": SYMBOL,
     }
-    pending_proposal = {"direction": direction, "barrier": barrier, "entry_price": None}
+    pending_proposal = {"direction": direction, "barrier": barrier, "entry_price": None, "signal_ts": time.time()}
+    _pending_buy = {"direction": direction, "barrier": barrier, "entry_price": None, "signal_ts": time.time()}
     print(f"  {DIM}[PROPOSAL] amount={STAKE} type={contract_type} barrier={barrier} symbol={SYMBOL}{RST}")
     print(f"  {DIM}[BARRIER] sent={barrier} direction={direction} mode={barrier_mode if barrier_mode else 'fixed'} raw_h={BARRIER_HIGHER_RAW!r} raw_l={BARRIER_LOWER_RAW!r}{RST}")
     await ws.send(json.dumps(proposal_req))
@@ -1336,7 +1359,13 @@ async def process_tick(ws, tick_data, last_trade_time):
 
     print_dashboard()
 
-    if len(stochrsi_vals) < 2 or active_contract:
+    if len(stochrsi_vals) < 2 or active_contract or _pending_buy:
+        if _pending_buy:
+            buy_age = time.time() - _pending_buy.get("signal_ts", 0)
+            if buy_age > 60:
+                print(f"  {YLW}! Pending buy context stale ({buy_age:.0f}s) - clearing{RST}")
+                mark_trade_failed("stale_pending_buy")
+                _pending_buy = None
         return last_trade_time
 
 
@@ -1588,6 +1617,8 @@ async def handle_message(ws, data, last_trade_time):
         prop = data.get("proposal", {})
         if "error" in data:
             print(f"  {RED}X PROPOSAL ERROR: {data["error"]}{RST}")
+            mark_trade_failed("proposal_error")
+            _pending_buy = None
             reset_active_contract()
         elif prop and pending_proposal:
             pid = prop.get("id")
@@ -1596,6 +1627,17 @@ async def handle_message(ws, data, last_trade_time):
                 # === PAYOUT FILTER: Skip if payout too high (market says trade will lose) ===
                 if payout_val > MAX_PAYOUT:
                     print(_skip("payout", f"  {YLW}! SKIPPED: Payout ${payout_val:.2f} > ${MAX_PAYOUT:.2f} limit - market thinks trade will lose{RST}"))
+                    mark_trade_failed("payout_filter")
+                    _pending_buy = None
+                    reset_active_contract()
+                    _active_contract_id = None
+                    return last_trade_time
+                # === STALE PROPOSAL DETECTION ===
+                prop_age = time.time() - (_pending_buy.get("signal_ts", time.time()) if _pending_buy else time.time())
+                if prop_age > 30:
+                    print(f"  {YLW}! Proposal stale ({prop_age:.0f}s > 30s limit) - skipping buy{RST}")
+                    mark_trade_failed("stale_proposal")
+                    _pending_buy = None
                     reset_active_contract()
                     _active_contract_id = None
                     return last_trade_time
@@ -1610,17 +1652,24 @@ async def handle_message(ws, data, last_trade_time):
         buy = data.get("buy", {})
         if "error" in data:
             print(f"  {RED}X BUY ERROR: {data["error"]}{RST}")
+            mark_trade_failed("buy_error")
+            _pending_buy = None
             reset_active_contract()
         elif buy:
             cid = buy.get("contract_id", "?")
             cost = buy.get("buy_price", "?")
             payout = buy.get("payout", "?")
-            direction = active_contract["direction"] if active_contract else (pending_proposal["direction"] if pending_proposal else "?")
+            direction = active_contract["direction"] if active_contract else (pending_proposal["direction"] if pending_proposal else (_pending_buy["direction"] if _pending_buy else "?"))
             if active_contract:
                 active_contract["contract_id"] = cid
             elif pending_proposal:
                 active_contract = {"direction": direction, "entry_price": pending_proposal.get("entry_price", 0), "contract_id": cid, "barrier": pending_proposal.get("barrier", BARRIER_HIGHER)}
+            elif _pending_buy:
+                # Recovery: reconnect cleared pending_proposal but buy response still arrived
+                print(f"  {GRN}+ Recovered trade from pending_buy context (direction={_pending_buy['direction']}, barrier={_pending_buy['barrier']}){RST}")
+                active_contract = {"direction": direction, "entry_price": _pending_buy.get("entry_price", 0), "contract_id": cid, "barrier": _pending_buy.get("barrier", BARRIER_HIGHER)}
             pending_proposal = None
+            _pending_buy = None
             _active_contract_id = cid
             _active_contract_snapshot = dict(active_contract) if active_contract else None
             print_trade_placed(cid, direction, cost, payout)
