@@ -28,6 +28,7 @@ parser.add_argument("--cooldown-ticks", type=int, default=int(os.environ.get("CO
 args = parser.parse_args()
 
 # Config
+REST_BASE_URL = "https://api.derivws.com"
 BRIDGE_URL = os.environ.get("DTRADER_BRIDGE_URL", "http://localhost:3000")
 USE_BRIDGE = os.environ.get("USE_BRIDGE", "1") == "1"
 PAT_TOKEN = os.environ.get("PAT_TOKEN", "")
@@ -300,32 +301,48 @@ async def get_ws_url_bridge():
 
 
 async def get_accounts():
+    url = f"{REST_BASE_URL}/trading/v1/options/accounts"
+    headers = {"Authorization": f"Bearer {PAT_TOKEN}", "Deriv-App-ID": APP_ID, "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as s:
-        async with s.get(
-            f"https://api.derivws.com/v3/accounts?app_id={APP_ID}",
-            headers={"Authorization": PAT_TOKEN}
-        ) as r:
+        async with s.get(url, headers=headers) as r:
             return await r.json()
 
 
-def select_account(d):
-    for a in d.get("accounts", []):
-        lid = a.get("loginid", "")
-        if ACCOUNT_TYPE == "demo" and lid.startswith("DOT"):
-            return lid
-        if ACCOUNT_TYPE == "real" and not lid.startswith("DOT"):
-            return lid
-    accs = d.get("accounts", [])
-    return accs[0]["loginid"] if accs else None
+def select_account(data):
+    d = data.get("data") if isinstance(data, dict) else None
+    if isinstance(d, list):
+        accounts = d
+    elif isinstance(d, dict) and "accounts" in d:
+        accounts = d["accounts"]
+    elif isinstance(data, list):
+        accounts = data
+    else:
+        accounts = []
+    if not accounts:
+        return None
+    for acc in accounts:
+        acc_id = acc.get("account_id") or acc.get("accountId") or acc.get("id") or acc.get("loginid")
+        is_virtual = acc.get("is_virtual") or acc.get("isVirtual") or (acc.get("account_type") == "demo")
+        acc_type = acc.get("account_type") or acc.get("accountType") or ("demo" if is_virtual else "real")
+        is_demo = is_virtual or acc_type == "demo" or str(acc_id).startswith("VR") or str(acc_id).startswith("DOT")
+        if ACCOUNT_TYPE == "demo" and is_demo:
+            return acc_id
+        if ACCOUNT_TYPE == "real" and not is_demo:
+            return acc_id
+    if accounts:
+        return accounts[0].get("account_id") or accounts[0].get("accountId") or accounts[0].get("loginid")
+    return None
 
 
 async def get_otp_url(acc_id):
+    url = f"{REST_BASE_URL}/trading/v1/options/accounts/{acc_id}/otp"
+    headers = {"Authorization": f"Bearer {PAT_TOKEN}", "Deriv-App-ID": APP_ID, "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as s:
-        async with s.post(
-            "https://api.derivws.com/v3/register_device",
-            json={"app_id": APP_ID, "app_token": PAT_TOKEN, "account_id": acc_id}
-        ) as r:
-            return (await r.json()).get("wss_url", "")
+        async with s.post(url, headers=headers, json={}) as r:
+            data = await r.json()
+            if r.status != 200:
+                raise Exception(f"OTP failed: {data}")
+            return data.get("wss_url", "")
 
 
 async def get_ws_url():
