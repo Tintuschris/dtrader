@@ -30,10 +30,8 @@ ROOT = Path(__file__).resolve().parent
 # thresholds are still per-market because they depend on signal quality.
 MARKET_PROFILES = {
     "R_25": {
-        "SOFT_RSI_SHORT_MIN": "68",
+        "SOFT_RSI_SHORT_MIN": "72",
         "SOFT_RAW_BREAKOUT_MIN": "0.20",
-        "BARRIER_HIGHER": "-0.25",
-        "BARRIER_LOWER": "+0.25",
     },
     "R_75": {
         "SOFT_RSI_SHORT_MIN": "72",
