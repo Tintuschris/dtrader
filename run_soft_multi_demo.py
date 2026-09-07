@@ -25,22 +25,19 @@ ROOT = Path(__file__).resolve().parent
 # the old fixed +/-0.40 was meaningless at that scale.
 # R_25 SHORT RSI raised from 62 to 68 because losses clustered at RSI 62-69.
 # Breakout minimum raised from 0.12 to 0.20 to filter weak-signal losses.
+# Barrier offsets removed - auto-calibration measures the market's tick size
+# from live data and sets the barrier proportionally. RSI and breakout
+# thresholds are still per-market because they depend on signal quality.
 MARKET_PROFILES = {
     "R_25": {
-        "BARRIER_HIGHER": "-0.40",
-        "BARRIER_LOWER": "+0.40",
         "SOFT_RSI_SHORT_MIN": "68",
         "SOFT_RAW_BREAKOUT_MIN": "0.20",
     },
     "R_75": {
-        "BARRIER_HIGHER": "-15.0",
-        "BARRIER_LOWER": "+15.0",
         "SOFT_RSI_SHORT_MIN": "72",
         "SOFT_RAW_BREAKOUT_MIN": "0.25",
     },
     "R_100": {
-        "BARRIER_HIGHER": "-0.60",
-        "BARRIER_LOWER": "+0.60",
         "SOFT_RSI_SHORT_MIN": "68",
         "SOFT_RAW_BREAKOUT_MIN": "0.20",
     },

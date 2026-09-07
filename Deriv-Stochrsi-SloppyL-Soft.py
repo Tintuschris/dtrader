@@ -696,10 +696,20 @@ def _calc_barrier(direction, rsi, barrier_mode=None, strong_long=None, strong_sh
 
 
 def _scale_barrier_to_volatility(base_abs):
-    """Scale barrier using recent tick movement variance.
-    Choppy markets get wider barriers, calm markets get tighter ones.
+    """Auto-calibrate barrier from live tick data.
+
+    Measures the median tick movement over the last 20 ticks and sets the
+    barrier to give ~2 ticks of room. The 3-tier base_abs acts as a floor
+    so barriers are never too tight, and adaptive variance scaling widens
+    them in choppy markets.
+
+    Works on ANY volatility index without hardcoded per-market values.
+    R_25 (tick ~0.10): barrier ~0.20-0.45
+    R_75 (tick ~8.00): barrier ~16-40
+    R_100 (tick ~0.10): barrier ~0.20-0.45
     """
     if len(tick_history) < 20:
+        # Warmup: use base_abs from tier system
         return base_abs
     recent = list(tick_history)[-20:]
     moves = [abs(recent[i] - recent[i-1]) for i in range(1, len(recent))]
@@ -711,18 +721,32 @@ def _scale_barrier_to_volatility(base_abs):
         variance = stdev(moves)
     except Exception:
         variance = 0.05
-    # Adaptive multiplier
-    if variance > 0.15:
+
+    # Adaptive multiplier based on variance
+    if variance > typical_move * 0.5:
+        mult = 2.5    # very choppy - lots of whipsaw
+    elif variance > typical_move * 0.3:
         mult = 2.0    # choppy
-    elif variance > 0.08:
+    elif variance > typical_move * 0.15:
         mult = 1.7    # moderate
-    elif variance > 0.03:
+    elif variance > typical_move * 0.05:
         mult = 1.5    # normal
     else:
-        mult = 1.2    # calm
-    scaled = max(base_abs, typical_move * mult)
-    # Bound between min and max offset
-    scaled = max(0.20, min(0.45, scaled))
+        mult = 1.2    # calm - smooth trending
+
+    # Auto-calibrated barrier: median_move * multiplier
+    # This gives the trade ~2 ticks of room in calm markets,
+    # more room in choppy markets.
+    auto_barrier = typical_move * mult
+
+    # Floor: never go below the tier-based base_abs (prevents
+    # artificially tight barriers on very calm markets)
+    scaled = max(base_abs, auto_barrier)
+
+    # Soft ceiling: cap at 5x the tier base to prevent absurdly
+    # wide barriers that make wins worth nothing
+    scaled = min(base_abs * 5.0, scaled)
+
     return scaled
 
 

@@ -1459,7 +1459,6 @@ def _calc_barrier(direction, rsi):
         return base
 
     # Scale to recent market movement using adaptive variance-based multiplier
-# Scale to recent market movement using adaptive variance-based multiplier
     if BARRIER_SCALE_MODE == "fixed" or len(tick_history) < BARRIER_VOL_LOOKBACK:
         scaled_abs = base_abs
     else:
@@ -1470,10 +1469,27 @@ def _calc_barrier(direction, rsi):
         else:
             typical_move = median(moves)
             # Adaptive multiplier: choppy markets get wider barriers
-            #   high variance (>0.15/tick) → 2.0x  (whipsaw protection)
-            #   moderate (0.08-0.15)       → 1.7x
-            #   normal (0.03-0.08)         → 1.5x  (current default)
-            #   calm (<0.03)               → 1.2x  (tighter for better payout)
+            # Auto-calibrate: adaptive multiplier based on variance relative
+            # to typical move (works on ANY market tick size)
+            try:
+                variance = stdev(moves)
+            except Exception:
+                variance = 0.0
+            if variance > typical_move * 0.5:
+                adaptive_mult = 2.5    # very choppy
+            elif variance > typical_move * 0.3:
+                adaptive_mult = 2.0    # choppy
+            elif variance > typical_move * 0.15:
+                adaptive_mult = 1.7    # moderate
+            elif variance > typical_move * 0.05:
+                adaptive_mult = 1.5    # normal
+            else:
+                adaptive_mult = 1.2    # calm
+            # Auto-calibrated barrier: median_move * multiplier
+            auto_barrier = typical_move * adaptive_mult
+            # Floor: tier base; ceiling: 5x tier base
+            scaled_abs = max(base_abs, auto_barrier)
+            scaled_abs = min(base_abs * 5.0, scaled_abs)
             try:
                 variance = stdev(moves)
             except Exception:
