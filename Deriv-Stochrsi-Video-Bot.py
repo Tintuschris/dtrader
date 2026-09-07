@@ -179,6 +179,8 @@ FILTER_RSI_LONG_MIN = args.rsi_long_min
 FILTER_RSI_SHORT_MIN = args.rsi_short_min
 FILTER_SRSI_SHORT_PEAK_MIN = args.srsi_short_peak
 FILTER_SRSI_LONG_PEAK_MAX = args.srsi_long_peak
+FILTER_MIN_SRSI = args.min_srsi
+FILTER_MIN_FLAT_EXTREME = args.min_flat_extreme
 FILTER_REVERSAL_TICKS = args.reversal_ticks
 FILTER_ADAPTIVE_FLAT_MAX = args.adaptive_flat_max
 FILTER_ADAPTIVE_BREAKOUT_MIN = args.adaptive_breakout_min
@@ -1302,6 +1304,22 @@ async def process_tick(ws, tick_data, last_trade_time):
             reset_l_state()
             return now
 
+        # === MINIMUM SRSI FLOOR: Block exhausted signals ===
+        if direction == "higher" and srsi_now < FILTER_MIN_SRSI:
+            print(_skip("srsi_exhausted", f"  {YLW}! SKIPPED: SRSI={srsi_now:.3f} < {FILTER_MIN_SRSI:.2f}, oversold exhausted (no room to rise){RST}"))
+            reset_l_state()
+            return now
+        if direction == "lower" and srsi_now > (1.0 - FILTER_MIN_SRSI):
+            print(_skip("srsi_exhausted_high", f"  {YLW}! SKIPPED: SRSI={srsi_now:.3f} > {1.0 - FILTER_MIN_SRSI:.2f}, overbought exhausted (no room to fall){RST}"))
+            reset_l_state()
+            return now
+
+        # === MINIMUM FLAT EXTREME: Block rock-bottom flat zones ===
+        if direction == "higher" and flat_extreme < FILTER_MIN_FLAT_EXTREME:
+            print(_skip("flat_too_deep", f"  {YLW}! SKIPPED: flat_extreme={flat_extreme:.4f} < {FILTER_MIN_FLAT_EXTREME:.2f}, flat zone at rock bottom (weak L-shape){RST}"))
+            reset_l_state()
+            return now
+
         # === FILTER 4: 3-TICK REVERSAL CONFIRMATION ===
         if len(tick_history) >= FILTER_REVERSAL_TICKS + 1:
             ticks = list(tick_history)[-(FILTER_REVERSAL_TICKS+1):]
@@ -1425,7 +1443,7 @@ async def process_tick(ws, tick_data, last_trade_time):
         print_signal(direction, srsi_now, reason)
         if FILTER_ENTRY_DELAY > 0:
             _pending_signal = {"direction": direction, "srsi": srsi_now, "rsi": rsi_now,
-                "flat_count": _l_flat_count, "delta": delta, "reason": reason, "entry_price": price, "delay_count": 0}
+                "flat_count": _signal_ctx.get("flat_count", _l_flat_count), "delta": delta, "reason": reason, "entry_price": price, "delay_count": 0}
             print(f"  {DIM}[DELAY] Signal queued, waiting {FILTER_ENTRY_DELAY} ticks for confirmation...{RST}")
             return now
         barrier = _calc_barrier(direction, rsi_now)

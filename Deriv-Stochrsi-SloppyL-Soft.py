@@ -1415,6 +1415,22 @@ async def process_tick(ws, tick_data, last_trade_time):
             reset_l_state()
             return now
 
+        # === MINIMUM SRSI FLOOR: Block exhausted signals ===
+        if direction == "higher" and srsi_now < FILTER_MIN_SRSI:
+            print(_skip("srsi_exhausted", f"  {YLW}! SKIPPED: SRSI={srsi_now:.3f} < {FILTER_MIN_SRSI:.2f}, oversold exhausted (no room to rise){RST}"))
+            reset_l_state()
+            return now
+        if direction == "lower" and srsi_now > (1.0 - FILTER_MIN_SRSI):
+            print(_skip("srsi_exhausted_high", f"  {YLW}! SKIPPED: SRSI={srsi_now:.3f} > {1.0 - FILTER_MIN_SRSI:.2f}, overbought exhausted (no room to fall){RST}"))
+            reset_l_state()
+            return now
+
+        # === MINIMUM FLAT COUNT: Block weak L-shapes ===
+        if _l_flat_count < FILTER_MIN_FLAT_COUNT:
+            print(_skip("flat_too_short", f"  {YLW}! SKIPPED: flat_count={_l_flat_count} < {FILTER_MIN_FLAT_COUNT}, L-shape too short (weak signal){RST}"))
+            reset_l_state()
+            return now
+
         # === REVERSAL CONFIRMATION (2-tick) ===
         if len(tick_history) >= 3:
             t1, t2, t3 = tick_history[-3], tick_history[-2], tick_history[-1]
