@@ -61,6 +61,18 @@ parser.add_argument('--strong-threshold-long', type=int, default=int(os.environ.
                     help='RSI threshold for strong LONG signal (default: 25)')
 parser.add_argument('--strong-threshold-short', type=int, default=int(os.environ.get('SOFT_STRONG_THRESHOLD_SHORT', '85')),
                     help='RSI threshold for strong SHORT signal (default: 85)')
+parser.add_argument('--barrier-extreme', default=os.environ.get('BARRIER_EXTREME', '0.30'),
+                    help='Barrier for extreme RSI signals (default: 0.30)')
+parser.add_argument('--min-stake', type=float, default=float(os.environ.get('MIN_STAKE', '0.15')),
+                    help='Minimum stake floor (default: 0.15)')
+parser.add_argument('--min-balance', type=float, default=float(os.environ.get('MIN_BALANCE', '0')),
+                    help='Pause trading below this balance (default: 0 = disabled)')
+parser.add_argument('--max-session-loss', type=float, default=float(os.environ.get('MAX_SESSION_LOSS', '5.0')),
+                    help='Halt after losing this much in a session (default: 5.0)')
+parser.add_argument('--tick-gate-micro', type=int, default=int(os.environ.get('FILTER_TICK_GATE_MICRO', '3')),
+                    help='Micro gate: skip if N of last 5 ticks go against trade (default: 3)')
+parser.add_argument('--tick-gate-macro', type=int, default=int(os.environ.get('FILTER_TICK_GATE_MACRO', '7')),
+                    help='Macro gate: skip if N of last 10 ticks go against trade (default: 7)')
 args = parser.parse_args()
 
 
@@ -234,6 +246,12 @@ BARRIER_STRONG = float(_bs) if _bs is not None else 0.0
 _bw, _ = _parse_barrier(args.barrier_weak, '--barrier-weak')
 BARRIER_WEAK = float(_bw) if _bw is not None else 0.0
 BARRIER_MODE = args.barrier_mode
+BARRIER_EXTREME = float(args.barrier_extreme)
+MIN_STAKE = args.min_stake
+MIN_BALANCE = args.min_balance
+MAX_SESSION_LOSS = args.max_session_loss
+TICK_GATE_MICRO = args.tick_gate_micro
+TICK_GATE_MACRO = args.tick_gate_macro
 
 
 # Warnings collected during CLI parsing.
@@ -350,6 +368,10 @@ _l_flat_val_sum = 0.0
 _l_direction = None
 _consecutive_losses = 0
 _loss_cooldown_until = 0.0
+_cooldown_multiplier = 1.0
+_session_pnl = 0.0
+_session_halt_until = 0.0
+_balance_known = False
 # _trade_log is loaded from the trade log file at import (persistent across runs)
 _last_displayed_cid = None
 
@@ -556,7 +578,7 @@ def print_header():
     print(f"{CYN}|{RST}  {BLD}Deriv STOCHRSI L-Shape Bot{RST}  {DIM}v2.0 Enhanced CLI{RST}")
     print(f"{CYN}+{'='*56}+{RST}")
     print(f"{CYN}|{RST}  Symbol:    {BLD}{SYMBOL}{RST}                          Duration: {BLD}{DURATION}{DURATION_UNIT}{RST}")
-    print(f"{CYN}|{RST}  Stake:     {GRN}${STAKE} {CURRENCY}{RST}                       Barrier:  {BLD}{BARRIER_HIGHER_SENT}/{BARRIER_LOWER_SENT}{RST}  ({BARRIER_MODE}){RST}")
+    print(f"{CYN}|{RST}  Stake:     {GRN}${STAKE} {CURRENCY}{RST}                       Barrier:  {BLD}E:{BARRIER_EXTREME} S:{args.strong_threshold_long}/{args.strong_threshold_short} W:{BARRIER_WEAK}{RST}")
     print(f"{CYN}|{RST}  Mode:      {BLD}{'BRIDGE' if USE_BRIDGE else 'PAT'}{RST}")
     print(f"{CYN}|{RST}  Strategy:  {MAG}RAW StochRSI({RSI_PERIOD}) slanted L{RST}")
     if DRY_RUN:
@@ -621,35 +643,87 @@ def print_tick(price, tick_num):
     print(f"  {DIM}#{tick_num:>4d}{RST} {arrow} {BLD}{price:.4f}{RST}  {digit_color}[{digit}]{RST}{srsi_str}  {DIM}{spark}{RST}")
 
 def _calc_barrier(direction, rsi, barrier_mode=None, strong_long=None, strong_short=None):
-    """Pick barrier based on mode.
+    """Three-tier RSI barrier: Extreme / Strong / Weak, scaled to recent movement.
 
-    fixed: use CLI --barrier-higher/--barrier-lower directly (authoritative).
-    rsi: adapt based on RSI strength -- strong threshold uses --barrier-strong,
-         otherwise falls back to --barrier-weak.
-
-    The returned string is always a clean signed float string. In fixed mode the
-    values come directly from the already-normalized BARRIER_HIGHER_SENT /
-    BARRIER_LOWER_SENT so repeated/malformed signs like '++35.00' never leak into
-    the actual placement.
+    Safety-first defaults. All tiers overridable via CLI.
+    In fixed mode, uses --barrier-higher/--barrier-lower directly.
+    In rsi mode, selects tier based on RSI strength.
     """
     if barrier_mode is None:
         barrier_mode = BARRIER_MODE
-    if direction == 'higher':
-        if barrier_mode == 'fixed':
+
+    try:
+        extreme_abs = abs(float(BARRIER_EXTREME))
+    except (TypeError, ValueError):
+        extreme_abs = 0.30
+    try:
+        strong_abs = abs(float(BARRIER_STRONG))
+    except (TypeError, ValueError):
+        strong_abs = 0.40
+    try:
+        weak_abs = abs(float(BARRIER_WEAK))
+    except (TypeError, ValueError):
+        weak_abs = 0.50
+
+    if direction == "higher":
+        if barrier_mode == "fixed":
             return BARRIER_HIGHER_SENT
-        # rsi mode
-        thresh = strong_long if strong_long is not None else args.strong_threshold_long
-        if rsi <= thresh:
-            return format_barrier(BARRIER_STRONG)
-        return format_barrier(BARRIER_WEAK)
+        # Three tiers for LONG
+        thresh_ext = args.strong_threshold_long   # e.g. 25
+        thresh_strong = 30
+        if rsi <= thresh_ext:
+            base_abs = extreme_abs
+        elif rsi <= thresh_strong:
+            base_abs = strong_abs
+        else:
+            base_abs = weak_abs
+        scaled_abs = _scale_barrier_to_volatility(base_abs)
+        return f"-{scaled_abs:.2f}"
     else:
-        if barrier_mode == 'fixed':
+        if barrier_mode == "fixed":
             return BARRIER_LOWER_SENT
-        # rsi mode
-        thresh = strong_short if strong_short is not None else args.strong_threshold_short
-        if rsi >= thresh:
-            return format_barrier(BARRIER_STRONG)
-        return format_barrier(BARRIER_WEAK)
+        # Three tiers for SHORT
+        thresh_ext = args.strong_threshold_short  # e.g. 85
+        thresh_strong = 75
+        if rsi >= thresh_ext:
+            base_abs = extreme_abs
+        elif rsi >= thresh_strong:
+            base_abs = strong_abs
+        else:
+            base_abs = weak_abs
+        scaled_abs = _scale_barrier_to_volatility(base_abs)
+        return f"+{scaled_abs:.2f}"
+
+
+def _scale_barrier_to_volatility(base_abs):
+    """Scale barrier using recent tick movement variance.
+    Choppy markets get wider barriers, calm markets get tighter ones.
+    """
+    if len(tick_history) < 20:
+        return base_abs
+    recent = list(tick_history)[-20:]
+    moves = [abs(recent[i] - recent[i-1]) for i in range(1, len(recent))]
+    if not moves:
+        return base_abs
+    from statistics import median, stdev
+    typical_move = median(moves)
+    try:
+        variance = stdev(moves)
+    except Exception:
+        variance = 0.05
+    # Adaptive multiplier
+    if variance > 0.15:
+        mult = 2.0    # choppy
+    elif variance > 0.08:
+        mult = 1.7    # moderate
+    elif variance > 0.03:
+        mult = 1.5    # normal
+    else:
+        mult = 1.2    # calm
+    scaled = max(base_abs, typical_move * mult)
+    # Bound between min and max offset
+    scaled = max(0.20, min(0.45, scaled))
+    return scaled
 
 
 def format_barrier(val):
@@ -726,6 +800,7 @@ def print_trade_result(status, profit, entry_price, exit_price, direction, contr
         stats["wins"] += 1
     else:
         stats["losses"] += 1
+        _cooldown_multiplier = min(4.0, _cooldown_multiplier + 0.5)
 
     wr = (stats["wins"] / stats["trades"] * 100) if stats["trades"] > 0 else 0
 
@@ -1207,7 +1282,8 @@ async def place_trade(ws, direction, barrier, barrier_mode=None):
 
 async def process_tick(ws, tick_data, last_trade_time):
     global _tick_count, _in_cooldown, active_contract
-    global _consecutive_losses, _loss_cooldown_until
+    global _consecutive_losses, _loss_cooldown_until, _cooldown_multiplier
+    global _session_pnl, _session_halt_until, _balance_known
     _tick_count += 1
     price = tick_data["quote"]
     closes.append(price)
@@ -1269,6 +1345,7 @@ async def process_tick(ws, tick_data, last_trade_time):
                 return now
             _consecutive_losses = 0
             _loss_cooldown_until = 0
+            _cooldown_multiplier = 1.0
 
         # === RSI TREND ALIGNMENT ===
         rsi_now = rsi_vals[-1] if rsi_vals else 50
@@ -1353,6 +1430,54 @@ async def process_tick(ws, tick_data, last_trade_time):
                     print(_skip("momentum_down", f"  {YLW}! SKIPPED: No momentum confirmation ({mom_dn}/{MOMENTUM_CONFIRM_TICKS} DOWN ticks){RST}"))
                     reset_l_state()
                     return now
+
+        # === SESSION P&L HALT ===
+        if MAX_SESSION_LOSS > 0 and _session_pnl < -MAX_SESSION_LOSS:
+            if _session_halt_until == 0:
+                _session_halt_until = time.time() + 300
+                print(f"  {RED}X SESSION HALT: Lost ${abs(_session_pnl):.2f} (cap: ${MAX_SESSION_LOSS:.2f}) -- pausing 5 min{RST}")
+            remaining = int(_session_halt_until - time.time())
+            if remaining > 0:
+                if not _in_cooldown:
+                    print(f"  {DIM}Session halt: {remaining}s remaining{RST}")
+                    _in_cooldown = True
+                reset_l_state()
+                return now
+            else:
+                print(f"  {GRN}+ Session halt expired -- resuming{RST}")
+                _session_pnl = 0.0
+                _session_halt_until = 0.0
+                _in_cooldown = False
+
+        # === BALANCE GUARD ===
+        if MIN_BALANCE > 0 and _balance_known:
+            bal = stats.get('balance', 9999)
+            if bal < MIN_BALANCE:
+                print(_skip('balance_guard', f"  {YLW}! SKIPPED: Balance ${bal:.2f} < minimum ${MIN_BALANCE:.2f}{RST}"))
+                reset_l_state()
+                return now
+
+        # === TICK COUNT GATE (micro + macro) ===
+        if len(tick_history) >= 5:
+            last5 = list(tick_history)[-5:]
+            if direction == "higher":
+                micro_against = sum(1 for i in range(1, len(last5)) if last5[i] < last5[i-1])
+            else:
+                micro_against = sum(1 for i in range(1, len(last5)) if last5[i] > last5[i-1])
+            if TICK_GATE_MICRO > 0 and micro_against >= TICK_GATE_MICRO:
+                print(_skip('tick_gate_micro', f"  {YLW}! SKIPPED: Micro gate ({micro_against}/4 ticks against trade){RST}"))
+                reset_l_state()
+                return now
+        if len(tick_history) >= 10:
+            last10 = list(tick_history)[-10:]
+            if direction == "higher":
+                macro_against = sum(1 for i in range(1, len(last10)) if last10[i] < last10[i-1])
+            else:
+                macro_against = sum(1 for i in range(1, len(last10)) if last10[i] > last10[i-1])
+            if TICK_GATE_MACRO > 0 and macro_against >= TICK_GATE_MACRO:
+                print(_skip('tick_gate_macro', f"  {YLW}! SKIPPED: Macro gate ({macro_against}/9 ticks against trade){RST}"))
+                reset_l_state()
+                return now
 
         barrier_mode = BARRIER_MODE
         barrier = _calc_barrier(direction, rsi_now, barrier_mode=barrier_mode)
@@ -1505,6 +1630,7 @@ async def handle_message(ws, data, last_trade_time):
                 print(f"  {DIM}[POC] status={status} profit={profit} cid={cid}{RST}")
                 try:
                     profit_f = float(profit)
+                    _session_pnl += profit_f
                     entry_f = float(entry_price) if entry_price else 0
                     exit_f = float(exit_p) if exit_p else 0
                     print_trade_result_analyzed(status, profit_f, entry_f, exit_f, direction, cid, barrier_val, poc)
@@ -1530,6 +1656,7 @@ async def handle_message(ws, data, last_trade_time):
                 print_trade_progress(cur, total, entry, barrier_val)
     elif data.get("msg_type") == "balance":
         bal = data.get("balance", {})
+        _balance_known = True
         print_balance(bal.get("balance", "?"))
     elif data.get("msg_type") == "ping":
         # The OTP/derivws endpoint answers OUR keepalive {"ping": 1} with
