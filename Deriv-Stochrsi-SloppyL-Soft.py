@@ -281,6 +281,9 @@ RAW_LEVEL_HIGH = 0.80
 RAW_FLAT_LOOKBACK = int(os.environ.get("SOFT_RAW_FLAT_LOOKBACK", "3"))
 RAW_FLAT_THRESHOLD = float(os.environ.get("SOFT_RAW_FLAT_THRESHOLD", "0.08"))
 RAW_BREAKOUT_MIN = float(os.environ.get("SOFT_RAW_BREAKOUT_MIN", "0.20"))
+# === Minimum signal quality filters (prevents exhausted/weak L-shape entries) ===
+FILTER_MIN_SRSI = float(os.environ.get("SOFT_MIN_SRSI", "0.20"))
+FILTER_MIN_FLAT_COUNT = int(os.environ.get("SOFT_MIN_FLAT_COUNT", "5"))
 # SHORT reversals were the weakest near-miss cohort in the eased run. Require
 # a little more SRSI movement for LOWER entries without changing the L-shape.
 RAW_SHORT_BREAKOUT_MIN = float(os.environ.get("SOFT_SHORT_BREAKOUT_MIN", "0.15"))
