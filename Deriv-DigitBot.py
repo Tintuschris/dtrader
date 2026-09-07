@@ -342,7 +342,9 @@ async def get_otp_url(acc_id):
             data = await r.json()
             if r.status != 200:
                 raise Exception(f"OTP failed: {data}")
-            return data.get("wss_url", "")
+            if "data" in data and isinstance(data["data"], dict):
+                return data["data"].get("url") or data["data"].get("otpUrl") or ""
+            return data.get("url", "")
 
 
 async def get_ws_url():
