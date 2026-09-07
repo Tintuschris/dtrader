@@ -32,6 +32,8 @@ MARKET_PROFILES = {
     "R_25": {
         "SOFT_RSI_SHORT_MIN": "68",
         "SOFT_RAW_BREAKOUT_MIN": "0.20",
+        "BARRIER_HIGHER": "-0.25",
+        "BARRIER_LOWER": "+0.25",
     },
     "R_75": {
         "SOFT_RSI_SHORT_MIN": "72",
