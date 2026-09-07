@@ -262,7 +262,7 @@ RAW_LEVEL_LOW = 0.20
 RAW_LEVEL_HIGH = 0.80
 RAW_FLAT_LOOKBACK = int(os.environ.get("SOFT_RAW_FLAT_LOOKBACK", "3"))
 RAW_FLAT_THRESHOLD = float(os.environ.get("SOFT_RAW_FLAT_THRESHOLD", "0.08"))
-RAW_BREAKOUT_MIN = float(os.environ.get("SOFT_RAW_BREAKOUT_MIN", "0.12"))
+RAW_BREAKOUT_MIN = float(os.environ.get("SOFT_RAW_BREAKOUT_MIN", "0.20"))
 # SHORT reversals were the weakest near-miss cohort in the eased run. Require
 # a little more SRSI movement for LOWER entries without changing the L-shape.
 RAW_SHORT_BREAKOUT_MIN = float(os.environ.get("SOFT_SHORT_BREAKOUT_MIN", "0.15"))
@@ -282,7 +282,7 @@ RSI_LONG_MIN = float(os.environ.get("SOFT_RSI_LONG_MIN", "30"))  # RSI floor for
 #   Disable by setting SOFT_LONG_STALL_MAX_DOWNS >= SOFT_LONG_STALL_LOOKBACK (e.g. 99).
 LONG_STALL_LOOKBACK = int(os.environ.get("SOFT_LONG_STALL_LOOKBACK", "4"))
 LONG_STALL_MAX_DOWNS = int(os.environ.get("SOFT_LONG_STALL_MAX_DOWNS", "1"))
-RSI_SHORT_MIN = float(os.environ.get("SOFT_RSI_SHORT_MIN", "62"))
+RSI_SHORT_MIN = float(os.environ.get("SOFT_RSI_SHORT_MIN", "68"))
 
 # === Trend filters ===
 # Skip signals when price is trending strongly against the trade direction.
