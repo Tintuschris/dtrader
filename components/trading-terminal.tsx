@@ -444,7 +444,7 @@ if (!isMounted) {
               <div className="cursor-note desktop-only">
                 <span className="cursor-dot" /> Current tick <b>{current.digit}</b>
                 <span className="note-divider" />
-                {tickStreamStatus === "reconnecting" ? "Reconnecting…" : streamMode === "live" ? `Live ${symbolLabel}` : "Simulated feed"}
+                {tickStreamStatus === "reconnecting" ? "Reconnecting…" : tickStreamStatus === "live" ? `Live ${symbolLabel}` : tickStreamStatus === "simulated" ? "Simulated feed" : "Waiting for live feed…"}
                 <span className="note-divider" />
                 {needsBarrier ? "Click digit to select" : "Select Even/Odd"}
               </div>

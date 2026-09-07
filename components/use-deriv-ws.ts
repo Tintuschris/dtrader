@@ -159,6 +159,7 @@ export function useDerivTrading() {
   const proposalTimestampRef = useRef(0);
   const proposalRequestedAtRef = useRef(0);
   const proposalRecoveryAtRef = useRef(0);
+  const proposalRecoveryAttemptsRef = useRef(0);
   const reconcileOnOpenRef = useRef(false);
   const activeContractRef = useRef<OpenContract | null>(null);
   const connectedAtRef = useRef<number | null>(null); // when the current socket opened
@@ -415,6 +416,7 @@ export function useDerivTrading() {
               proposalRef.current = proposal;
               proposalTimestampRef.current = Date.now();
               proposalRequestedAtRef.current = proposalTimestampRef.current;
+              proposalRecoveryAttemptsRef.current = 0;
               // Only update React state if values actually changed to avoid
               // unnecessary re-renders that cause payout flickering
               setCurrentProposal((prev) => {
@@ -815,6 +817,7 @@ export function useDerivTrading() {
       if (paramsChanged) {
         proposalRef.current = null;
         proposalTimestampRef.current = 0;
+        proposalRecoveryAttemptsRef.current = 0;
         setCurrentProposal(null);
       }
       proposalRequestedAtRef.current = Date.now();
@@ -856,6 +859,7 @@ export function useDerivTrading() {
     proposalRef.current = null;
     proposalTimestampRef.current = 0;
     proposalRequestedAtRef.current = Date.now();
+    proposalRecoveryAttemptsRef.current += 1;
     setCurrentProposal(null);
     const subMsg: Record<string, unknown> = {
       proposal: 1,
@@ -890,11 +894,18 @@ export function useDerivTrading() {
       if (!lastGood || now - lastGood < PROPOSAL_RECOVERY_AFTER_MS) return;
       if (now - proposalRecoveryAtRef.current < PROPOSAL_RECOVERY_AFTER_MS) return;
       proposalRecoveryAtRef.current = now;
-      console.warn("[WS] Proposal stream stale — refreshing pricing");
-      resubscribeProposal();
+      proposalRecoveryAttemptsRef.current += 1;
+      if (proposalRecoveryAttemptsRef.current >= 2 && accountIdRef.current) {
+        console.warn("[WS] Proposal stream did not recover — reconnecting trading socket");
+        proposalRecoveryAttemptsRef.current = 0;
+        void connect(accountIdRef.current);
+      } else {
+        console.warn("[WS] Proposal stream stale — refreshing pricing");
+        resubscribeProposal();
+      }
     }, PROPOSAL_RECOVERY_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [connectionStatus, resubscribeProposal]);
+  }, [connectionStatus, connect, resubscribeProposal]);
 
   // Cleanup subscription on unmount
   useEffect(() => {

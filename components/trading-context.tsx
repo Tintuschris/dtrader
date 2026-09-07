@@ -47,7 +47,7 @@ export function subToApiType(sub: SubContract): string {
 export function subNeedsBarrier(sub: SubContract): boolean {
   return sub === "over" || sub === "under" || sub === "match" || sub === "differs";
 }
-export const durationOptions = [{label:"1 tick",value:1},{label:"5 ticks",value:5},{label:"10 ticks",value:10},{label:"15 ticks",value:15},{label:"25 ticks",value:25},{label:"50 ticks",value:50}];
+export const durationOptions = [{label:"1 tick",value:1},{label:"5 ticks",value:5},{label:"10 ticks",value:10},{label:"15 ticks",value:15},{label:"20 ticks",value:20},{label:"25 ticks",value:25},{label:"50 ticks",value:50}];
 export function fmt(n: number | string) {
   return Number(n).toFixed(2);
 }
@@ -187,7 +187,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   const [symbol, setSymbol] = useState("1HZ100V");
   const [contractGroup, setContractGroup] = useState<ContractGroup>(contractGroups[0]);
   const [subContract, setSubContract] = useState<SubContract>("over");
-  const [stake, setStake] = useState("10.00");
+  const [stake, setStake] = useState("1.00");
   const [ticks, setTicks] = useState<Tick[]>(initialTicks);
   const pipSizeRef = useRef(2);
   const [running, setRunning] = useState(true);
@@ -200,7 +200,7 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
   const [activeAccountId, setActiveAccountId] = useState("");
   const activeAccount = accounts.find((account) => account.id === activeAccountId);
   const [accountStatus, setAccountStatus] = useState("Connecting to Deriv…");
-  const [duration, setDuration] = useState(5);
+  const [duration, setDuration] = useState(1);
   const [showDurationPicker, setShowDurationPicker] = useState(false);
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -438,6 +438,14 @@ export function TradingProvider({ children, initialTab = "workspace" }: { childr
 
   /* ---- keep symbol ref in sync ---- */
   useEffect(() => { currentSymbolRef.current = symbol; }, [symbol]);
+
+  // Keep the chart feed mode derived from the same status shown in the
+  // workspace header. This prevents stale state from displaying “Simulated
+  // feed” while the header says “LIVE TICKS”, or the reverse.
+  useEffect(() => {
+    if (tickStreamStatus === "live") setStreamMode("live");
+    if (tickStreamStatus === "simulated") setStreamMode("simulated");
+  }, [tickStreamStatus]);
 
   /* ---- tick stream (Options API public WebSocket) with auto-reconnect ---- */
   useEffect(() => {

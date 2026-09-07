@@ -377,6 +377,13 @@ The **DTrader Options Terminal** Next.js web trader - workspace UI, chart, trade
   contract pricing is unavailable.
 - Buy remains disabled until a fresh proposal is received, preventing stale or
   incorrectly priced purchases.
+- If repeated proposal refreshes fail while the socket still appears connected,
+  the authenticated trading socket is now reconnected automatically.
+- The chart feed label now uses the same tick-stream status as the workspace
+  header, preventing contradictory “LIVE TICKS” and “Simulated feed” labels.
+- Set the default trade ticket to 1 tick and `$1.00` stake.
+- Added a 20-tick duration option; all ticket durations now use the selected
+  value consistently when requesting and buying a contract.
 
 ### Web v1.4 - Settlement Details & Next-Trade Refresh (2026-09-03)
 
