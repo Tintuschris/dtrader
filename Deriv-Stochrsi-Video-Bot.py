@@ -1143,7 +1143,7 @@ async def place_trade(ws, direction, barrier):
 async def process_tick(ws, tick_data, last_trade_time):
     global _tick_count, _in_cooldown, active_contract
     global _consecutive_losses, _loss_cooldown_until, _pending_signal, _balance_guard_triggered
-    global _session_pnl, _session_halt_until
+    global _session_pnl, _session_halt_until, _pending_buy
     _tick_count += 1
     price = tick_data["quote"]
     closes.append(price)
