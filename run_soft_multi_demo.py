@@ -19,6 +19,32 @@ from pathlib import Path
 
 DEFAULT_SYMBOLS = ("R_25", "R_75", "R_100")
 ROOT = Path(__file__).resolve().parent
+
+# Per-market barrier and RSI profiles derived from loss analysis (Sep 6).
+# R_75 needs a much larger barrier because its tick moves are 10-20 points;
+# the old fixed +/-0.40 was meaningless at that scale.
+# R_25 SHORT RSI raised from 62 to 68 because losses clustered at RSI 62-69.
+# Breakout minimum raised from 0.12 to 0.20 to filter weak-signal losses.
+MARKET_PROFILES = {
+    "R_25": {
+        "BARRIER_HIGHER": "-0.40",
+        "BARRIER_LOWER": "+0.40",
+        "SOFT_RSI_SHORT_MIN": "68",
+        "SOFT_RAW_BREAKOUT_MIN": "0.20",
+    },
+    "R_75": {
+        "BARRIER_HIGHER": "-15.0",
+        "BARRIER_LOWER": "+15.0",
+        "SOFT_RSI_SHORT_MIN": "72",
+        "SOFT_RAW_BREAKOUT_MIN": "0.25",
+    },
+    "R_100": {
+        "BARRIER_HIGHER": "-0.60",
+        "BARRIER_LOWER": "+0.60",
+        "SOFT_RSI_SHORT_MIN": "68",
+        "SOFT_RAW_BREAKOUT_MIN": "0.20",
+    },
+}
 BOT = ROOT / "Deriv-Stochrsi-SloppyL-Soft.py"
 EVENT_PREFIX = "[BOT_EVENT] "
 
@@ -63,6 +89,8 @@ def worker_env(symbol: str) -> dict[str, str]:
             "SOFT_EVENT_STREAM": "1",
         }
     )
+    profile = MARKET_PROFILES.get(symbol, {})
+    env.update(profile)
     return env
 
 
