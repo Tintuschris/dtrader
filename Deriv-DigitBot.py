@@ -13,7 +13,8 @@ parser.add_argument("-s", "--symbol", default=os.environ.get("SYMBOL", "R_25"))
 parser.add_argument("--symbols", default=os.environ.get("SYMBOLS", ""),
                     help="Comma-separated multi-symbol (e.g. R_10,R_25,R_50). Overrides -s.")
 parser.add_argument("--stake", type=float, default=float(os.environ.get("STAKE", "0.35")))
-parser.add_argument("--min-stake", type=float, default=float(os.environ.get("MIN_STAKE", "0.15")))
+parser.add_argument("--min-stake", type=float, default=float(os.environ.get("MIN_STAKE", "0.35")),
+                    help="Bot-level minimum stake (never below Deriv's 0.35 hard floor)")
 parser.add_argument("--account", default=os.environ.get("ACCOUNT_TYPE", "demo"), choices=["demo", "real"])
 parser.add_argument("--dry-run", action="store_true")
 parser.add_argument("--prediction", type=int, default=5)
@@ -48,6 +49,7 @@ parser.add_argument("--base-stake", type=float, default=float(os.environ.get("BA
 args = parser.parse_args()
 
 # Config
+DERIV_MIN_STAKE = 0.35  # Deriv minimum stake per contract - proposals below this are rejected
 REST_BASE_URL = "https://api.derivws.com"
 BRIDGE_URL = os.environ.get("DTRADER_BRIDGE_URL", "http://localhost:3000")
 USE_BRIDGE = os.environ.get("USE_BRIDGE", "1") == "1"
@@ -146,7 +148,8 @@ class SymbolState:
         else: bal_mult = 0.40
         conf_mult = max(0.35, min(1.0, 0.2 + (confidence / 100) * 0.8))
         amt = round(STAKE * bal_mult * conf_mult, 2)
-        return max(MIN_STAKE, amt)
+        # Clamp to Deriv's hard minimum - proposals below 0.35 are rejected
+        return max(MIN_STAKE, DERIV_MIN_STAKE, amt)
 
 
 # Shared state
@@ -278,14 +281,14 @@ def martingale_stake(consec_losses, prediction, base_stake=0.35):
         prediction = 5
     _, payout, profit_per_dollar = PAYOUT_TABLE[prediction]
     if consec_losses == 0:
-        return base_stake
+        return max(DERIV_MIN_STAKE, base_stake)
     elif consec_losses == 1:
         tier1 = base_stake / profit_per_dollar
         tier1 = round(tier1 + 0.05, 2)
         tier1 = min(tier1, base_stake * 4)
-        return tier1
+        return max(DERIV_MIN_STAKE, tier1)
     else:
-        return base_stake
+        return max(DERIV_MIN_STAKE, base_stake)
 
 
 def get_payout_for_pred(prediction):
