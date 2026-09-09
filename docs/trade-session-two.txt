@@ -1,5 +1,5 @@
 USER@TINTUS MINGW64 /c/projects/dtrader (main)
-$ USE_BRIDGE=0 PAT_TOKEN="pat_cd92f8d0548924e8c084b4cfc275973b276b99e56abb3be64e0af5fd503c8d42" DERIV_APP_ID="34b4Cz74rxER0NtsYHoME" python Deriv-Stochrsi-Video-Bot.py
+$ USE_BRIDGE=0 PAT_TOKEN="[REDACTED-PAT]" DERIV_APP_ID="34b4Cz74rxER0NtsYHoME" python Deriv-Stochrsi-Video-Bot.py
 
 +========================================================+
 |  Deriv STOCHRSI L-Shape Bot  v2.0 Enhanced CLI
