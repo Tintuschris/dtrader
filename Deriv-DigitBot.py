@@ -175,6 +175,21 @@ PIP_DECIMALS = {
 }
 
 
+class RawFloat(float):
+    """Float that remembers the exact JSON wire string it was parsed from.
+
+    Used as json.loads(parse_float=...) so digit extraction can read the
+    quote exactly as Deriv sent it instead of Python's shortest float repr,
+    which drops trailing zeros (2732.02000 -> '2732.02' -> wrong digit).
+    Behaves as a plain float everywhere else (math, comparison, format)."""
+    __slots__ = ("raw",)
+
+    def __new__(cls, s):
+        x = super().__new__(cls, s)
+        x.raw = s
+        return x
+
+
 # ========== INDICATORS ==========
 
 def ema(data, period):
@@ -454,7 +469,7 @@ def print_header():
 
 
 def print_tick(st, price, tn):
-    dig = int(str(price).split(".")[-1][-1]) if "." in str(price) else 0
+    dig = true_digit(price, st.symbol)
     a = "^" if len(st.closes) >= 2 and st.closes[-1] > st.closes[-2] else "v" if len(st.closes) >= 2 else " "
     m = st.macd_v[-1] if st.macd_v else 0
     s = st.sig_v[-1] if st.sig_v else 0
@@ -542,9 +557,16 @@ def print_transition_info(mat, cur, p_over, p_under, direction):
 def true_digit(price, symbol=None):
     """Last digit of the quote at the symbol's pip precision (correct extraction).
 
-    Never uses str(price): the float repr drops trailing zeros and corrupted
-    every digit in v1.2 (digit 0 ~absent)."""
+    Prefers the raw wire string when json parsing preserved it (RawFloat) and
+    its decimal count exactly matches the pip size; otherwise formats the
+    float at pip precision. Never uses str(price): the float repr drops
+    trailing zeros and corrupted every digit in v1.2 (digit 0 ~absent)."""
     dec = PIP_DECIMALS.get(symbol, 3)
+    raw = getattr(price, "raw", None)
+    if isinstance(raw, str) and "." in raw:
+        frac = raw.split(".")[-1]
+        if len(frac) == dec and frac and frac[-1].isdigit():
+            return int(frac[-1])
     return int(f"{float(price):.{dec}f}"[-1])
 
 
@@ -827,7 +849,9 @@ async def process_tick(st, td):
     st._tick_count += 1
     price = td["quote"]
     st.closes.append(price)
-    dig = int(str(price).split(".")[-1][-1]) if "." in str(price) else 0
+    # v1.3.1: pip-precision extraction (wire string when available) - the old
+    # float-repr extraction corrupted ~10% of digits and erased digit 0
+    dig = true_digit(price, st.symbol)
     st.digits.append(dig)
 
     ml, sl, h = calc_macd(list(st.closes))
@@ -841,7 +865,7 @@ async def process_tick(st, td):
 
     # === DATA COLLECTION MODE: log every signal, never trade ===
     if COLLECT_MODE:
-        collect_signal(st, h, ml, dig)
+        collect_signal(st, h, ml, bot_digit(price))
         return
 
     # === SAFETY ===
@@ -1061,8 +1085,10 @@ async def handle_msg(ws, data, lt):
                 if st.active_contract_id == contract_id or (not contract_id and st.has_active()):
                     prof = float(poc.get("profit", 0) or 0)
                     pay = float(poc.get("payout", 0) or 0)
-                    es = poc.get("exit_spot", 0)
-                    ex_d = int(str(es).split(".")[-1][-1]) if "." in str(es) else 0
+                    es = poc.get("exit_spot") or 0
+                    # Settlement digit from the wire string / pip precision -
+                    # the old float-repr read almost never matched the true exit digit
+                    ex_d = true_digit(es, st.symbol)
                     res = "won" if prof > 0 else "lost"
                     for t in reversed(st._trade_log):
                         if t["result"]["status"] == "pending":
@@ -1167,7 +1193,9 @@ async def trading_loop():
                 try:
                     async for msg in ws:
                         try:
-                            d = json.loads(msg)
+                            # parse_float=RawFloat preserves each quote's exact wire
+                            # string so digit extraction is pip-accurate
+                            d = json.loads(msg, parse_float=RawFloat)
                         except Exception:
                             continue
                         r = await handle_msg(ws, d, lt)
