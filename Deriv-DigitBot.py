@@ -17,6 +17,8 @@ parser.add_argument("--min-stake", type=float, default=float(os.environ.get("MIN
                     help="Bot-level minimum stake (never below Deriv's 0.35 hard floor)")
 parser.add_argument("--account", default=os.environ.get("ACCOUNT_TYPE", "demo"), choices=["demo", "real"])
 parser.add_argument("--dry-run", action="store_true")
+parser.add_argument("--collect", action="store_true",
+                    help="Data-collection mode: log every signal + outcome to JSONL, place no trades")
 parser.add_argument("--prediction", type=int, default=5)
 parser.add_argument("--max-loss-streak", type=int, default=int(os.environ.get("MAX_LOSS_STREAK", "2")))
 parser.add_argument("--loss-cooldown", type=int, default=int(os.environ.get("LOSS_COOLDOWN", "30")))
@@ -78,6 +80,7 @@ MIN_HIST = args.min_hist
 MIN_CONFIDENCE = args.min_confidence
 PRED_SWEEP = args.prediction_sweep
 CORR_ANALYSIS = args.correlation_analysis
+COLLECT_MODE = args.collect
 MARTINGALE = args.martingale
 TAKE_PROFIT = args.take_profit
 MAX_CONSEC_LOSSES = args.max_consecutive_losses
@@ -126,6 +129,9 @@ class SymbolState:
         self._take_profit_hit = False
         self._current_prediction = 5
         self._current_stake = BASE_STAKE
+        # data-collection mode (--collect)
+        self.digits_true = deque(maxlen=DIG_WIN)
+        self._collect_pending = None
 
     def reset_ac(self):
         self.active_contract = None
@@ -159,6 +165,15 @@ ws_global = None
 SESSION_START = time.time()
 symbol_states = {}  # symbol -> SymbolState
 _correlation_signals = {}  # symbol -> list of (timestamp, direction, score)
+_collect_records = []  # data-collection mode: resolved signal records (session summary)
+
+# Pip-size decimals per symbol - the true last digit is the last digit of the
+# quote at the symbol's pip precision (float repr loses trailing zeros).
+PIP_DECIMALS = {
+    "R_10": 3, "R_25": 3, "R_50": 4, "R_75": 4, "R_100": 2,
+    "1HZ10V": 2, "1HZ25V": 2, "1HZ50V": 2, "1HZ75V": 2, "1HZ100V": 2,
+}
+
 
 # ========== INDICATORS ==========
 
@@ -417,7 +432,7 @@ def mark_failed(st, r):
 # ========== DISPLAY ==========
 
 def print_header():
-    mode = "DRY RUN" if args.dry_run else "LIVE"
+    mode = "COLLECT" if args.collect else ("DRY RUN" if args.dry_run else "LIVE")
     syms = ",".join(SYMBOL_LIST)
     print(f"\n{CYN}+========================================================+{RST}")
     print(f"{CYN}|{RST}  {BLD}Deriv DigitBot v1.3{RST}                                  {CYN}|{RST}")
@@ -512,6 +527,179 @@ def print_transition_info(mat, cur, p_over, p_under, direction):
     agree = (direction == "over" and p_over > 0.50) or (direction == "under" and p_under > 0.50)
     tag = f"{GRN}AGREE{RST}" if agree else f"{RED}SKIP{RST}"
     print(f"  {DIM}Trans[{cur}]: Over5={p_over:.1%} Under5={p_under:.1%} | {tag}{RST}")
+
+
+# ========== DATA COLLECTION MODE (--collect) ==========
+#
+# No-trade mode that logs every signal candidate and its outcome so real
+# win rate per strategy bucket can be measured offline. Each tick where the
+# signal pipeline has a direction candidate writes one JSONL record with all
+# filter inputs/results; it is resolved on the NEXT tick (1-tick contract
+# semantics) using the true last digit of the settlement quote. Both the true
+# digit (quote at pip precision) and the live bot's float-repr digit are
+# recorded, so the extraction bug's distortion can be quantified too.
+
+def true_digit(price, symbol=None):
+    """Last digit of the quote at the symbol's pip precision (correct extraction).
+
+    Never uses str(price): the float repr drops trailing zeros and corrupted
+    every digit in v1.2 (digit 0 ~absent)."""
+    dec = PIP_DECIMALS.get(symbol, 3)
+    return int(f"{float(price):.{dec}f}"[-1])
+
+
+def bot_digit(price):
+    """Replica of the live bot's extraction (float repr) for comparison."""
+    s = str(price)
+    return int(s.split(".")[-1][-1]) if "." in s else 0
+
+
+def collect_file(st):
+    return f"signal_log_digitbot_{st.symbol}.jsonl"
+
+
+def collect_resolve(st, exit_true, exit_bot):
+    """Resolve the pending signal record against this tick's digits."""
+    p = st._collect_pending
+    if p is None:
+        return
+    pred = p["pred"]
+    if p["direction"] == "over":
+        p["win_true"] = exit_true > pred
+        p["win_bot"] = exit_bot > pred
+    else:
+        p["win_true"] = exit_true < pred
+        p["win_bot"] = exit_bot < pred
+    p["exit_tick"] = st._tick_count
+    p["exit_digit_true"] = exit_true
+    p["exit_digit_bot"] = exit_bot
+    _collect_records.append(p)
+    try:
+        with open(collect_file(st), "a") as f:
+            f.write(json.dumps(p) + "\n")
+    except Exception as e:
+        print(f"  {RED}X COLLECT write: {e}{RST}")
+    res_c = GRN if p["win_true"] else RED
+    print(f"  {DIM}[DATA] #{p['tick']} {p['direction'].upper()} pred={pred} "
+          f"exit={exit_true} -> {res_c}{'WIN' if p['win_true'] else 'LOSS'}{RST}"
+          f"{DIM} ({p['bucket']}){RST}")
+    st._collect_pending = None
+
+
+def collect_signal(st, h, ml, dig_bot):
+    """Evaluate the full signal pipeline for logging only (never trades)."""
+    td_true = true_digit(st.closes[-1], st.symbol)
+    st.digits_true.append(td_true)
+
+    # A pending record from the previous tick settles on this tick
+    collect_resolve(st, td_true, dig_bot)
+
+    # Warmup guards identical to the live path
+    if len(st.closes) < MACD_SLOW + MACD_SIG + 5: return
+    if len(st.digits) < 30: return
+    if h is None or ml is None: return
+
+    rsi = calc_rsi(list(st.closes), 14)
+    sk, mo, le, dist = digit_skew(list(st.digits))
+    sk_true, _, _, dist_true = digit_skew(list(st.digits_true))
+    ph = st.hist_v[-2] if len(st.hist_v) >= 2 else 0
+
+    cross_up = ph is not None and ph <= 0 and h > 0
+    cross_down = ph is not None and ph >= 0 and h < 0
+    bull = h > MACD_THRESH
+    bear = h < -MACD_THRESH
+    d = None
+    if cross_up or (bull and rsi is not None and rsi < 40):
+        d = "over"
+    elif cross_down or (bear and rsi is not None and rsi > 60):
+        d = "under"
+
+    # Research direction: live direction if any, else histogram sign, so
+    # gated buckets (skew/hist) still carry a betable direction
+    d_prov = d if d else ("over" if h > 0 else "under")
+
+    mat, cur_dig, p_over, p_under = transition_matrix(list(st.digits))
+    tm_agree = mat is None or (
+        (d_prov == "over" and p_over > 0.50) or
+        (d_prov == "under" and p_under > 0.50)
+    )
+    tm_prob = p_over if d_prov == "over" else p_under
+    tm_other = p_under if d_prov == "over" else p_over
+    score = calc_confidence(h, sk, tm_prob, tm_other, rsi, d_prov)
+    rsi_pass = not (
+        (d_prov == "over" and rsi is not None and rsi > 65) or
+        (d_prov == "under" and rsi is not None and rsi < 35)
+    )
+
+    pass_skew = MIN_SKEW <= sk < MAX_SKEW
+    pass_hist = abs(h) >= MIN_HIST
+    pass_score = score >= MIN_CONFIDENCE
+
+    # First gate the live bot would fail at (live evaluation order)
+    if not pass_skew: bucket = "skew_gate"
+    elif not pass_hist: bucket = "hist_weak"
+    elif d is None: bucket = "no_signal_live"
+    elif not rsi_pass: bucket = "rsi_extreme"
+    elif not tm_agree: bucket = "tm_disagree"
+    elif not pass_score: bucket = "score_low"
+    else: bucket = "trade"
+
+    st._collect_pending = {
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "epoch": time.time(),
+        "symbol": st.symbol, "tick": st._tick_count,
+        "direction": d_prov, "direction_live": d, "pred": PREDICTION,
+        "hist": round(h, 6), "skew": round(sk, 2), "skew_true": round(sk_true, 2),
+        "rsi": round(rsi, 2) if rsi is not None else None,
+        "tm_over": round(p_over, 4), "tm_under": round(p_under, 4),
+        "score": score,
+        "pass_skew": pass_skew, "pass_hist": pass_hist,
+        "pass_rsi": rsi_pass, "pass_tm": bool(tm_agree),
+        "pass_score": pass_score,
+        "bucket": bucket,
+        "entry_digit_true": td_true, "entry_digit_bot": dig_bot,
+        "in_cooldown": (st._tick_count - st._last_trade_tick) < COOLDOWN_TICKS,
+    }
+
+
+def print_collect_summary():
+    """Per-bucket win-rate summary from records collected this session."""
+    resolved = [r for r in _collect_records if "win_true" in r]
+    print(f"\n{CYN}+{'=' * 60}+{RST}")
+    print(f"{CYN}|{RST}  {BLD}DATA COLLECTION SUMMARY{RST}")
+    print(f"{CYN}|{RST}  Signals logged: {len(_collect_records)} | Resolved: {len(resolved)}")
+    if not resolved:
+        print(f"{CYN}+{'=' * 60}+{RST}")
+        return
+    wr_true = sum(1 for r in resolved if r["win_true"]) / len(resolved)
+    wr_bot = sum(1 for r in resolved if r["win_bot"]) / len(resolved)
+    print(f"{CYN}|{RST}  WR (true digits): {wr_true:.1%}   WR (bot float-repr digits): {wr_bot:.1%}")
+    print(f"{CYN}+{'=' * 60}+{RST}")
+
+    print(f"\n  {BLD}Win rate by live bucket (true digits){RST}")
+    by_bucket = {}
+    for r in resolved:
+        by_bucket.setdefault(r["bucket"], []).append(r["win_true"])
+    for b, wins in sorted(by_bucket.items(), key=lambda kv: -len(kv[1])):
+        wr = sum(wins) / len(wins)
+        print(f"    {b:15s} n={len(wins):5d}  WR={wr:6.1%}")
+
+    print(f"\n  {BLD}Win rate by prediction (true digits){RST}")
+    for pred in range(3, 10):
+        n = len(resolved)
+        if n == 0: continue
+        w = 0
+        for r in resolved:
+            ok = r["exit_digit_true"] > pred if r["direction"] == "over" else r["exit_digit_true"] < pred
+            w += ok
+        print(f"    pred={pred}  n={n:5d}  WR={w / n:6.1%}")
+
+    print(f"\n  {BLD}Entry digit distribution (true vs bot float-repr){RST}")
+    bt = Counter(r["entry_digit_true"] for r in _collect_records)
+    bb = Counter(r["entry_digit_bot"] for r in _collect_records)
+    print("    " + " ".join(f"{d}:{bt.get(d, 0)}/{bb.get(d, 0)}" for d in range(10)))
+    if dist_true:
+        tot_t = sum(dist_true.values())
+        print(f"    last-100 true digits: " + " ".join(f"{d}:{dist_true.get(d, 0)}" for d in range(10)) + f" (n={tot_t})")
 
 
 # ========== TRADE EXECUTION ==========
@@ -650,6 +838,11 @@ async def process_tick(st, td):
     print_tick(st, price, st._tick_count)
     if st._tick_count % 20 == 0: print_digit_dist(st)
     if st._tick_count % 5 == 0: print_macd_bar(st)
+
+    # === DATA COLLECTION MODE: log every signal, never trade ===
+    if COLLECT_MODE:
+        collect_signal(st, h, ml, dig)
+        return
 
     # === SAFETY ===
     if MAX_SESS_LOSS > 0 and st._session_pnl < -MAX_SESS_LOSS:
@@ -997,6 +1190,9 @@ async def trading_loop():
 
 
 def print_summary():
+    if COLLECT_MODE:
+        print_collect_summary()
+        return
     print(f"\n{CYN}+{'=' * 50}+{RST}")
     print(f"{CYN}|{RST}  {BLD}SESSION SUMMARY{RST}")
     for sym, st in symbol_states.items():
