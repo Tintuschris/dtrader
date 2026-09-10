@@ -10,7 +10,30 @@ Notable changes to both trading products in this repository, each tracked with i
 | Product | Latest | Full history |
 |---|---|---|
 | **Bots** | [v3.4.0 - Safety-First Adaptive Barrier & Risk Controls (2026-09-07)](#v340---safety-first-adaptive-barrier--risk-controls-2026-09-07) | [Bots](#bots) |
+| **DigitBot** | [v1.4 - Shared DerivClient Transport + Smart Barrier (2026-09-11)](#deriv-digitbot--v14---shared-derivclient-transport--smart-barrier-2026-09-11) | [DigitBot v1.4](DIGITBOT-v1.4-CHANGES.md), [v1.3.1](DIGITBOT-v1.3.1-CHANGES.md) |
 | **Web App** | [Web v1.5 - Proposal Stream Recovery (2026-09-07)](#web-v15---proposal-stream-recovery-2026-09-07) | [Web App](#web-app) |
+
+---
+
+## DigitBot
+
+### Deriv DigitBot — v1.4 - Shared DerivClient Transport + Smart Barrier (2026-09-11)
+
+DigitBot and the Soft StochRSI bot now share a single `DerivClient` transport
+(auth, subscriptions, proposal → buy → POC settlement, keepalive, reconnect),
+removing ~390 lines of duplicated plumbing across the two bots. Strategy and
+logging behavior is otherwise unchanged by the refactor, with two fixes and
+one new opt-in feature:
+
+- **Over-side EV fix** in dynamic prediction: OVER barriers were scored
+  against the UNDER base-win probability, mis-ranking every over trade.
+- **`--smart-barrier`** (opt-in): instead of always trading over/under a fixed
+  5, pick the barrier (3–7) whose winning-digit mass most exceeds the uniform
+  baseline in the digit window, with Laplace shrinkage against small-sample
+  noise. Skips trading entirely when no barrier clears the minimum edge
+  (default 5%). Chosen barrier is recorded in the trade log for per-barrier
+  analysis. Details and the v1.3 performance baseline:
+  [DIGITBOT-v1.4-CHANGES.md](DIGITBOT-v1.4-CHANGES.md).
 
 ---
 

@@ -6,7 +6,9 @@ Features: dynamic prediction, martingale tiers, take-profit, prediction sweep
 """
 import asyncio, json, os, sys, time, math
 from collections import deque, Counter
-import argparse, aiohttp, websockets
+import argparse
+
+from DerivClient import DerivClient, configure
 
 parser = argparse.ArgumentParser(description="Deriv DigitBot - MACD + Digit Stats")
 parser.add_argument("-s", "--symbol", default=os.environ.get("SYMBOL", "R_25"))
@@ -48,16 +50,16 @@ parser.add_argument("--max-consecutive-losses", type=int, default=int(os.environ
                     help="Max consecutive losses before halt (martingale circuit breaker)")
 parser.add_argument("--base-stake", type=float, default=float(os.environ.get("BASE_STAKE", "0.35")),
                     help="Base stake for martingale Tier 0")
+parser.add_argument("--smart-barrier", action="store_true",
+                    help="Pick over/under barrier from the observed digit distribution instead of a fixed 5")
+parser.add_argument("--smart-min-edge", type=float, default=float(os.environ.get("SMART_MIN_EDGE", "0.05")),
+                    help="Smart barrier: min edge (win prob minus uniform baseline) required to trade")
+parser.add_argument("--smart-min-samples", type=int, default=int(os.environ.get("SMART_MIN_SAMPLES", "50")),
+                    help="Smart barrier: min digits in the window before smart-barrier trades are allowed")
 args = parser.parse_args()
 
 # Config
 DERIV_MIN_STAKE = 0.35  # Deriv minimum stake per contract - proposals below this are rejected
-REST_BASE_URL = "https://api.derivws.com"
-BRIDGE_URL = os.environ.get("DTRADER_BRIDGE_URL", "http://localhost:3000")
-USE_BRIDGE = os.environ.get("USE_BRIDGE", "1") == "1"
-PAT_TOKEN = os.environ.get("PAT_TOKEN", "")
-APP_ID = os.environ.get("DERIV_APP_ID", "")
-ACCOUNT_TYPE = args.account
 STAKE = args.stake
 MIN_STAKE = args.min_stake
 PREDICTION = args.prediction
@@ -82,6 +84,9 @@ PRED_SWEEP = args.prediction_sweep
 CORR_ANALYSIS = args.correlation_analysis
 COLLECT_MODE = args.collect
 MARTINGALE = args.martingale
+SMART_BARRIER = args.smart_barrier
+SMART_MIN_EDGE = args.smart_min_edge
+SMART_MIN_SAMPLES = args.smart_min_samples
 TAKE_PROFIT = args.take_profit
 MAX_CONSEC_LOSSES = args.max_consecutive_losses
 BASE_STAKE = args.base_stake
@@ -160,8 +165,7 @@ class SymbolState:
 
 # Shared state
 _balance = 0.0
-WS_URL = None
-ws_global = None
+ws_global = None  # current session socket, set by handle_msg for place_trade
 SESSION_START = time.time()
 symbol_states = {}  # symbol -> SymbolState
 _correlation_signals = {}  # symbol -> list of (timestamp, direction, score)
@@ -188,6 +192,14 @@ class RawFloat(float):
         x = super().__new__(cls, s)
         x.raw = s
         return x
+
+
+# Shared transport: auth/authorize/proposal/buy/POC/keepalive/reconnect
+# plumbing. account_type wins over the ACCOUNT_TYPE env var so an explicit
+# --account choice is honoured. parse_float=RawFloat preserves each quote's
+# exact wire string so digit extraction is pip-accurate.
+configure(account_type=args.account)
+client = DerivClient(symbols=SYMBOL_LIST, probe_contracts=False, parse_float=RawFloat)
 
 
 # ========== INDICATORS ==========
@@ -283,9 +295,12 @@ def pick_prediction(dist, direction, rsi):
         else:
             win_digits = set(range(pred + 1, 10))
         win_freq = sum(freq[d] for d in win_digits)
-        base_win = PAYOUT_TABLE[pred][0]
+        # Base win probability is direction-dependent: UNDER pred=p wins on
+        # p of 10 digits, OVER pred=p wins on 10-p. The old code used the
+        # UNDER value for both, mis-ranking every OVER trade.
+        base_win = pred / 10.0 if direction == "under" else (10 - pred) / 10.0
         edge = win_freq - base_win
-        payout = PAYOUT_TABLE[pred][1]
+        payout = PAYOUT_TABLE[pred][1] if direction == "under" else round(0.96 / max(base_win, 0.01), 2)
         payout_bonus = (payout - 1.0) * 0.3
         rsi_bonus = 0
         if rsi is not None:
@@ -319,6 +334,36 @@ def martingale_stake(consec_losses, prediction, base_stake=0.35):
         return max(DERIV_MIN_STAKE, tier1)
     else:
         return max(DERIV_MIN_STAKE, base_stake)
+
+
+def pick_barrier(dist, direction):
+    """Smart barrier: pick the over/under barrier whose winning-digit mass
+    most exceeds the uniform baseline in the observed window.
+
+    Frequencies are Laplace-shrunk toward uniform (pseudo-count of 10) so a
+    lucky streak in a short window cannot fake an edge. Returns
+    (pred, edge) for the best barrier, or None if no barrier clears
+    SMART_MIN_EDGE or the sample is too small. Barriers are limited to
+    3-7 so the base win probability stays in the 30-70% band.
+    """
+    total = sum(dist.values()) if dist else 0
+    if total < SMART_MIN_SAMPLES:
+        return None
+    best = None
+    for pred in range(3, 8):
+        if direction == "under":
+            base = pred / 10.0
+            wins = sum(dist.get(i, 0) for i in range(pred))
+        else:
+            base = (10 - pred) / 10.0
+            wins = sum(dist.get(i, 0) for i in range(pred + 1, 10))
+        p = (wins + 10 * base) / (total + 10)
+        edge = p - base
+        if best is None or edge > best[1]:
+            best = (pred, edge)
+    if best and best[1] >= SMART_MIN_EDGE:
+        return best
+    return None
 
 
 def get_payout_for_pred(prediction):
@@ -402,7 +447,7 @@ def log_trade(st, d, dig, rsi, mh, sk, reason, confidence=0):
     e = {
         "id": len(st._trade_log) + 1, "bot": "digitbot", "symbol": st.symbol,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"), "epoch": time.time(),
-        "direction": d, "stake": st._current_stake if MARTINGALE else STAKE, "prediction": st._current_prediction if MARTINGALE else PREDICTION,
+        "direction": d, "stake": st._current_stake if (MARTINGALE or SMART_BARRIER) else STAKE, "prediction": st._current_prediction if (MARTINGALE or SMART_BARRIER) else PREDICTION,
         "digit_at_entry": dig,
         "signal": {"rsi": round(rsi, 2) if rsi else None,
                    "macd_hist": round(mh, 6) if mh else None,
@@ -421,7 +466,7 @@ def log_result(st, entry, res, prof, pay, ex_d, bal):
         "exit_digit": ex_d, "profit": prof, "payout": pay,
         "balance": bal, "settled_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
-    actual_stake = st._current_stake if MARTINGALE else STAKE
+    actual_stake = st._current_stake if (MARTINGALE or SMART_BARRIER) else STAKE
     st._session_pnl += prof; st._s_staked += actual_stake; st._s_payout += pay
     if res == "won":
         st._s_wins += 1
@@ -451,15 +496,18 @@ def print_header():
     syms = ",".join(SYMBOL_LIST)
     print(f"\n{CYN}+========================================================+{RST}")
     print(f"{CYN}|{RST}  {BLD}Deriv DigitBot v1.3{RST}                                  {CYN}|{RST}")
-    print(f"{CYN}|{RST}  MACD({MACD_FAST},{MACD_SLOW},{MACD_SIG}) + DynPred + Martingale            {CYN}|{RST}")
+    strat = ("MACD + SmartBarrier" if SMART_BARRIER
+             else f"MACD({MACD_FAST},{MACD_SLOW},{MACD_SIG}) + DynPred + Martingale")
+    print(f"{CYN}|{RST}  {strat:<55}{CYN}|{RST}")
     print(f"{CYN}+========================================================+{RST}")
-    pred_label = "DYNAMIC" if MARTINGALE else str(PREDICTION)
+    pred_label = "SMART" if SMART_BARRIER else ("DYNAMIC" if MARTINGALE else str(PREDICTION))
     print(f"{CYN}|{RST}  Symbols: {BLD}{syms}{RST}  Dur: {BLD}{DURATION}t{RST}  Pred: {BLD}{pred_label}{RST}  Mode: {BLD}{mode}{RST}  {CYN}|{RST}")
     if MARTINGALE:
         print(f"{CYN}|{RST}  Stake: ${BLD}{BASE_STAKE}{RST} (martingale)  Skew: {BLD}{MIN_SKEW}-{MAX_SKEW}{RST}  TP: ${BLD}{TAKE_PROFIT}{RST}  MaxL: {BLD}{MAX_CONSEC_LOSSES}{RST}  {CYN}|{RST}")
     else:
         print(f"{CYN}|{RST}  Stake: ${BLD}{STAKE}{RST}  Skew: {BLD}{MIN_SKEW}-{MAX_SKEW}{RST}  MinHist: {BLD}{MIN_HIST}{RST}  MinConf: {BLD}{MIN_CONFIDENCE}{RST}  {CYN}|{RST}")
     flags = []
+    if SMART_BARRIER: flags.append(f"SMART(edge>={SMART_MIN_EDGE:.0%},n>={SMART_MIN_SAMPLES})")
     if PRED_SWEEP: flags.append("SWEEP")
     if CORR_ANALYSIS and len(SYMBOL_LIST) > 1: flags.append("CORR")
     if len(SYMBOL_LIST) > 1: flags.append(f"MULTI({len(SYMBOL_LIST)})")
@@ -729,116 +777,25 @@ def print_collect_summary():
 async def place_trade(st, d, confidence=75):
     ct = "DIGITOVER" if d == "over" else "DIGITUNDER"
     amt = st.eff_stake(_balance, confidence)
-    pred = st._current_prediction if MARTINGALE else PREDICTION
+    pred = st._current_prediction if (MARTINGALE or SMART_BARRIER) else PREDICTION
     st.pending_proposal = {"direction": d}
     st._pending_buy = {"direction": d, "signal_ts": time.time()}
     tier_s = f" T{st._consec_losses}" if MARTINGALE and st._consec_losses > 0 else ""
     print(f"  {DIM}[PROPOSAL] {ct} pred={pred} amt=${amt:.2f} conf={confidence:.0f}{tier_s} [{st.symbol}]{RST}")
-    await ws_global.send(json.dumps({
-        "proposal": 1, "amount": amt, "basis": "stake",
-        "contract_type": ct, "currency": CURRENCY,
-        "duration": DURATION, "duration_unit": DURATION_UNIT,
-        "underlying_symbol": st.symbol, "barrier": str(pred)
-    }))
+    await client.request_proposal(
+        ws_global,
+        contract_type=ct,
+        amount=amt,
+        barrier=str(pred),
+        underlying_symbol=st.symbol,
+        duration=DURATION,
+        duration_unit=DURATION_UNIT,
+    )
 
 
 # ========== WEBSOCKET ==========
-
-async def get_ws_url_bridge():
-    async with aiohttp.ClientSession() as s:
-        async with s.get(f"{BRIDGE_URL}/api/auth/pat") as r:
-            return (await r.json()).get("wss_url")
-
-
-async def get_accounts():
-    url = f"{REST_BASE_URL}/trading/v1/options/accounts"
-    headers = {"Authorization": f"Bearer {PAT_TOKEN}", "Deriv-App-ID": APP_ID, "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as s:
-        async with s.get(url, headers=headers) as r:
-            return await r.json()
-
-
-def select_account(data):
-    d = data.get("data") if isinstance(data, dict) else None
-    if isinstance(d, list): accounts = d
-    elif isinstance(d, dict) and "accounts" in d: accounts = d["accounts"]
-    elif isinstance(data, list): accounts = data
-    else: accounts = []
-    if not accounts: return None
-    for acc in accounts:
-        acc_id = acc.get("account_id") or acc.get("accountId") or acc.get("id") or acc.get("loginid")
-        is_virtual = acc.get("is_virtual") or acc.get("isVirtual") or (acc.get("account_type") == "demo")
-        acc_type = acc.get("account_type") or acc.get("accountType") or ("demo" if is_virtual else "real")
-        is_demo = is_virtual or acc_type == "demo" or str(acc_id).startswith("VR") or str(acc_id).startswith("DOT")
-        if ACCOUNT_TYPE == "demo" and is_demo: return acc_id
-        if ACCOUNT_TYPE == "real" and not is_demo: return acc_id
-    if accounts:
-        return accounts[0].get("account_id") or accounts[0].get("accountId") or accounts[0].get("loginid")
-    return None
-
-
-async def get_otp_url(acc_id):
-    url = f"{REST_BASE_URL}/trading/v1/options/accounts/{acc_id}/otp"
-    headers = {"Authorization": f"Bearer {PAT_TOKEN}", "Deriv-App-ID": APP_ID, "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as s:
-        async with s.post(url, headers=headers, json={}) as r:
-            data = await r.json()
-            if r.status != 200: raise Exception(f"OTP failed: {data}")
-            if "data" in data and isinstance(data["data"], dict):
-                return data["data"].get("url") or data["data"].get("otpUrl") or ""
-            return data.get("url", "")
-
-
-async def get_ws_url():
-    global WS_URL
-    if USE_BRIDGE:
-        try:
-            WS_URL = await get_ws_url_bridge()
-            return WS_URL
-        except Exception as e:
-            print(f"  {RED}X Bridge: {e}{RST}")
-            if not PAT_TOKEN:
-                print(f"  {RED}No PAT. Exiting.{RST}")
-                return None
-            print(f"  {YLW}> PAT fallback...{RST}")
-    try:
-        ad = await get_accounts()
-        ai = select_account(ad)
-        if not ai:
-            print(f"  {RED}X No {ACCOUNT_TYPE} account{RST}")
-            return None
-        print(f"  {GRN}+{RST} Account: {BLD}{ai}{RST} ({ACCOUNT_TYPE})")
-        WS_URL = await get_otp_url(ai)
-        return WS_URL
-    except Exception as e:
-        print(f"  {RED}X Auth: {e}{RST}")
-        return None
-
-
-async def subscribe_ws(ws):
-    if ("binaryws.com" in WS_URL or "otp" not in WS_URL) and PAT_TOKEN:
-        await ws.send(json.dumps({"authorize": PAT_TOKEN}))
-        auth = json.loads(await ws.recv())
-        if "error" in auth:
-            print(f"  {RED}X Auth failed{RST}")
-            return False
-        print(f"  {GRN}+{RST} Authenticated")
-    # Subscribe to all symbols
-    for sym in SYMBOL_LIST:
-        await ws.send(json.dumps({"ticks": sym, "subscribe": 1}))
-        print(f"  {GRN}+{RST} Subscribed to {sym}")
-    await ws.send(json.dumps({"balance": 1, "subscribe": 1}))
-    # Resume any active contracts
-    for sym, st in symbol_states.items():
-        if st.active_contract_id:
-            await ws.send(json.dumps({
-                "proposal_open_contract": 1,
-                "contract_id": st.active_contract_id, "subscribe": 1
-            }))
-    print(f"  {DIM}{'-' * 60}{RST}")
-    print(f"  {DIM}Watching MACD crossovers + digit skew on {','.join(SYMBOL_LIST)}...{RST}")
-    print(f"  {DIM}{'-' * 60}{RST}")
-    return True
+# Auth (bridge -> PAT/OTP fallback), authorize, tick/balance subscriptions,
+# POC resume, keepalive pings and the reconnect loop all live in DerivClient.
 
 
 # ========== TICK PROCESSING ==========
@@ -939,6 +896,16 @@ async def process_tick(st, td):
     if d == "over" and rsi is not None and rsi > 65: return
     if d == "under" and rsi is not None and rsi < 35: return
 
+    # === SMART BARRIER: require real edge in the observed distribution ===
+    smart_pred, smart_edge = None, 0.0
+    if SMART_BARRIER:
+        sb = pick_barrier(dist if dist else {}, d)
+        if sb is None:
+            print(f"  {DIM}BARRIER SKIP [{st.symbol}]: no {d} edge >= {SMART_MIN_EDGE:.0%} "
+                  f"in last {len(st.digits)} digits{RST}")
+            return
+        smart_pred, smart_edge = sb
+
     # === TRANSITION MATRIX CONFIRMATION ===
     mat, cur_dig, p_over, p_under = transition_matrix(list(st.digits))
     if mat is not None:
@@ -991,6 +958,11 @@ async def process_tick(st, td):
     else:
         pred = PREDICTION
         stake = st.eff_stake(_balance, score)
+    if SMART_BARRIER and smart_pred is not None:
+        pred = smart_pred
+        st._current_prediction = pred
+        print(f"  {MAG}[SMART] barrier={pred} ({d.upper()}) edge={smart_edge:+.1%} "
+              f"window={len(st.digits)} conf={score:.0f}{RST}")
 
     entry = log_trade(st, d, dig, rsi, h, sk, reason, score)
 
@@ -1017,8 +989,9 @@ def find_symbol_state(msg_type, data):
     return None
 
 
-async def handle_msg(ws, data, lt):
-    global _balance
+async def handle_msg(ws, data):
+    global _balance, ws_global
+    ws_global = ws
 
     mt = data.get("msg_type", "?")
 
@@ -1051,7 +1024,7 @@ async def handle_msg(ws, data, lt):
             pid = p.get("id")
             if pid:
                 print(f"  {DIM}[PROP] id={pid} payout={p.get('payout', '?')} [{st.symbol}]{RST}")
-                await ws.send(json.dumps({"buy": pid, "price": p.get("ask_price", 0)}))
+                await client.buy(ws, pid, p.get("ask_price", 0))
 
     elif mt == "buy":
         bd = data.get("buy", {})
@@ -1072,9 +1045,7 @@ async def handle_msg(ws, data, lt):
             st.active_contract = {"direction": d, "contract_id": cid}
             print(f"\n  {GRN}+ CONTRACT {cid} bought [{st.symbol}]{RST}")
             st._pending_buy = None
-            await ws.send(json.dumps({
-                "proposal_open_contract": 1, "contract_id": cid, "subscribe": 1
-            }))
+            await client.subscribe_open_contract(ws, cid)
 
     elif mt == "proposal_open_contract":
         poc = data.get("proposal_open_contract", {})
@@ -1160,61 +1131,29 @@ def print_correlation_report():
 
 # ========== MAIN LOOP ==========
 
-async def keepalive(ws):
-    while True:
-        try:
-            await asyncio.sleep(30)
-            await ws.send(json.dumps({"ping": 1}))
-        except Exception:
-            break
-
-
 async def trading_loop():
     global ws_global
-    reconnect_delay = 1
-    RECONNECT_MAX = 60
-    while True:
-        try:
-            url = await get_ws_url()
-            if not url:
-                print(f"  {RED}X No URL. Retry {reconnect_delay}s...{RST}")
-                await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(reconnect_delay * 2, RECONNECT_MAX)
-                continue
-            async with websockets.connect(url, ping_interval=30, ping_timeout=10) as ws:
-                ws_global = ws
-                if not await subscribe_ws(ws):
-                    continue
-                reconnect_delay = 1
-                for st in symbol_states.values():
-                    st._tick_count = 0; st._last_trade_tick = 0
-                lt = 0
-                ka = asyncio.create_task(keepalive(ws))
-                try:
-                    async for msg in ws:
-                        try:
-                            # parse_float=RawFloat preserves each quote's exact wire
-                            # string so digit extraction is pip-accurate
-                            d = json.loads(msg, parse_float=RawFloat)
-                        except Exception:
-                            continue
-                        r = await handle_msg(ws, d, lt)
-                        if isinstance(r, (int, float)):
-                            lt = time.time()
-                finally:
-                    ka.cancel()
-        except asyncio.CancelledError:
-            break
-        except (websockets.ConnectionClosed, ConnectionError, OSError) as e:
-            print(f"\n  {YLW}> Conn err: {e}. Reconnect {reconnect_delay}s...{RST}")
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, RECONNECT_MAX)
-        except Exception as e:
-            print(f"\n  {RED}X {e}{RST}")
-            import traceback
-            traceback.print_exc()
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, RECONNECT_MAX)
+
+    async def on_session_open(ws):
+        global ws_global
+        ws_global = ws
+        for st in symbol_states.values():
+            st._tick_count = 0; st._last_trade_tick = 0
+            # Resume any contract that was open when the last session dropped
+            if st.active_contract_id:
+                await client.subscribe_open_contract(ws, st.active_contract_id)
+        print(f"  {DIM}{'-' * 60}{RST}")
+        print(f"  {DIM}Watching MACD crossovers + digit skew on {','.join(SYMBOL_LIST)}...{RST}")
+        print(f"  {DIM}{'-' * 60}{RST}")
+
+    try:
+        await client.run(handle_message=handle_msg, pre_subscribe=on_session_open)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print(f"\n  {RED}X {e}{RST}")
+        import traceback
+        traceback.print_exc()
 
 
 def print_summary():

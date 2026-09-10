@@ -12,8 +12,7 @@ import time
 import atexit
 from collections import deque
 
-import aiohttp
-import websockets
+from DerivClient import DerivClient, configure
 
 import argparse
 
@@ -77,16 +76,16 @@ args = parser.parse_args()
 
 
 # ============ CONFIG ============
-BRIDGE_URL = os.environ.get("DTRADER_BRIDGE_URL", "http://localhost:3000")
-USE_BRIDGE = os.environ.get("USE_BRIDGE", "1") == "1"
-PAT_TOKEN = os.environ.get("PAT_TOKEN", "")
-APP_ID = os.environ.get("DERIV_APP_ID", "")
+# Auth (bridge -> PAT/OTP fallback), authorize, subscriptions, keepalive and
+# the reconnect loop live in the shared DerivClient module.
 # Use the parsed argument so an explicit --account value is honoured. The
 # multi-market and 1-second demo launchers pass --account demo deliberately.
+configure(account_type=args.account)
 ACCOUNT_TYPE = args.account
 SYMBOL = args.symbol
 STAKE = args.stake
 CURRENCY = "USD"
+USE_BRIDGE = os.environ.get("USE_BRIDGE", "1") == "1"  # informational header only
 EVENT_STREAM = os.environ.get("SOFT_EVENT_STREAM", "0") == "1"
 
 
@@ -321,17 +320,12 @@ MAX_PAYOUT = float(os.environ.get("SOFT_MAX_PAYOUT", "2.50"))
 MOMENTUM_CONFIRM_TICKS = int(os.environ.get("SOFT_MOMENTUM_CONFIRM_TICKS", "2"))
 
 # Reconnection
-MAX_RECONNECT_ATTEMPTS = 10
-RECONNECT_BASE_DELAY = 2
-PING_INTERVAL = 30
-# Give up and force a reconnect after this many consecutive ping failures.
+# Give up after this many consecutive ping failures (client keepalive).
 PING_MAX_FAILURES = 3
 DRY_RUN = args.dry_run or bool(args.replay)
 RECORD_FILE = args.record
 REPLAY_FILE = args.replay
 REPLAY_SPEED = args.speed
-REST_BASE_URL = "https://api.derivws.com"
-WS_URL = None
 
 # ============ ANSI COLORS ============
 RST = "\033[0m"
@@ -1238,96 +1232,24 @@ def print_backtest_results(bt):
     print(f"  {CYN}|{RST}  Win rate: {BLD}{wr:.1f}%{RST}  |  P&L: {rc}{BLD}{pnl:+.2f}{RST}")
     print(f"  {BLD}{CYN}+============================================================+{RST}")
 
-# ============ AUTH ============
-
-async def get_ws_url_via_bridge():
-    url = f"{BRIDGE_URL}/api/deriv/bot-session?type={ACCOUNT_TYPE}"
-    print(f"  {CYN}>{RST} Requesting WS session from bridge...")
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            data = await resp.json()
-            if resp.status != 200:
-                raise Exception(f"Bridge error: {data.get('error', resp.status)}")
-            print(f"  {GRN}+{RST} Got WS URL for account {data.get('accountId', '?')}")
-            return data.get("url")
-
-
-async def get_accounts():
-    url = f"{REST_BASE_URL}/trading/v1/options/accounts"
-    headers = {"Authorization": f"Bearer {PAT_TOKEN}", "Deriv-App-ID": APP_ID, "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as resp:
-            data = await resp.json()
-            if resp.status != 200:
-                raise Exception(f"Accounts fetch failed: {data}")
-            return data
-
-
-def select_account(accounts_data):
-    d = accounts_data.get("data") if isinstance(accounts_data, dict) else None
-    if isinstance(d, list):
-        accounts = d
-    elif isinstance(d, dict) and "accounts" in d:
-        accounts = d["accounts"]
-    elif isinstance(accounts_data, list):
-        accounts = accounts_data
-    else:
-        accounts = []
-    if not accounts:
-        return None
-    selected = None
-    for acc in accounts:
-        acc_id = acc.get("account_id") or acc.get("accountId") or acc.get("id") or acc.get("loginid")
-        is_virtual = acc.get("is_virtual") or acc.get("isVirtual") or (acc.get("account_type") == "demo")
-        acc_type = acc.get("account_type") or acc.get("accountType") or ("demo" if is_virtual else "real")
-        is_demo = is_virtual or acc_type == "demo" or str(acc_id).startswith("VR") or str(acc_id).startswith("DOT")
-        if ACCOUNT_TYPE == "demo" and is_demo:
-            selected = acc
-            break
-        if ACCOUNT_TYPE == "real" and not is_demo:
-            selected = acc
-            break
-    # Never fall back to a different account type. In particular, a requested
-    # demo run must fail closed rather than silently selecting a real account.
-    if not selected:
-        return None
-    return selected.get("account_id") or selected.get("accountId") or selected.get("id") or selected.get("loginid")
-
-
-async def get_otp_url(account_id):
-    url = f"{REST_BASE_URL}/trading/v1/options/accounts/{account_id}/otp"
-    headers = {"Authorization": f"Bearer {PAT_TOKEN}", "Deriv-App-ID": APP_ID, "Content-Type": "application/json"}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json={}) as resp:
-            data = await resp.json()
-            if resp.status != 200:
-                raise Exception(f"OTP failed: {data}")
-            if "data" in data and isinstance(data["data"], dict):
-                return data["data"].get("url") or data["data"].get("otpUrl")
-            return data.get("url")
-
-
 # ============ TRADE PLACEMENT ============
 
 async def place_trade(ws, direction, barrier, barrier_mode=None):
     global pending_proposal
     contract_type = "HIGHER" if direction == "higher" else "LOWER"
-    proposal_req = {
-        "proposal": 1,
-        "amount": STAKE,
-        "basis": "stake",
-        "contract_type": contract_type,
-        "currency": CURRENCY,
-        "duration": DURATION,
-        "duration_unit": DURATION_UNIT,
-        "barrier": barrier,
-        "underlying_symbol": SYMBOL,
-    }
     pending_proposal = {"direction": direction, "barrier": barrier, "entry_price": None, "signal_ts": time.time()}
     _pending_buy = {"direction": direction, "barrier": barrier, "entry_price": None, "signal_ts": time.time()}
     print(f"  {DIM}[PROPOSAL] amount={STAKE} type={contract_type} barrier={barrier} symbol={SYMBOL}{RST}")
     print(f"  {DIM}[BARRIER] sent={barrier} direction={direction} mode={barrier_mode if barrier_mode else 'fixed'} raw_h={BARRIER_HIGHER_RAW!r} raw_l={BARRIER_LOWER_RAW!r}{RST}")
-    await ws.send(json.dumps(proposal_req))
+    await client.request_proposal(
+        ws,
+        contract_type=contract_type,
+        amount=STAKE,
+        barrier=barrier,
+        underlying_symbol=SYMBOL,
+        duration=DURATION,
+        duration_unit=DURATION_UNIT,
+    )
 # ============ TICK PROCESSING ============
 
 async def process_tick(ws, tick_data, last_trade_time):
@@ -1567,53 +1489,50 @@ async def process_tick(ws, tick_data, last_trade_time):
 
 # ============ TRADING LOOP ============
 
-async def get_ws_url():
-    global WS_URL
-    use_bridge = USE_BRIDGE
-    if use_bridge:
-        try:
-            WS_URL = await get_ws_url_via_bridge()
-            return WS_URL
-        except Exception as e:
-            print(f"  {RED}X Bridge failed: {e}{RST}")
-            if not PAT_TOKEN:
-                print(f"  {RED}No PAT_TOKEN for fallback. Exiting.{RST}")
-                return None
-            print(f"  {YLW}> Falling back to PAT mode...{RST}")
-    try:
-        acc_data = await get_accounts()
-        acc_id = select_account(acc_data)
-        if not acc_id:
-            print(f"  {RED}X No matching {ACCOUNT_TYPE} account found{RST}")
-            return None
-        print(f"  {GRN}+{RST} Account: {BLD}{acc_id}{RST} ({ACCOUNT_TYPE})")
-        WS_URL = await get_otp_url(acc_id)
-        return WS_URL
-    except Exception as e:
-        print(f"  {RED}X PAT auth error: {e}{RST}")
-        return None
+# Shared transport: auth (bridge -> PAT/OTP fallback), authorize, tick/balance
+# subscriptions, keepalive pings and the reconnect loop all live in DerivClient.
+MAX_RECONNECT_ATTEMPTS = 10
+client = DerivClient(symbol=SYMBOL, probe_contracts=False, max_reconnects=MAX_RECONNECT_ATTEMPTS)
+
+_last_trade_time = 0.0
 
 
-async def subscribe_ws(ws):
-    if ("binaryws.com" in WS_URL or "otp" not in WS_URL) and PAT_TOKEN:
-        await ws.send(json.dumps({"authorize": PAT_TOKEN}))
-        auth_resp = json.loads(await ws.recv())
-        if "error" in auth_resp:
-            print(f"  {RED}X Auth failed: {auth_resp["error"]}{RST}")
-            return False
-        print(f"  {GRN}+{RST} Authenticated")
-    await ws.send(json.dumps({"ticks": SYMBOL, "subscribe": 1}))
-    await ws.send(json.dumps({"balance": 1, "subscribe": 1}))
-    print(f"  {GRN}+{RST} Subscribed to {SYMBOL}")
-    # Re-subscribe to active contract POC if we have one
+async def _on_message(ws, data):
+    """Adapt DerivClient's 2-arg dispatcher to the bot's 3-arg handler."""
+    global _last_trade_time
+    result = await handle_message(ws, data, _last_trade_time)
+    if isinstance(result, (int, float)):
+        _last_trade_time = result
+
+
+async def _on_session_open(ws):
+    """Reset per-session state (old between-reconnect behaviour) and resume
+    any contract that was still open when the last connection dropped."""
+    reset_active_contract()
+    reset_l_state()
     if _active_contract_id:
         print(f"  {YLW}> Re-subscribing to active contract {_active_contract_id}...{RST}")
-        await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": _active_contract_id, "subscribe": 1}))
-    print(f"  {DIM}{"-"*60}{RST}")
-    print(f"  {DIM}Watching for L-shape signals on RAW StochRSI...{RST}")
-    print(f"  {DIM}{"-"*60}{RST}")
-    print()
-    return True
+        await client.subscribe_open_contract(ws, _active_contract_id)
+
+
+async def trading_loop():
+    global _reconnect_count, _exit_reason, _balance_known, _last_trade_time
+    _reconnect_count = 0
+    _last_trade_time = 0.0
+    _balance_known = False
+    print_header()
+    print(f"  {CYN}>{RST} Authenticating...")
+    try:
+        await client.run(handle_message=_on_message, pre_subscribe=_on_session_open)
+    except Exception as e:
+        print(f"  {RED}X Unexpected error: {e}{RST}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        reset_active_contract()
+        reset_l_state()
+    _exit_reason = "max_reconnects"
+    print(f"  {RED}X Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) reached. Exiting.{RST}")
 
 
 async def handle_message(ws, data, last_trade_time):
@@ -1625,6 +1544,7 @@ async def handle_message(ws, data, last_trade_time):
     elif _mt not in ("tick", "balance", "ping", "pong"):
         print(f"  {DIM}[MSG] msg_type={_mt}{RST}")
     global pending_proposal
+    global _pending_buy  # assigned in error branches below; must be declared or earlier reads raise UnboundLocalError
     global active_contract, _active_contract_id, _active_contract_snapshot, _last_displayed_cid
     if data.get("msg_type") == "tick":
         tick = data.get("tick", {})
@@ -1663,7 +1583,7 @@ async def handle_message(ws, data, last_trade_time):
                 buy_req = {"buy": pid, "price": STAKE}
                 print(f"  {DIM}[BUY] proposal={pid} price={STAKE} payout=${payout_val:.2f}{RST}")
                 pending_proposal["entry_price"] = prop.get("spot", active_contract["entry_price"] if active_contract else 0)
-                await ws.send(json.dumps(buy_req))
+                await client.buy(ws, pid, STAKE)
             else:
                 print(f"  {RED}X No proposal_id in response{RST}")
                 reset_active_contract()
@@ -1692,7 +1612,7 @@ async def handle_message(ws, data, last_trade_time):
             _active_contract_id = cid
             _active_contract_snapshot = dict(active_contract) if active_contract else None
             print_trade_placed(cid, direction, cost, payout)
-            await ws.send(json.dumps({"proposal_open_contract": 1, "contract_id": cid, "subscribe": 1}))
+            await client.subscribe_open_contract(ws, cid)
             print(f"  {DIM}[DEBUG] Sent POC subscribe for contract {cid}{RST}")
     elif data.get("msg_type") == "proposal_open_contract":
         poc = data.get("proposal_open_contract", {})
@@ -1755,111 +1675,9 @@ async def handle_message(ws, data, last_trade_time):
         # msg_type="ping" and echo_req = our request (a pong, not a server ping).
         # Replying {"pong": 1} to our own ping draws an UnrecognisedRequest error
         # every PING_INTERVAL. Only an unsolicited ping (no echo_req) needs a pong.
-        if "echo_req" not in data:
-            await ws.send(json.dumps({"pong": 1}))
+        # (DerivClient handles this dispatch for us now.)
+        pass
     return last_trade_time
-
-
-
-async def keepalive_ping(ws):
-    """Send periodic pings to keep the WebSocket connection alive.
-
-    A failed send is logged and retried (every PING_INTERVAL) instead of
-    silently killing the keepalive. After PING_MAX_FAILURES consecutive
-    failures the connection is presumed dead, so it is closed to let the
-    session's reconnect logic take over.
-    """
-    consecutive_failures = 0
-    while True:
-        await asyncio.sleep(PING_INTERVAL)
-        try:
-            await ws.send(json.dumps({"ping": 1}))
-            consecutive_failures = 0
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            consecutive_failures += 1
-            print(f"  {YLW}! Keepalive ping failed: {e} (consecutive failure {consecutive_failures}/{PING_MAX_FAILURES}){RST}")
-            if consecutive_failures >= PING_MAX_FAILURES:
-                print(f"  {RED}X Keepalive: {PING_MAX_FAILURES} consecutive ping failures - closing connection to force reconnect{RST}")
-                try:
-                    await ws.close()
-                except Exception:
-                    pass
-                return
-
-async def run_session():
-    """Run one WebSocket session with keepalive ping."""
-    global active_contract, _reconnect_count
-
-    url = await get_ws_url()
-    if not url:
-        return False
-
-    async with websockets.connect(url) as ws:
-        if not await subscribe_ws(ws):
-            return False
-
-        # Reset reconnect counter on successful connection
-        _reconnect_count = 0
-
-        # Start keepalive ping task
-        ping_task = asyncio.create_task(keepalive_ping(ws))
-
-        try:
-            last_trade_time = 0
-            async for msg in ws:
-                data = json.loads(msg)
-                result = await handle_message(ws, data, last_trade_time)
-                if isinstance(result, (int, float)):
-                    last_trade_time = result
-        finally:
-            ping_task.cancel()
-            try:
-                await ping_task
-            except asyncio.CancelledError:
-                pass
-
-    return True
-
-
-async def trading_loop():
-    global _reconnect_count, active_contract, _exit_reason
-    print_header()
-    print(f"  {CYN}>{RST} Authenticating...")
-    while _reconnect_count < MAX_RECONNECT_ATTEMPTS:
-        try:
-            success = await run_session()
-            if not success:
-                return
-            _reconnect_count += 1
-            delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
-            print(f"  {YLW}> Connection closed. Reconnecting in {delay}s (attempt {_reconnect_count}/{MAX_RECONNECT_ATTEMPTS})...{RST}")
-            reset_active_contract()
-            reset_l_state()
-            await asyncio.sleep(delay)
-        except (websockets.exceptions.ConnectionClosed,
-                websockets.exceptions.ConnectionClosedError,
-                ConnectionError, OSError) as e:
-            _reconnect_count += 1
-            delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
-            print(f"  {RED}X Connection error: {e}{RST}")
-            print(f"  {YLW}> Reconnecting in {delay}s (attempt {_reconnect_count}/{MAX_RECONNECT_ATTEMPTS})...{RST}")
-            reset_active_contract()
-            reset_l_state()
-            await asyncio.sleep(delay)
-        except Exception as e:
-            print(f"  {RED}X Unexpected error: {e}{RST}")
-            import traceback
-            traceback.print_exc()
-            _reconnect_count += 1
-            delay = min(RECONNECT_BASE_DELAY * (2 ** (_reconnect_count - 1)), 60)
-            print(f"  {YLW}> Reconnecting in {delay}s...{RST}")
-            reset_active_contract()
-            reset_l_state()
-            await asyncio.sleep(delay)
-    _exit_reason = "max_reconnects"
-    print(f"  {RED}X Max reconnection attempts ({MAX_RECONNECT_ATTEMPTS}) reached. Exiting.{RST}")
 
 
 async def replay_loop():
