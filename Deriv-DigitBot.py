@@ -199,7 +199,8 @@ class RawFloat(float):
 # --account choice is honoured. parse_float=RawFloat preserves each quote's
 # exact wire string so digit extraction is pip-accurate.
 configure(account_type=args.account)
-client = DerivClient(symbols=SYMBOL_LIST, probe_contracts=False, parse_float=RawFloat)
+client = DerivClient(symbols=SYMBOL_LIST, probe_contracts=False, parse_float=RawFloat,
+                     max_reconnects=None)  # reconnect forever, like pre-v1.4
 
 
 # ========== INDICATORS ==========
